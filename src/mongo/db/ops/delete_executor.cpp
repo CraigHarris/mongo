@@ -31,6 +31,7 @@
 #include "mongo/db/ops/delete_executor.h"
 
 #include "mongo/db/catalog/collection.h"
+#include "mongo/db/catalog/database.h"
 #include "mongo/db/client.h"
 #include "mongo/db/curop.h"
 #include "mongo/db/ops/delete_request.h"
@@ -40,6 +41,7 @@
 #include "mongo/db/query/query_planner_common.h"
 #include "mongo/db/repl/is_master.h"
 #include "mongo/db/repl/oplog.h"
+#include "mongo/db/structure/catalog/namespace_details.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/mongoutils/str.h"
 
@@ -65,54 +67,25 @@ namespace mongo {
         }
 
         CanonicalQuery* cqRaw;
-        const WhereCallbackReal whereCallback(_request->getNamespaceString().db());
-
         Status status = CanonicalQuery::canonicalize(_request->getNamespaceString().ns(),
                                                      _request->getQuery(),
-                                                     &cqRaw,
-                                                     whereCallback);
+                                                     &cqRaw);
         if (status.isOK()) {
             _canonicalQuery.reset(cqRaw);
             _isQueryParsed = true;
         }
-
+        else if (status == ErrorCodes::NoClientContext) {
+            // _isQueryParsed is still false, but execute() will try again under the lock.
+            status = Status::OK();
+        }
         return status;
     }
 
-    long long DeleteExecutor::execute(TransactionExperiment* txn, Database* db) {
-        uassertStatusOK(prepare());
-        uassert(17417,
-                mongoutils::str::stream() <<
-                "DeleteExecutor::prepare() failed to parse query " << _request->getQuery(),
-                _isQueryParsed);
-        const bool logop = _request->shouldCallLogOp();
-        const NamespaceString& ns(_request->getNamespaceString());
-        if (!_request->isGod()) {
-            if (ns.isSystem()) {
-                uassert(12050,
-                        "cannot delete from system namespace",
-                        legalClientSystemNS(ns.ns(), true));
-            }
-            if (ns.ns().find('$') != string::npos) {
-                log() << "cannot delete from collection with reserved $ in name: " << ns << endl;
-                uasserted( 10100, "cannot delete from collection with reserved $ in name" );
-            }
-        }
-
-        Collection* collection = db->getCollection(ns.ns());
-        if (NULL == collection) {
-            return 0;
-        }
-
-        uassert(10101,
-                str::stream() << "cannot remove from a capped collection: " << ns.ns(),
-                !collection->isCapped());
-
-        uassert(ErrorCodes::NotMaster,
-                str::stream() << "Not primary while removing from " << ns.ns(),
-                !logop || isMasterNs(ns.ns().c_str()));
-
-        long long nDeleted = 0;
+    long long DeleteExecutor::execute() {
+        const bool canYield = !_request->isGod() && (
+                _canonicalQuery.get() ?
+                !QueryPlannerCommon::hasNode(_canonicalQuery->root(), MatchExpression::ATOMIC) :
+                LiteParsedQuery::isQueryIsolated(_request->getQuery()));
 
         Runner* rawRunner;
         if (_canonicalQuery.get()) {
@@ -128,7 +101,12 @@ namespace mongo {
         }
 
         auto_ptr<Runner> runner(rawRunner);
-        ScopedRunnerRegistration safety(runner.get());
+        auto_ptr<ScopedRunnerRegistration> safety;
+
+        if (canYield) {
+            safety.reset(new ScopedRunnerRegistration(runner.get()));
+            runner->setYieldPolicy(Runner::YIELD_AUTO);
+        }
 
         DiskLoc rloc;
         Runner::RunnerState state;
@@ -146,19 +124,18 @@ namespace mongo {
             // TODO: do we want to buffer docs and delete them in a group rather than
             // saving/restoring state repeatedly?
             runner->saveState();
-            collection->deleteDocument(txn, rloc, false, false, logop ? &toDelete : NULL );
+            collection->deleteDocument(rloc, false, false, logop ? &toDelete : NULL );
             runner->restoreState();
 
             nDeleted++;
 
             if (logop) {
                 if ( toDelete.isEmpty() ) {
-                    problem() << "Deleted object without id in collection " << collection->ns()
-                              << ", not logging.";
+                    problem() << "deleted object without id, not logging" << endl;
                 }
                 else {
                     bool replJustOne = true;
-                    logOp(txn, "d", ns.ns().c_str(), toDelete, 0, &replJustOne);
+                    logOp("d", ns.ns().c_str(), toDelete, 0, &replJustOne);
                 }
             }
 
@@ -167,7 +144,7 @@ namespace mongo {
             }
 
             if (!_request->isGod()) {
-                txn->commitIfNeeded();
+                getDur().commitIfNeeded();
             }
 
             if (debug && _request->isGod() && nDeleted == 100) {
