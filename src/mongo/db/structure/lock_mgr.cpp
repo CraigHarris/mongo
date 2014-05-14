@@ -30,6 +30,7 @@
 #include "mongo/util/assert_util.h"
 
 using namespace std;
+using namespace boost;
 using namespace mongo;
 
 LockMgr::LockRequest::LockRequest( const TxId& xid,
@@ -52,6 +53,7 @@ namespace {
     }
 
     bool deadlockHelper(set<TxId>* seen, set<TxId>* check) {
+#if 0
         set<TxId> newToCheck;
         for (set<TxId>::iterator toCheck = check->begin(); toCheck != check->end(); ++toCheck) {
             TxId nextToCheck = *toCheck;
@@ -68,10 +70,13 @@ namespace {
             }
         }
         return deadlockHelper(seen, &newToCheck);
+#else
+        return false;
+#endif
     }
 }
 
-LockMgr::LockMgr( const LockingPolicy& policy ) : _policy(policy), _mutex("LockMgr") { }
+LockMgr::LockMgr( const LockingPolicy& policy ) : _policy(policy), _guard("LockMgr") { }
 
 LockMgr::~LockMgr( ) {
     for(map<LockId,LockRequest*>::iterator locks = _locks.begin();
@@ -81,7 +86,7 @@ LockMgr::~LockMgr( ) {
 }
 
 void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
-    list<LockId>* queue = _recordLocks[lr->store][lr->rid];
+    list<LockId>* queue = _recordLocks[*lr->store][lr->recId];
     list<LockId>::iterator nextLockId = queue->begin();
     switch (_policy) {
     case FIRST_COME:
@@ -111,7 +116,7 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
         break;
     case BIGGEST_BLOCKER_FIRST: {
         map<TxId,set<TxId>*>::iterator lrWaiters = _waiters.find(lr->xid);
-        size_t lrNumWaiters = (lrWatiers == _waiters.end()) ? 0 : lrWaiters->second->size();
+        size_t lrNumWaiters = (lrWaiters == _waiters.end()) ? 0 : lrWaiters->second->size();
         for (; nextLockId != queue->end(); ++nextLockId) {
             LockMgr::LockRequest* nextRequest = _locks[*nextLockId];
             map<TxId,set<TxId>*>::iterator nextRequestWaiters = _waiters.find(nextRequest->xid);
@@ -129,10 +134,11 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
         break;
     }
 
-    queue->push_back(lr);
+    queue->push_back(lr->lid);
 }
 
 bool LockMgr::detectDeadlock(const TxId& acquirer, TxId* outGoner) {
+#if 0
     set<TxId> check;
     set<TxId> seen;
 
@@ -144,6 +150,7 @@ bool LockMgr::detectDeadlock(const TxId& acquirer, TxId* outGoner) {
 	*outGoner = acquirer;
 	return true;
     }
+#endif
     return false;
 }
 
@@ -156,15 +163,15 @@ void LockMgr::abort(const TxId& goner) {
         invariant(nextLock != _locks.end());
         LockRequest* nextLockRequest = nextLock->second;
 
-        vector<LockId>* recLocks = _recordLocks[nextLock->store][nextLock->recId];
-        LockRequest* recLockOwner = recLocks->front();
+        list<LockId>* recLocks = _recordLocks[*nextLockRequest->store][nextLockRequest->recId];
+        LockRequest* recLockOwner = _locks[recLocks->front()];
         if (recLockOwner->xid == goner) {
-            for (vector<LockId>::iterator nextRecLock = recLocks->begin();
-                 nextRecLock != recLocks->end(); ++nextRecLock)
+            for (list<LockId>::iterator nextRecLock = recLocks->begin();
+                 nextRecLock != recLocks->end(); ++nextRecLock);
         }
         
 
-        delete *nextLock;
+        delete nextLockRequest;
         _locks.erase(*nextLockId);
         _xaLocks.erase(*nextLockId);
     }
@@ -173,10 +180,10 @@ void LockMgr::abort(const TxId& goner) {
 void LockMgr::acquire(const TxId& requestor,
                       const LockMode& mode,
                       const RecordStore& store) {
-
+#if 0
     unique_lock<mongo::mutex> guard(_guard);
 
-    auto locks = _containerLocks.find(store);
+    list<LockId>::iterator locks = _containerLocks.find(store);
     while (locks != _containerLocks.end()) {
 	Lock lock = locks->second;
 	if () {
@@ -218,9 +225,7 @@ void LockMgr::acquire(const TxId& requestor,
     else {
 	xa_iter->second->insert(_nextLockId);
     }
-
-
-    _nextLockId++;
+#endif
 }
 
 void LockMgr::acquire( const TxId& requestor,
@@ -233,19 +238,19 @@ void LockMgr::acquire( const TxId& requestor,
 
     unique_lock<mutex> guard(_guard);
 
-    LockRequest* lr = new LockRequest(requestor, mode store, recId);
+    LockRequest* lr = new LockRequest(requestor, mode, &store, recId);
     _locks[lr->lid] = lr;
 
     // see if we already have a lock on this record
-    map<RecordId,vector<LockId>*>::iterator rec_iter = _recordLocks.find(recId);
-    if (rec_iter != _recordLocks.end()) {
+    map<RecordId,list<LockId>*> >::iterator rec_iter = _recordLocks[store].find(recId);
+    if (rec_iter != _recordLocks[store].end()) {
         list<LockId>* queue = rec_iter->second;
         for (list<LockId>::iterator nextLockId = queue->begin();
              nextLockId != queue->end(); ++nextLockId) {
             LockRequest* nextRequest = _locks[*nextLockId];
             if (nextRequest->xid == requestor) {
                 if (nextRequest->mode == mode) {
-                    _locks.erase(lr->id);
+                    _locks.erase(lr->lid);
                     delete lr;
                     return; // we already have the lock
                 }
@@ -257,7 +262,7 @@ void LockMgr::acquire( const TxId& requestor,
                     // our EXCLUSIVE_RECORD request, so that when we
                     // release the EXCLUSIVE, we'll be granted the SHARED
                     //
-                    _recordLocks.insert(++nextLockId, lr);
+                    _recordLocks[store].insert(++nextLockId, lr);
                     return;
                 }
 
@@ -383,7 +388,7 @@ void LockMgr::release( const TxId& holder,
         bool foundLock = false;
         set<TxId> otherSharers;
 
-        list<LockId>* queue = _recordLocks[store][recId];
+        list<LockId>* queue = (*_recordLocks[store])[recId];
         list<LockId>::iterator nextLockId = queue->begin();
         LockRequest* ourLock = NULL;
 
