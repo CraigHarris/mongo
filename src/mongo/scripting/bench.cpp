@@ -309,7 +309,12 @@ namespace mongo {
     }
 
     BenchRunWorker::BenchRunWorker(size_t id, const BenchRunConfig *config, BenchRunState *brState)
-        : _id(id), _config(config), _brState(brState) {
+        : _id(id), _config(config), _brState(brState), _forJobClass(false), _classIdx(0) {
+    }
+
+    BenchRunWorker::BenchRunWorker(size_t id, const BenchRunConfig *config, BenchRunState *brState,
+                                   size_t classIdx)
+        : _id(id), _config(config), _brState(brState), _forJobClass(true), _classIdx(classIdx) {
     }
 
     BenchRunWorker::~BenchRunWorker() {}
@@ -324,367 +329,386 @@ namespace mongo {
 
     void doNothing(const BSONObj&) { }
 
+    void BenchRunWorker::generateOneOpOnConnection( BSONElement e,
+                                                    BsonTemplateEvaluator& bsonTemplateEvaluator,
+                                                    DBClientBase* conn ) {
+        long long count = 0;
+
+        string ns = e["ns"].String();
+        string op = e["op"].String();
+
+        int delay = e["delay"].eoo() ? 0 : e["delay"].Int();
+
+        // Let's default to writeCmd == false.
+        bool useWriteCmd = e["writeCmd"].eoo() ? false : 
+            e["writeCmd"].Bool();
+
+        BSONObj context = e["context"].eoo() ? BSONObj() : e["context"].Obj();
+
+        auto_ptr<Scope> scope;
+        ScriptingFunction scopeFunc = 0;
+        BSONObj scopeObj;
+
+        if (_config->username != "") {
+            string errmsg;
+            if (!conn->auth("admin", _config->username, _config->password, errmsg)) {
+                uasserted(15931, "Authenticating to connection for _benchThread failed: " + errmsg);
+            }
+        }
+
+        bool check = ! e["check"].eoo();
+        if( check ){
+            if ( e["check"].type() == CodeWScope || e["check"].type() == Code || e["check"].type() == String ) {
+                scope = globalScriptEngine->getPooledScope( ns, "benchrun" );
+                verify( scope.get() );
+
+                if ( e.type() == CodeWScope ) {
+                    scopeFunc = scope->createFunction( e["check"].codeWScopeCode() );
+                    scopeObj = BSONObj( e.codeWScopeScopeDataUnsafe() );
+                }
+                else {
+                    scopeFunc = scope->createFunction( e["check"].valuestr() );
+                }
+
+                scope->init( &scopeObj );
+                verify( scopeFunc );
+            }
+            else {
+                warning() << "Invalid check type detected in benchRun op : " << e << endl;
+                check = false;
+            }
+        }
+
+        try {
+            if ( op == "findOne" ) {
+
+                BSONObj result;
+                {
+                    BenchRunEventTrace _bret(&_stats.findOneCounter);
+                    result = conn->findOne( ns , fixQuery( e["query"].Obj(),
+                                                           bsonTemplateEvaluator ) );
+                }
+
+                if( check ){
+                    int err = scope->invoke( scopeFunc , 0 , &result,  1000 * 60 , false );
+                    if( err ){
+                        log() << "Error checking in benchRun thread [findOne]" << causedBy( scope->getError() ) << endl;
+
+                        _stats.errCount++;
+
+                        return;
+                    }
+                }
+
+                if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [findOne] : " << result << endl;
+
+            }
+            else if ( op == "command" ) {
+
+                BSONObj result;
+                conn->runCommand( ns, fixQuery( e["command"].Obj(), bsonTemplateEvaluator ),
+                                  result, e["options"].numberInt() );
+
+                if( check ){
+                    int err = scope->invoke( scopeFunc , 0 , &result,  1000 * 60 , false );
+                    if( err ){
+                        log() << "Error checking in benchRun thread [command]" << causedBy( scope->getError() ) << endl;
+
+                        _stats.errCount++;
+
+                        return;
+                    }
+                }
+
+                if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [command] : " << result << endl;
+
+            }
+            else if( op == "find" || op == "query" ) {
+
+                int limit = e["limit"].eoo() ? 0 : e["limit"].numberInt();
+                int skip = e["skip"].eoo() ? 0 : e["skip"].Int();
+                int options = e["options"].eoo() ? 0 : e["options"].Int();
+                int batchSize = e["batchSize"].eoo() ? 0 : e["batchSize"].Int();
+                BSONObj filter = e["filter"].eoo() ? BSONObj() : e["filter"].Obj();
+                int expected = e["expected"].eoo() ? -1 : e["expected"].Int();
+
+                auto_ptr<DBClientCursor> cursor;
+                int count;
+
+                BSONObj fixedQuery = fixQuery(e["query"].Obj(), bsonTemplateEvaluator);
+
+                // use special query function for exhaust query option
+                if (options & QueryOption_Exhaust) {
+                    BenchRunEventTrace _bret(&_stats.queryCounter);
+                    boost::function<void (const BSONObj&)> castedDoNothing(doNothing);
+                    count =  conn->query(castedDoNothing, ns, fixedQuery, &filter, options);
+                }
+                else {
+                    BenchRunEventTrace _bret(&_stats.queryCounter);
+                    cursor = conn->query(ns, fixedQuery, limit, skip, &filter, options,
+                                         batchSize);
+                    count = cursor->itcount();
+                }
+
+                if ( expected >= 0 &&  count != expected ) {
+                    cout << "bench query on: " << ns << " expected: " << expected << " got: " << count << endl;
+                    verify(false);
+                }
+
+                if( check ){
+                    BSONObj thisValue = BSON( "count" << count << "context" << context );
+                    int err = scope->invoke( scopeFunc , 0 , &thisValue, 1000 * 60 , false );
+                    if( err ){
+                        log() << "Error checking in benchRun thread [find]" << causedBy( scope->getError() ) << endl;
+
+                        _stats.errCount++;
+
+                        return;
+                    }
+                }
+
+                if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [query] : " << count << endl;
+
+            }
+            else if( op == "update" ) {
+
+                bool multi = e["multi"].trueValue();
+                bool upsert = e["upsert"].trueValue();
+                BSONObj query = e["query"].eoo() ? BSONObj() : e["query"].Obj();
+                BSONObj update = e["update"].Obj();
+                BSONObj result;
+                bool safe = e["safe"].trueValue();
+
+                {
+                    BenchRunEventTrace _bret(&_stats.updateCounter);
+
+                    if (useWriteCmd) {
+                        // TODO: Replace after SERVER-11774.
+                        BSONObjBuilder builder;
+                        builder.append("update",
+                                       nsToCollectionSubstring(ns));
+                        BSONArrayBuilder docBuilder(
+                            builder.subarrayStart("updates"));
+                        docBuilder.append(BSON("q" << fixQuery(query, bsonTemplateEvaluator) <<
+                                               "u" << update <<
+                                               "multi" << multi <<
+                                               "upsert" << upsert));
+                        docBuilder.done();
+                        conn->runCommand(
+                            nsToDatabaseSubstring(ns).toString(),
+                            builder.done(), result);
+                    }
+                    else {
+                        conn->update(ns, fixQuery(query,
+                                                  bsonTemplateEvaluator), update,
+                                     upsert , multi);
+                        if (safe)
+                            result = conn->getLastErrorDetailed();
+                    }
+                }
+
+                if( safe ){
+                    if( check ){
+                        int err = scope->invoke( scopeFunc , 0 , &result, 1000 * 60 , false );
+                        if( err ){
+                            log() << "Error checking in benchRun thread [update]" << causedBy( scope->getError() ) << endl;
+
+                            _stats.errCount++;
+
+                            return;
+                        }
+                    }
+
+                    if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [safe update] : " << result << endl;
+
+                    if( ! result["err"].eoo() && result["err"].type() == String && ( _config->throwGLE || e["throwGLE"].trueValue() ) )
+                        throw DBException( (string)"From benchRun GLE" + causedBy( result["err"].String() ),
+                                           result["code"].eoo() ? 0 : result["code"].Int() );
+                }
+            }
+            else if( op == "insert" ) {
+                bool safe = e["safe"].trueValue();
+                BSONObj result;
+
+                {
+                    BenchRunEventTrace _bret(&_stats.insertCounter);
+
+                    BSONObjBuilder builder;
+                    builder.append("insert",
+                                   nsToCollectionSubstring(ns));
+                    BSONArrayBuilder docBuilder(
+                        builder.subarrayStart("documents"));
+                    docBuilder.append(fixQuery(e["doc"].Obj(),
+                                               bsonTemplateEvaluator));
+                    docBuilder.done();
+                    BSONObj insertObj = builder.obj();
+
+                    if (useWriteCmd) {
+                        // TODO: Replace after SERVER-11774.
+                        conn->runCommand(
+                            nsToDatabaseSubstring(ns).toString(),
+                            insertObj, result);
+                    }
+                    else {
+                        conn->insert(ns, insertObj);
+                        if (safe)
+                            result = conn->getLastErrorDetailed();
+                    }
+                }
+
+                if( safe ){
+                    if( check ){
+                        int err = scope->invoke( scopeFunc , 0 , &result, 1000 * 60 , false );
+                        if( err ){
+                            log() << "Error checking in benchRun thread [insert]" << causedBy( scope->getError() ) << endl;
+
+                            _stats.errCount++;
+
+                            return;
+                        }
+                    }
+
+                    if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [safe insert] : " << result << endl;
+
+                    if( ! result["err"].eoo() && result["err"].type() == String && ( _config->throwGLE || e["throwGLE"].trueValue() ) )
+                        throw DBException( (string)"From benchRun GLE" + causedBy( result["err"].String() ),
+                                           result["code"].eoo() ? 0 : result["code"].Int() );
+                }
+            }
+            else if( op == "delete" || op == "remove" ) {
+
+                bool multi = e["multi"].eoo() ? true : e["multi"].trueValue();
+                BSONObj query = e["query"].eoo() ? BSONObj() : e["query"].Obj();
+                bool safe = e["safe"].trueValue();
+                BSONObj result;
+
+                {
+                    BenchRunEventTrace _bret(&_stats.deleteCounter);
+
+                    if (useWriteCmd) {
+                        // TODO: Replace after SERVER-11774.
+                        BSONObjBuilder builder;
+                        builder.append("delete",
+                                       nsToCollectionSubstring(ns));
+                        BSONArrayBuilder docBuilder(
+                            builder.subarrayStart("deletes"));
+                        int limit = (multi == true) ? 0 : 1;
+                        docBuilder.append(
+                            BSON("q" << fixQuery(query, bsonTemplateEvaluator) <<
+                                 "limit" << limit));
+                        docBuilder.done();
+                        conn->runCommand(
+                            nsToDatabaseSubstring(ns).toString(),
+                            builder.obj(), result);
+                    }
+                    else {
+                        conn->remove(ns, fixQuery(query,
+                                                  bsonTemplateEvaluator), !multi);
+                        if (safe)
+                            result = conn->getLastErrorDetailed();
+                    }
+                }
+
+                if( safe ){
+                    if( check ){
+                        int err = scope->invoke( scopeFunc , 0 , &result, 1000 * 60 , false );
+                        if( err ){
+                            log() << "Error checking in benchRun thread [delete]" << causedBy( scope->getError() ) << endl;
+
+                            _stats.errCount++;
+
+                            return;
+                        }
+                    }
+
+                    if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [safe remove] : " << result << endl;
+
+                    if( ! result["err"].eoo() && result["err"].type() == String && ( _config->throwGLE || e["throwGLE"].trueValue() ) )
+                        throw DBException( (string)"From benchRun GLE " + causedBy( result["err"].String() ),
+                                           result["code"].eoo() ? 0 : result["code"].Int() );
+                }
+            }
+            else if ( op == "createIndex" ) {
+                conn->ensureIndex( ns , e["key"].Obj() , false , "" , false );
+            }
+            else if ( op == "dropIndex" ) {
+                conn->dropIndex( ns , e["key"].Obj()  );
+            }
+            else {
+                log() << "don't understand op: " << op << endl;
+                _stats.error = true;
+                return;
+            }
+        }
+        catch( DBException& ex ){
+            if( ! _config->hideErrors || e["showError"].trueValue() ){
+
+                bool yesWatch = ( _config->watchPattern && _config->watchPattern->FullMatch( ex.what() ) );
+                bool noWatch = ( _config->noWatchPattern && _config->noWatchPattern->FullMatch( ex.what() ) );
+
+                if( ( ! _config->watchPattern && _config->noWatchPattern && ! noWatch ) || // If we're just ignoring things
+                    ( ! _config->noWatchPattern && _config->watchPattern && yesWatch ) || // If we're just watching things
+                    ( _config->watchPattern && _config->noWatchPattern && yesWatch && ! noWatch ) )
+                    log() << "Error in benchRun thread for op " << e << causedBy( ex ) << endl;
+            }
+
+            bool yesTrap = ( _config->trapPattern && _config->trapPattern->FullMatch( ex.what() ) );
+            bool noTrap = ( _config->noTrapPattern && _config->noTrapPattern->FullMatch( ex.what() ) );
+
+            if( ( ! _config->trapPattern && _config->noTrapPattern && ! noTrap ) ||
+                ( ! _config->noTrapPattern && _config->trapPattern && yesTrap ) ||
+                ( _config->trapPattern && _config->noTrapPattern && yesTrap && ! noTrap ) ){
+                {
+                    _stats.trappedErrors.push_back( BSON( "error" << ex.what() << "op" << e << "count" << count ) );
+                }
+                if( _config->breakOnTrap ) return;
+            }
+            if( ! _config->handleErrors && ! e["handleError"].trueValue() ) return;
+
+            _stats.errCount++;
+        }
+        catch( ... ){
+            if( ! _config->hideErrors || e["showError"].trueValue() ) log() << "Error in benchRun thread caused by unknown error for op " << e << endl;
+            if( ! _config->handleErrors && ! e["handleError"].trueValue() ) return;
+
+            _stats.errCount++;
+        }
+
+        if (++count % 100 == 0 && !useWriteCmd) {
+            conn->getLastError();
+        }
+
+        sleepmillis( delay );
+    }
+
     void BenchRunWorker::generateLoadOnConnection( DBClientBase* conn ) {
         verify( conn );
-        long long count = 0;
         mongo::Timer timer;
 
         BsonTemplateEvaluator bsonTemplateEvaluator;
         invariant(bsonTemplateEvaluator.setId(_id) == BsonTemplateEvaluator::StatusSuccess);
 
-        while ( !shouldStop() ) {
-            BSONObjIterator i( _config->ops );
-            while ( i.more() ) {
-
-                if ( shouldStop() ) break;
-
-                BSONElement e = i.next();
-
-                string ns = e["ns"].String();
-                string op = e["op"].String();
-
-                int delay = e["delay"].eoo() ? 0 : e["delay"].Int();
-
-                // Let's default to writeCmd == false.
-                bool useWriteCmd = e["writeCmd"].eoo() ? false : 
-                    e["writeCmd"].Bool();
-
-                BSONObj context = e["context"].eoo() ? BSONObj() : e["context"].Obj();
-
-                auto_ptr<Scope> scope;
-                ScriptingFunction scopeFunc = 0;
-                BSONObj scopeObj;
-
-                if (_config->username != "") {
-                    string errmsg;
-                    if (!conn->auth("admin", _config->username, _config->password, errmsg)) {
-                        uasserted(15931, "Authenticating to connection for _benchThread failed: " + errmsg);
-                    }
+        if ( _forJobClass ) {
+            size_t ix = 0;
+            BSONObjIterator jobs( _config->conc  );
+            while ( jobs.more() ) {
+                BSONElement nextJob = jobs.next();
+                if (ix < _classIdx) continue;
+                BSONObjIterator ops(nextJob["ops"].eoo() ? BSONObj() : nextJob["ops"].Obj());
+                while ( ops.more() ) {
+                    if ( shouldStop() ) break;
+                    generateOneOpOnConnection(ops.next(), bsonTemplateEvaluator, conn);
                 }
-
-                bool check = ! e["check"].eoo();
-                if( check ){
-                    if ( e["check"].type() == CodeWScope || e["check"].type() == Code || e["check"].type() == String ) {
-                        scope = globalScriptEngine->getPooledScope( ns, "benchrun" );
-                        verify( scope.get() );
-
-                        if ( e.type() == CodeWScope ) {
-                            scopeFunc = scope->createFunction( e["check"].codeWScopeCode() );
-                            scopeObj = BSONObj( e.codeWScopeScopeDataUnsafe() );
-                        }
-                        else {
-                            scopeFunc = scope->createFunction( e["check"].valuestr() );
-                        }
-
-                        scope->init( &scopeObj );
-                        verify( scopeFunc );
-                    }
-                    else {
-                        warning() << "Invalid check type detected in benchRun op : " << e << endl;
-                        check = false;
-                    }
+                break;
+            }
+        }
+        else {
+            while ( !shouldStop() ) {
+                BSONObjIterator i( _config->ops );
+                while ( i.more() ) {
+                    if ( shouldStop() ) break;
+                    generateOneOpOnConnection(i.next(), bsonTemplateEvaluator, conn);
                 }
-
-                try {
-                    if ( op == "findOne" ) {
-
-                        BSONObj result;
-                        {
-                            BenchRunEventTrace _bret(&_stats.findOneCounter);
-                            result = conn->findOne( ns , fixQuery( e["query"].Obj(),
-                                                                   bsonTemplateEvaluator ) );
-                        }
-
-                        if( check ){
-                            int err = scope->invoke( scopeFunc , 0 , &result,  1000 * 60 , false );
-                            if( err ){
-                                log() << "Error checking in benchRun thread [findOne]" << causedBy( scope->getError() ) << endl;
-
-                                _stats.errCount++;
-
-                                return;
-                            }
-                        }
-
-                        if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [findOne] : " << result << endl;
-
-                    }
-                    else if ( op == "command" ) {
-
-                        BSONObj result;
-                        conn->runCommand( ns, fixQuery( e["command"].Obj(), bsonTemplateEvaluator ),
-                                          result, e["options"].numberInt() );
-
-                        if( check ){
-                            int err = scope->invoke( scopeFunc , 0 , &result,  1000 * 60 , false );
-                            if( err ){
-                                log() << "Error checking in benchRun thread [command]" << causedBy( scope->getError() ) << endl;
-
-                                _stats.errCount++;
-
-                                return;
-                            }
-                        }
-
-                        if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [command] : " << result << endl;
-
-                    }
-                    else if( op == "find" || op == "query" ) {
-
-                        int limit = e["limit"].eoo() ? 0 : e["limit"].numberInt();
-                        int skip = e["skip"].eoo() ? 0 : e["skip"].Int();
-                        int options = e["options"].eoo() ? 0 : e["options"].Int();
-                        int batchSize = e["batchSize"].eoo() ? 0 : e["batchSize"].Int();
-                        BSONObj filter = e["filter"].eoo() ? BSONObj() : e["filter"].Obj();
-                        int expected = e["expected"].eoo() ? -1 : e["expected"].Int();
-
-                        auto_ptr<DBClientCursor> cursor;
-                        int count;
-
-                        BSONObj fixedQuery = fixQuery(e["query"].Obj(), bsonTemplateEvaluator);
-
-                        // use special query function for exhaust query option
-                        if (options & QueryOption_Exhaust) {
-                            BenchRunEventTrace _bret(&_stats.queryCounter);
-                            boost::function<void (const BSONObj&)> castedDoNothing(doNothing);
-                            count =  conn->query(castedDoNothing, ns, fixedQuery, &filter, options);
-                        }
-                        else {
-                            BenchRunEventTrace _bret(&_stats.queryCounter);
-                            cursor = conn->query(ns, fixedQuery, limit, skip, &filter, options,
-                                                 batchSize);
-                            count = cursor->itcount();
-                        }
-
-                        if ( expected >= 0 &&  count != expected ) {
-                            cout << "bench query on: " << ns << " expected: " << expected << " got: " << count << endl;
-                            verify(false);
-                        }
-
-                        if( check ){
-                            BSONObj thisValue = BSON( "count" << count << "context" << context );
-                            int err = scope->invoke( scopeFunc , 0 , &thisValue, 1000 * 60 , false );
-                            if( err ){
-                                log() << "Error checking in benchRun thread [find]" << causedBy( scope->getError() ) << endl;
-
-                                _stats.errCount++;
-
-                                return;
-                            }
-                        }
-
-                        if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [query] : " << count << endl;
-
-                    }
-                    else if( op == "update" ) {
-
-                        bool multi = e["multi"].trueValue();
-                        bool upsert = e["upsert"].trueValue();
-                        BSONObj query = e["query"].eoo() ? BSONObj() : e["query"].Obj();
-                        BSONObj update = e["update"].Obj();
-                        BSONObj result;
-                        bool safe = e["safe"].trueValue();
-
-                        {
-                            BenchRunEventTrace _bret(&_stats.updateCounter);
-
-                            if (useWriteCmd) {
-                                // TODO: Replace after SERVER-11774.
-                                BSONObjBuilder builder;
-                                builder.append("update",
-                                    nsToCollectionSubstring(ns));
-                                BSONArrayBuilder docBuilder(
-                                    builder.subarrayStart("updates"));
-                                docBuilder.append(BSON("q" << fixQuery(query, bsonTemplateEvaluator) <<
-                                                       "u" << update <<
-                                                       "multi" << multi <<
-                                                       "upsert" << upsert));
-                                docBuilder.done();
-                                conn->runCommand(
-                                    nsToDatabaseSubstring(ns).toString(),
-                                    builder.done(), result);
-                            }
-                            else {
-                                conn->update(ns, fixQuery(query,
-                                            bsonTemplateEvaluator), update,
-                                            upsert , multi);
-                                if (safe)
-                                    result = conn->getLastErrorDetailed();
-                            }
-                        }
-
-                        if( safe ){
-                            if( check ){
-                                int err = scope->invoke( scopeFunc , 0 , &result, 1000 * 60 , false );
-                                if( err ){
-                                    log() << "Error checking in benchRun thread [update]" << causedBy( scope->getError() ) << endl;
-
-                                    _stats.errCount++;
-
-                                    return;
-                                }
-                            }
-
-                            if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [safe update] : " << result << endl;
-
-                            if( ! result["err"].eoo() && result["err"].type() == String && ( _config->throwGLE || e["throwGLE"].trueValue() ) )
-                                throw DBException( (string)"From benchRun GLE" + causedBy( result["err"].String() ),
-                                                   result["code"].eoo() ? 0 : result["code"].Int() );
-                        }
-                    }
-                    else if( op == "insert" ) {
-                        bool safe = e["safe"].trueValue();
-                        BSONObj result;
-
-                        {
-                            BenchRunEventTrace _bret(&_stats.insertCounter);
-
-                            BSONObjBuilder builder;
-                            builder.append("insert",
-                                nsToCollectionSubstring(ns));
-                            BSONArrayBuilder docBuilder(
-                                builder.subarrayStart("documents"));
-                            docBuilder.append(fixQuery(e["doc"].Obj(),
-                                bsonTemplateEvaluator));
-                            docBuilder.done();
-                            BSONObj insertObj = builder.obj();
-
-                            if (useWriteCmd) {
-                                // TODO: Replace after SERVER-11774.
-                                conn->runCommand(
-                                    nsToDatabaseSubstring(ns).toString(),
-                                    insertObj, result);
-                            }
-                            else {
-                                conn->insert(ns, insertObj);
-                                if (safe)
-                                    result = conn->getLastErrorDetailed();
-                            }
-                        }
-
-                        if( safe ){
-                            if( check ){
-                                int err = scope->invoke( scopeFunc , 0 , &result, 1000 * 60 , false );
-                                if( err ){
-                                    log() << "Error checking in benchRun thread [insert]" << causedBy( scope->getError() ) << endl;
-
-                                    _stats.errCount++;
-
-                                    return;
-                                }
-                            }
-
-                            if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [safe insert] : " << result << endl;
-
-                            if( ! result["err"].eoo() && result["err"].type() == String && ( _config->throwGLE || e["throwGLE"].trueValue() ) )
-                                throw DBException( (string)"From benchRun GLE" + causedBy( result["err"].String() ),
-                                                   result["code"].eoo() ? 0 : result["code"].Int() );
-                        }
-                    }
-                    else if( op == "delete" || op == "remove" ) {
-
-                        bool multi = e["multi"].eoo() ? true : e["multi"].trueValue();
-                        BSONObj query = e["query"].eoo() ? BSONObj() : e["query"].Obj();
-                        bool safe = e["safe"].trueValue();
-                        BSONObj result;
-
-                        {
-                            BenchRunEventTrace _bret(&_stats.deleteCounter);
-
-                            if (useWriteCmd) {
-                                // TODO: Replace after SERVER-11774.
-                                BSONObjBuilder builder;
-                                builder.append("delete",
-                                    nsToCollectionSubstring(ns));
-                                BSONArrayBuilder docBuilder(
-                                    builder.subarrayStart("deletes"));
-                                int limit = (multi == true) ? 0 : 1;
-                                docBuilder.append(
-                                        BSON("q" << fixQuery(query, bsonTemplateEvaluator) <<
-                                             "limit" << limit));
-                                docBuilder.done();
-                                conn->runCommand(
-                                    nsToDatabaseSubstring(ns).toString(),
-                                    builder.obj(), result);
-                            }
-                            else {
-                                conn->remove(ns, fixQuery(query,
-                                    bsonTemplateEvaluator), !multi);
-                                if (safe)
-                                    result = conn->getLastErrorDetailed();
-                            }
-                        }
-
-                        if( safe ){
-                            if( check ){
-                                int err = scope->invoke( scopeFunc , 0 , &result, 1000 * 60 , false );
-                                if( err ){
-                                    log() << "Error checking in benchRun thread [delete]" << causedBy( scope->getError() ) << endl;
-
-                                    _stats.errCount++;
-
-                                    return;
-                                }
-                            }
-
-                            if( ! _config->hideResults || e["showResult"].trueValue() ) log() << "Result from benchRun thread [safe remove] : " << result << endl;
-
-                            if( ! result["err"].eoo() && result["err"].type() == String && ( _config->throwGLE || e["throwGLE"].trueValue() ) )
-                                throw DBException( (string)"From benchRun GLE " + causedBy( result["err"].String() ),
-                                                   result["code"].eoo() ? 0 : result["code"].Int() );
-                        }
-                    }
-                    else if ( op == "createIndex" ) {
-                        conn->ensureIndex( ns , e["key"].Obj() , false , "" , false );
-                    }
-                    else if ( op == "dropIndex" ) {
-                        conn->dropIndex( ns , e["key"].Obj()  );
-                    }
-                    else {
-                        log() << "don't understand op: " << op << endl;
-                        _stats.error = true;
-                        return;
-                    }
-                }
-                catch( DBException& ex ){
-                    if( ! _config->hideErrors || e["showError"].trueValue() ){
-
-                        bool yesWatch = ( _config->watchPattern && _config->watchPattern->FullMatch( ex.what() ) );
-                        bool noWatch = ( _config->noWatchPattern && _config->noWatchPattern->FullMatch( ex.what() ) );
-
-                        if( ( ! _config->watchPattern && _config->noWatchPattern && ! noWatch ) || // If we're just ignoring things
-                            ( ! _config->noWatchPattern && _config->watchPattern && yesWatch ) || // If we're just watching things
-                            ( _config->watchPattern && _config->noWatchPattern && yesWatch && ! noWatch ) )
-                            log() << "Error in benchRun thread for op " << e << causedBy( ex ) << endl;
-                    }
-
-                    bool yesTrap = ( _config->trapPattern && _config->trapPattern->FullMatch( ex.what() ) );
-                    bool noTrap = ( _config->noTrapPattern && _config->noTrapPattern->FullMatch( ex.what() ) );
-
-                    if( ( ! _config->trapPattern && _config->noTrapPattern && ! noTrap ) ||
-                        ( ! _config->noTrapPattern && _config->trapPattern && yesTrap ) ||
-                        ( _config->trapPattern && _config->noTrapPattern && yesTrap && ! noTrap ) ){
-                        {
-                            _stats.trappedErrors.push_back( BSON( "error" << ex.what() << "op" << e << "count" << count ) );
-                        }
-                        if( _config->breakOnTrap ) return;
-                    }
-                    if( ! _config->handleErrors && ! e["handleError"].trueValue() ) return;
-
-                    _stats.errCount++;
-                }
-                catch( ... ){
-                    if( ! _config->hideErrors || e["showError"].trueValue() ) log() << "Error in benchRun thread caused by unknown error for op " << e << endl;
-                    if( ! _config->handleErrors && ! e["handleError"].trueValue() ) return;
-
-                    _stats.errCount++;
-                }
-
-                if (++count % 100 == 0 && !useWriteCmd) {
-                    conn->getLastError();
-                }
-
-                sleepmillis( delay );
             }
         }
 
@@ -748,7 +772,6 @@ namespace mongo {
 
      void BenchRunner::start( ) {
 
-
          {
              boost::scoped_ptr<DBClientBase> conn( _config->createConnection() );
              // Must authenticate to admin db in order to run serverStatus command
@@ -766,9 +789,33 @@ namespace mongo {
              before = before.getOwned();
          }
 
-         // Start threads
-         for ( unsigned i = 0; i < _config->parallel; i++ ) {
-             BenchRunWorker *worker = new BenchRunWorker(i, _config.get(), &_brState);
+         // Start threads for any concurrent job classes
+         unsigned sumNumThreads=0;
+
+         BSONObjIterator concJobClasses( _config->conc );
+         for (unsigned jobClassIdx = 0; concJobClasses.more(); jobClassIdx++) {
+
+             BSONElement concJobClass = concJobClasses.next();
+
+             unsigned jobNumThreads = static_cast<unsigned>(concJobClass["numThreads"].Int());
+             if (sumNumThreads + jobNumThreads > _config->parallel) {
+                 jobNumThreads = _config->parallel - sumNumThreads;
+             }
+
+             for ( unsigned ix=0; ix < jobNumThreads; ix++ ) {
+                 BenchRunWorker *worker = new BenchRunWorker(sumNumThreads+ix,
+                                                             _config.get(),
+                                                             &_brState,
+                                                             jobClassIdx);
+                 worker->start();
+                 _workers.push_back(worker);
+             }
+             sumNumThreads += jobNumThreads;
+         }
+
+         // Start remaining threads if any
+         for ( unsigned ix = sumNumThreads; ix < _config->parallel; ix++ ) {
+             BenchRunWorker *worker = new BenchRunWorker(ix, _config.get(), &_brState);
              worker->start();
              _workers.push_back(worker);
          }

@@ -26,6 +26,7 @@
 #include "mongo/bson/util/atomic_int.h"
 #include "mongo/client/dbclientinterface.h"
 #include "mongo/db/jsobj.h"
+#include "mongo/scripting/bson_template_evaluator.h"
 #include "mongo/util/timer.h"
 
 namespace mongo {
@@ -106,6 +107,25 @@ namespace mongo {
          * TODO: Introduce support for performing each operation exactly N times.
          */
         BSONObj ops;
+
+        /**
+         * Concurrency descriptions. A BSON array of concurrent job classes:
+         *     [{
+         *          jobClassName:<string>,
+         *          numThreads:<unsigned>,
+         *          numPartitions:<unsigned>,
+         *          ops:BSONObj
+         *      }]
+         *
+         *     jobClassName: descriptive, like randomReader, hotSpotReader, etc
+         *     numThreads: of this jobClass. <= parallel.
+         *         if sum(numThreads) < parallel, remaining threads run ops
+         *         if sum(numThreads) > parallel, remaining jobClasses ignored
+         *     numPartitions: <= # docs in collection
+         *     
+         *
+         */
+        BSONObj conc;
 
         bool throwGLE;
         bool breakOnTrap;
@@ -309,6 +329,8 @@ namespace mongo {
          * "id" is a positive integer which should uniquely identify the worker.
          */
         BenchRunWorker(size_t id, const BenchRunConfig *config, BenchRunState *brState);
+        BenchRunWorker(size_t id, const BenchRunConfig *config, BenchRunState *brState, size_t classIdx);
+
         ~BenchRunWorker();
 
         /**
@@ -331,6 +353,9 @@ namespace mongo {
         /// The function that actually sets about generating the load described in "_config".
         void generateLoadOnConnection( DBClientBase *conn );
 
+        /// worker for generateLoadOnConnection, processing one element of "ops"
+        void generateOneOpOnConnection( BSONElement e, BsonTemplateEvaluator& bte, DBClientBase* conn );
+
         /// Predicate, used to decide whether or not it's time to terminate the worker.
         bool shouldStop() const;
 
@@ -338,6 +363,8 @@ namespace mongo {
         const BenchRunConfig *_config;
         BenchRunState *_brState;
         BenchRunStats _stats;
+        bool _forJobClass;
+        size_t _classIdx; // into _config.conc array
     };
 
     /**
