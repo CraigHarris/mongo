@@ -65,29 +65,6 @@ namespace {
     bool isCompatible(const LockMgr::LockMode& mode1, const LockMgr::LockMode& mode2) {
         return mode1==mode2 && (LockMgr::SHARED_RECORD==mode1 || LockMgr::SHARED_STORE==mode1);
     }
-
-    bool deadlockHelper(set<TxId>* seen, set<TxId>* check) {
-#if 0
-        set<TxId> newToCheck;
-        for (set<TxId>::iterator toCheck = check->begin(); toCheck != check->end(); ++toCheck) {
-            TxId nextToCheck = *toCheck;
-            if (seen->find(nextToCheck) != seen->end()) {
-                return true;
-            }
-            seen->insert(nextToCheck);
-            map<TxId,set<TxId>*>::iterator waiter_iter = _waiters.find(nextToCheck);
-            if (waiter_iter != _waiters.end()) {
-                for (set<TxId>::iterator waiters = waiters_iter->second.begin();
-                 waiters != _waiters.end(); ++waiters) {
-                    newToCheck.insert(*waiters);
-                }
-            }
-        }
-        return deadlockHelper(seen, &newToCheck);
-#else
-        return false;
-#endif
-    }
 }
 
 LockMgr::LockMgr( const LockingPolicy& policy ) : _policy(policy), _guard() { }
@@ -151,44 +128,26 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
     queue->push_back(lr->lid);
 }
 
-bool LockMgr::detectDeadlock(const TxId& acquirer, TxId* outGoner) {
-#if 0
-    set<TxId> check;
-    set<TxId> seen;
-
-    seen.insert(acquirer);
-    for (iterator<TxId> waiters = _waiters.begin(); waiters != _waiters.end(); ++waiters) {
-	check.insert(*waiters);
-    }
-    if (deadlockHelper(&seen, &check)) {
-	*outGoner = acquirer;
-	return true;
-    }
-#endif
-    return false;
-}
-
 void LockMgr::abort(const TxId& goner) {
     // cleanup locks
     map<TxId, set<LockId>*>::iterator locks = _xaLocks.find(goner);
+    invariant(locks != _xaLocks.end());
     for (set<LockId>::iterator nextLockId = locks->second->begin();
          nextLockId != locks->second->end(); ++nextLockId) {
         map<LockId,LockRequest*>::iterator nextLock = _locks.find(*nextLockId);
         invariant(nextLock != _locks.end());
         LockRequest* nextLockRequest = nextLock->second;
 
-        list<LockId>* recLocks = _recordLocks[nextLockRequest->store][nextLockRequest->recId];
-        LockRequest* recLockOwner = _locks[recLocks->front()];
-        if (recLockOwner->xid == goner) {
-            for (list<LockId>::iterator nextRecLock = recLocks->begin();
-                 nextRecLock != recLocks->end(); ++nextRecLock);
-        }
-        
-
-        delete nextLockRequest;
-        _locks.erase(*nextLockId);
-        _xaLocks.erase(*nextLockId);
+	if (LockMgr::SHARED_STORE == nextLockRequest->mode ||
+	    LockMgr::EXCLUSIVE_STORE == nextLockRequest->mode) {
+	    release(goner, nextLockRequest->mode, nextLockRequest->store);
+	}
+	else {
+	    release(goner, nextLockRequest->mode, nextLockRequest->store, nextLockRequest->recId);
+	}
     }
+
+    throw "TransactionAborted";
 }
 
 void LockMgr::acquire(const TxId& requestor,
@@ -344,23 +303,36 @@ void LockMgr::acquire( const TxId& requestor,
 	LockRequest* nextLockRequest = _locks[*nextLockId];
         if (!isCompatible(mode, nextLockRequest->mode)) {
 
-            // deal with deadlock
-            TxId goner;
-            if (detectDeadlock(requestor, &goner)) {
-                abort(goner);
+	    const TxId& blocker = nextLockRequest->xid;
+
+            // check for deadlock
+	    map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
+	    if (requestorsWaiters != _waiters.end()) {
+		if (requestorsWaiters->second->find(blocker) != requestorsWaiters->second->end()) {
+		    // the transaction that would block requestor is already blocked by requestor
+		    // if requestor waited for blocker there would be a deadlock
+		    //
+		    abort(requestor);
+		}
             }
 
 	    // set up for future deadlock detection
 	    // add requestor to nextLockRequest's waiters
 	    //
-	    map<TxId, set<TxId>*>::iterator holdersWaiters = _waiters.find(nextLockRequest->xid);
-	    if (holdersWaiters == _waiters.end()) {
-		set<TxId>* waiters = new set<TxId>();
-		waiters->insert(requestor);
+	    map<TxId, set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
+	    set<TxId>* waiters;
+	    if (blockersWaiters == _waiters.end()) {
+		waiters = new set<TxId>();
 		_waiters[nextLockRequest->xid] = waiters;
 	    }
 	    else {
-		holdersWaiters->second->insert(requestor);
+		waiters = blockersWaiters->second;
+	    }
+
+	    waiters->insert(requestor);
+	    if (requestorsWaiters != _waiters.end()) {
+		waiters->insert(requestorsWaiters->second->begin(),
+				requestorsWaiters->second->end());
 	    }
 
             // block
@@ -375,9 +347,19 @@ void LockMgr::acquire( const TxId& requestor,
     }
 }
 
+void LockMgr::release( const TxId& holder ) {
+    map<TxId, set<LockId>*>::iterator lockIdsHeld = _xaLocks.find(holder);
+    if (lockIdsHeld == _xaLocks.end()) { return; }
+    for (set<LockId>::iterator nextLockId = lockIdsHeld->second->begin();
+	 nextLockId != lockIdsHeld->second->end(); ++nextLockId) {
+	LockRequest* nextLock = _locks[*nextLockId];
+	release( holder, nextLock->mode, nextLock->store, nextLock->recId );
+    }
+}
+
 void LockMgr::release( const TxId& holder,
                        const LockMode& mode,
-                       const RecordStore* store) {
+                       const RecordStore* store ) {
 #if 0
     unique_lock<boost::mutex> guard(_guard);
 
@@ -498,4 +480,3 @@ void LockMgr::release( const TxId& holder,
     // finally, release the sharedContainerLock
     release(holder, SHARED_STORE, store);
 }
-

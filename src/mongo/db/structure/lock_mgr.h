@@ -122,14 +122,6 @@ namespace mongo {
                               const RecordId& recId ) = 0;
 
         /*
-         * acquire several RecordIds in a RecordStore in a mode
-         */
-        virtual void acquire( const TxId& requestor,
-                              const LockMode& mode,
-                              const RecordStore* store,
-                              const std::vector<RecordId>& recordIds ) = 0;
-
-        /*
          * release a RecordStore
          */
         virtual void release( const TxId& holder,
@@ -143,14 +135,6 @@ namespace mongo {
                               const LockMode& mode,
                               const RecordStore* store,
                               const RecordId& recId) = 0;
-
-        /*
-         * release a several RecordIds in a RecordStore
-         */
-        virtual void release( const TxId& holder,
-                              const LockMode& mode,
-                              const RecordStore* store,
-                              const vector<RecordId>& recordIds) = 0;
 
         /*
          * release all resources acquired by a transaction
@@ -177,8 +161,7 @@ namespace mongo {
 #endif
     private:
         void addLockToQueueUsingPolicy( LockRequest* lr );
-        bool detectDeadlock(const TxId& acquirer, TxId* goner);
-        void abort(const TxId& goner);
+        void abort( const TxId& goner );
 
         LockingPolicy _policy;
 
