@@ -29,6 +29,7 @@
 #pragma once
 
 #include <boost/thread/condition_variable.hpp>
+#include <boost/thread/mutex.hpp>
 #include <iterator>
 #include <list>
 #include <map>
@@ -36,7 +37,6 @@
 #include <set>
 
 #include "mongo/db/structure/record_store.h"
-#include "mongo/util/concurrency/mutex.h"
 
 /*
  * LockMgr controls access to resources through two functions: acquire and release
@@ -88,7 +88,13 @@ namespace mongo {
 
             virtual ~LockRequest();
 
+	    bool matches( const TxId& xid,
+			  const LockMode& mode,
+			  const RecordStore* store,
+			  const RecordId& recId );
+
             static LockId nextLid;
+	    bool sleep;
             LockId lid;
             TxId xid;
             LockMode mode;
@@ -105,14 +111,14 @@ namespace mongo {
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
-                              const RecordStore& store ) = 0;
+                              const RecordStore* store ) = 0;
 
         /*
          * acquire a RecordId in a RecordStore in a mode
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
-                              const RecordStore& store,
+                              const RecordStore* store,
                               const RecordId& recId ) = 0;
 
         /*
@@ -120,7 +126,7 @@ namespace mongo {
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
-                              const RecordStore& store,
+                              const RecordStore* store,
                               const std::vector<RecordId>& recordIds ) = 0;
 
         /*
@@ -128,14 +134,14 @@ namespace mongo {
          */
         virtual void release( const TxId& holder,
                               const LockMode& mode,
-                              const RecordStore& store) = 0;
+                              const RecordStore* store) = 0;
 
         /*
          * release a RecordId in a RecordStore
          */
         virtual void release( const TxId& holder,
                               const LockMode& mode,
-                              const RecordStore& store,
+                              const RecordStore* store,
                               const RecordId& recId) = 0;
 
         /*
@@ -143,7 +149,7 @@ namespace mongo {
          */
         virtual void release( const TxId& holder,
                               const LockMode& mode,
-                              const RecordStore& store,
+                              const RecordStore* store,
                               const vector<RecordId>& recordIds) = 0;
 
         /*
@@ -176,13 +182,13 @@ namespace mongo {
 
         LockingPolicy _policy;
 
-        mongo::mutex _guard;
+        boost::mutex _guard;
 
         // owns the LockRequest*
         std::map<LockId,LockRequest*> _locks;
 
-        std::map<RecordStore, std::map<RecordId, std::list<LockId>*> > _recordLocks;
-        std::map<RecordStore, std::list<LockId>*> _containerLocks;
+        std::map<const RecordStore*, std::map<RecordId, std::list<LockId>*> > _recordLocks;
+        std::map<const RecordStore*, std::list<LockId>*> _containerLocks;
 
         // for cleanup and abort processing
         std::map<TxId, std::set<LockId>*> _xaLocks;
