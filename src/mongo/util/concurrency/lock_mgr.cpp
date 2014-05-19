@@ -26,6 +26,7 @@
 *    it in the license file.
 */
 
+#include <boost/thread/locks.hpp>
 #include "mongo/db/structure/lock_mgr.h"
 #include "mongo/util/assert_util.h"
 
@@ -33,50 +34,40 @@ using namespace std;
 using namespace boost;
 using namespace mongo;
 
-LockMgr::LockRequest::LockRequest( const TxId& xid,
-                          const LockMode& mode,
-                          const RecordStore* store)
-    : lid(nextLid++), xid(xid), mode(mode), store(store) { }
+LockMgr::LockId LockMgr::LockRequest::nextLid = 0;
 
 LockMgr::LockRequest::LockRequest( const TxId& xid,
-                          const LockMode& mode,
-                          const RecordStore* store,
-                          const RecordId& recId)
-    : lid(nextLid++), xid(xid), mode(mode), store(store), recId(recId) { }
+				   const LockMode& mode,
+				   const RecordStore* store)
+    : sleep(false), lid(nextLid++), xid(xid), mode(mode), store(store) { }
+
+LockMgr::LockRequest::LockRequest( const TxId& xid,
+				   const LockMode& mode,
+				   const RecordStore* store,
+				   const RecordId& recId)
+    : sleep(false), lid(nextLid++), xid(xid), mode(mode), store(store), recId(recId) { }
 
 LockMgr::LockRequest::~LockRequest( ) { }
+
+bool LockMgr::LockRequest::matches( const TxId& xid,
+				    const LockMode& mode,
+				    const RecordStore* store,
+				    const RecordId& recId ) {
+    return
+	this->xid == xid &&
+	this->mode == mode &&
+	this->store == store &&
+	this->recId == recId;
+}
 
 namespace {
 
     bool isCompatible(const LockMgr::LockMode& mode1, const LockMgr::LockMode& mode2) {
         return mode1==mode2 && (LockMgr::SHARED_RECORD==mode1 || LockMgr::SHARED_STORE==mode1);
     }
-
-    bool deadlockHelper(set<TxId>* seen, set<TxId>* check) {
-#if 0
-        set<TxId> newToCheck;
-        for (set<TxId>::iterator toCheck = check->begin(); toCheck != check->end(); ++toCheck) {
-            TxId nextToCheck = *toCheck;
-            if (seen->find(nextToCheck) != seen->end()) {
-                return true;
-            }
-            seen->insert(nextToCheck);
-            map<TxId,set<TxId>*>::iterator waiter_iter = _waiters.find(nextToCheck);
-            if (waiter_iter != _waiters.end()) {
-                for (set<TxId>::iterator waiters = waiters_iter->second.begin();
-                 waiters != _waiters.end(); ++waiters) {
-                    newToCheck.insert(*waiters);
-                }
-            }
-        }
-        return deadlockHelper(seen, &newToCheck);
-#else
-        return false;
-#endif
-    }
 }
 
-LockMgr::LockMgr( const LockingPolicy& policy ) : _policy(policy), _guard("LockMgr") { }
+LockMgr::LockMgr( const LockingPolicy& policy ) : _policy(policy), _guard() { }
 
 LockMgr::~LockMgr( ) {
     for(map<LockId,LockRequest*>::iterator locks = _locks.begin();
@@ -86,7 +77,7 @@ LockMgr::~LockMgr( ) {
 }
 
 void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
-    list<LockId>* queue = _recordLocks[*lr->store][lr->recId];
+    list<LockId>* queue = _recordLocks[lr->store][lr->recId];
     list<LockId>::iterator nextLockId = queue->begin();
     switch (_policy) {
     case FIRST_COME:
@@ -137,51 +128,33 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
     queue->push_back(lr->lid);
 }
 
-bool LockMgr::detectDeadlock(const TxId& acquirer, TxId* outGoner) {
-#if 0
-    set<TxId> check;
-    set<TxId> seen;
-
-    seen.insert(acquirer);
-    for (iterator<TxId> waiters = _waiters.begin(); waiters != _waiters.end(); ++waiters) {
-	check.insert(*waiters);
-    }
-    if (deadlockHelper(&seen, &check)) {
-	*outGoner = acquirer;
-	return true;
-    }
-#endif
-    return false;
-}
-
 void LockMgr::abort(const TxId& goner) {
     // cleanup locks
     map<TxId, set<LockId>*>::iterator locks = _xaLocks.find(goner);
+    invariant(locks != _xaLocks.end());
     for (set<LockId>::iterator nextLockId = locks->second->begin();
          nextLockId != locks->second->end(); ++nextLockId) {
         map<LockId,LockRequest*>::iterator nextLock = _locks.find(*nextLockId);
         invariant(nextLock != _locks.end());
         LockRequest* nextLockRequest = nextLock->second;
 
-        list<LockId>* recLocks = _recordLocks[*nextLockRequest->store][nextLockRequest->recId];
-        LockRequest* recLockOwner = _locks[recLocks->front()];
-        if (recLockOwner->xid == goner) {
-            for (list<LockId>::iterator nextRecLock = recLocks->begin();
-                 nextRecLock != recLocks->end(); ++nextRecLock);
-        }
-        
-
-        delete nextLockRequest;
-        _locks.erase(*nextLockId);
-        _xaLocks.erase(*nextLockId);
+	if (LockMgr::SHARED_STORE == nextLockRequest->mode ||
+	    LockMgr::EXCLUSIVE_STORE == nextLockRequest->mode) {
+	    release(goner, nextLockRequest->mode, nextLockRequest->store);
+	}
+	else {
+	    release(goner, nextLockRequest->mode, nextLockRequest->store, nextLockRequest->recId);
+	}
     }
+
+    throw "TransactionAborted";
 }
 
 void LockMgr::acquire(const TxId& requestor,
                       const LockMode& mode,
-                      const RecordStore& store) {
+                      const RecordStore* store) {
 #if 0
-    unique_lock<mongo::mutex> guard(_guard);
+    unique_lock<mutex> guard(_guard);
 
     list<LockId>::iterator locks = _containerLocks.find(store);
     while (locks != _containerLocks.end()) {
@@ -201,13 +174,13 @@ void LockMgr::acquire(const TxId& requestor,
 	}
     }
 
-    LockRequest* lr = new LockRequest(requestor, mode, &store);
+    LockRequest* lr = new LockRequest(requestor, mode, store);
     _locks[lr->lid] = lr;
 
-    // add lock request to vector of request for recId
+    // add lock request to list of request for recId
     map<RecordStore,list<LockId>*> rec_iter = _containerLocks.find(recId);
     if (rec_iter == _containerLocks.end()) {
-	vector<LockId>* containerLocks = new vector<LockId>();
+	list<LockId>* containerLocks = new list<LockId>();
 	containerLocks.push_back(_nextLockId);
 	_containerLocks[recId] = containerLocks;
     }
@@ -230,19 +203,19 @@ void LockMgr::acquire(const TxId& requestor,
 
 void LockMgr::acquire( const TxId& requestor,
                        const LockMode& mode,
-                       const RecordStore& store,
+                       const RecordStore* store,
                        const RecordId& recId ) {
 
     // first, acquire a lock on the store
     acquire(requestor, LockMgr::SHARED_STORE, store);
 
-    unique_lock<mutex> guard(_guard);
+    unique_lock<boost::mutex> guard(_guard);
 
-    LockRequest* lr = new LockRequest(requestor, mode, &store, recId);
+    LockRequest* lr = new LockRequest(requestor, mode, store, recId);
     _locks[lr->lid] = lr;
 
     // see if we already have a lock on this record
-    map<RecordId,list<LockId>*> >::iterator rec_iter = _recordLocks[store].find(recId);
+    map<RecordId,list<LockId>*>::iterator rec_iter = _recordLocks[store].find(recId);
     if (rec_iter != _recordLocks[store].end()) {
         list<LockId>* queue = rec_iter->second;
         for (list<LockId>::iterator nextLockId = queue->begin();
@@ -262,7 +235,7 @@ void LockMgr::acquire( const TxId& requestor,
                     // our EXCLUSIVE_RECORD request, so that when we
                     // release the EXCLUSIVE, we'll be granted the SHARED
                     //
-                    _recordLocks[store].insert(++nextLockId, lr);
+                    _recordLocks[store][lr->lid]->push_back(lr->lid);
                     return;
                 }
 
@@ -274,13 +247,13 @@ void LockMgr::acquire( const TxId& requestor,
                 // before we're granted the exclusive lock.
 
                 set<TxId> otherSharers;
-                list<LockId::iterator nextSharerId = queue->begin();
+                list<LockId>::iterator nextSharerId = queue->begin();
                 for (; nextSharerId != queue->end(); ++nextSharerId) {
                     if (*nextSharerId == nextRequest->lid) continue; // skip ourselves
                     LockRequest* nextSharer = _locks[*nextSharerId];
                     if (LockMgr::EXCLUSIVE_RECORD == nextSharer->mode) {
-                        set<TxId>::iterator nextSharer = otherSharers.find(nextSharer->xid);
-                        if (nextSharer != otherSharers.end() && *nextSharer != requestor) {
+                        set<TxId>::iterator nextUpgrader = otherSharers.find(nextSharer->xid);
+                        if (nextUpgrader != otherSharers.end() && *nextUpgrader != requestor) {
                             // we have to abort
                             release(requestor); // release our locks
                             throw "FIX-ME";
@@ -291,7 +264,7 @@ void LockMgr::acquire( const TxId& requestor,
                 }
 
                 // safe to upgrade
-                queue.insert(nextSharerId, lr );
+                queue->insert(nextSharerId, lr->lid);
                 if (otherSharers.size() > 1) {
                     // there are other sharers, so we block on their completion
                 }
@@ -302,58 +275,93 @@ void LockMgr::acquire( const TxId& requestor,
 
     // most of the time, there will be no locks on the desired record
 
-    // add lock request to vector of request for recId
-    auto rec_iter = _recordLocks.find(recId);
-    if (rec_iter == _recordLocks.end()) {
-	vector<LockId>* recLocks = new vector<LockId>();
-	_recordLocks[recId] = recLocks;
-	recLocks.push_back(_nextLockId);
+    // add lock request to list of request for recId
+    rec_iter = _recordLocks[store].find(recId);
+    if (rec_iter == _recordLocks[store].end()) {
+	list<LockId>* recLocks = new list<LockId>();
+	_recordLocks[store][recId] = recLocks;
+	recLocks->push_back(lr->lid);
     }
     else {
-	rec_iter->second->push_back(_nextLockId);
+	rec_iter->second->push_back(lr->lid);
     }
 
     // add lock request to set of requests of requesting TxId
-    auto xa_iter = _xaLocks.find(requestor);
+    map<TxId,set<LockId>*>::iterator xa_iter = _xaLocks.find(requestor);
     if (xa_iter == _xaLocks.end()) {
 	set<TxId>* myLocks = new set<LockId>();
 	_xaLocks[requestor] = myLocks;
-	myLocks->insert(_nextLockId);
+	myLocks->insert(lr->lid);
     }
     else {
-	xa_iter->second->insert(_nextLockId);
+	xa_iter->second->insert(lr->lid);
     }
 
-    map<LockId,LockRequest*>::iterator locksOnRecord = _recordLocks.find(recId);
-    if (locksOnRecord != _recordLocks.end()) {
-        // see if we already have a lock
-        
-        vector<LockId>::iterator nextLockId = locksOnRecord->second.begin();
-        if (!isCompatible(nextLockId, grantedLock)) {
+    map<RecordId,list<LockId>*>::iterator locksOnRecord = _recordLocks[store].find(recId);
+    if (locksOnRecord != _recordLocks[store].end()) {
+        list<LockId>::iterator nextLockId = locksOnRecord->second->begin();
+	LockRequest* nextLockRequest = _locks[*nextLockId];
+        if (!isCompatible(mode, nextLockRequest->mode)) {
 
-            // deal with deadlock
-            TxId goner;
-            if (detect_deadlock(requestor, &goner)) {
-                goner->abort();
-                continue;
+	    const TxId& blocker = nextLockRequest->xid;
+
+            // check for deadlock
+	    map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
+	    if (requestorsWaiters != _waiters.end()) {
+		if (requestorsWaiters->second->find(blocker) != requestorsWaiters->second->end()) {
+		    // the transaction that would block requestor is already blocked by requestor
+		    // if requestor waited for blocker there would be a deadlock
+		    //
+		    abort(requestor);
+		}
             }
 
+	    // set up for future deadlock detection
+	    // add requestor to nextLockRequest's waiters
+	    //
+	    map<TxId, set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
+	    set<TxId>* waiters;
+	    if (blockersWaiters == _waiters.end()) {
+		waiters = new set<TxId>();
+		_waiters[nextLockRequest->xid] = waiters;
+	    }
+	    else {
+		waiters = blockersWaiters->second;
+	    }
+
+	    waiters->insert(requestor);
+	    if (requestorsWaiters != _waiters.end()) {
+		waiters->insert(requestorsWaiters->second->begin(),
+				requestorsWaiters->second->end());
+	    }
+
             // block
-            _waiters[lock.holder].insert(requestor);
-            lock.wait(guard,
-                      [mode, lock]()->bool{
-                          return noLock ==
-                              lock.mode || (LockMgr::SHARED_RECORD == lock.mode && lock.mode == mode);
-                      });
-            _waiters[lock.holder].erase(requestor);
+	    lr->sleep = true;
+	    while (lr->sleep) {
+		lr->lock.wait(guard);
+	    }
+
+	    // when awakened, remove ourselves from the set of waiters
+            _waiters[nextLockRequest->xid]->erase(requestor);
         }
     }
 }
 
-void LockMgr::release( const TxId holder,
+void LockMgr::release( const TxId& holder ) {
+    map<TxId, set<LockId>*>::iterator lockIdsHeld = _xaLocks.find(holder);
+    if (lockIdsHeld == _xaLocks.end()) { return; }
+    for (set<LockId>::iterator nextLockId = lockIdsHeld->second->begin();
+	 nextLockId != lockIdsHeld->second->end(); ++nextLockId) {
+	LockRequest* nextLock = _locks[*nextLockId];
+	release( holder, nextLock->mode, nextLock->store, nextLock->recId );
+    }
+}
+
+void LockMgr::release( const TxId& holder,
                        const LockMode& mode,
-                       const RecordStore& store) {
-    unique_lock<mutex> guard(_guard);
+                       const RecordStore* store ) {
+#if 0
+    unique_lock<boost::mutex> guard(_guard);
 
     // find the lock to release
     const LockId& lockId = _containerLocks[store]->front();
@@ -368,27 +376,29 @@ void LockMgr::release( const TxId holder,
 
     // deal with transactions that were waiting for this lock to be released
     //
-    std::vector<LockId>::iterator nextWaiter = _containerLocks[store]->find();
+    list<LockId>::iterator nextWaiter = _containerLocks[store]->find();
     LockRequest* newOwner = _locks[*nextWaiter];
     for (; nextWaiter == _containerLocks[recId]->end(); ++nextWaiter) {
         LockRequest* nextSleeper = _locks[*nextWaiter];
         if (! isCompatible(nextSleeper->mode, newOwner->mode)) { return; }
-        nextSleeper->lock.notify_one(guard);
+	nextSleeper->sleep = false;
+        nextSleeper->lock.notify_one();
     }
+#endif
 }
 
 void LockMgr::release( const TxId& holder,
                        const LockMode& mode,
-                       const RecordStore& store,
+                       const RecordStore* store,
                        const RecordId& recId) {
     {
-        unique_lock<mutex> guard(_guard);
+        unique_lock<boost::mutex> guard(_guard);
 
         bool seenExclusive = false;
         bool foundLock = false;
         set<TxId> otherSharers;
 
-        list<LockId>* queue = (*_recordLocks[store])[recId];
+        list<LockId>* queue = _recordLocks[store][recId];
         list<LockId>::iterator nextLockId = queue->begin();
         LockRequest* ourLock = NULL;
 
@@ -425,12 +435,14 @@ void LockMgr::release( const TxId& holder,
                 LockRequest* nextSleeper = _locks[*nextLockId];
                 if (LockMgr::EXCLUSIVE_RECORD == nextSleeper->mode) {
                     if (!seenSharers)
-                        nextSleeper->lock.notify_one(guard);
+			nextSleeper->sleep = false;
+                        nextSleeper->lock.notify_one();
                     break;
                 }
                 else {
                     seenSharers = true;
-                    nextSleeper->lock.notify_one(guard);
+		    nextSleeper->sleep = false;
+                    nextSleeper->lock.notify_one();
                 }
             }
         }
@@ -453,7 +465,8 @@ void LockMgr::release( const TxId& holder,
                 otherSharers.erase(nextLock->xid);
                 if (0 == otherSharers.size()) {
                     // no other sharers, awaken the exclusive locker
-                    nextLock->lock.notify_one(guard);
+		    nextLock->sleep = false;
+                    nextLock->lock.notify_one();
                 }
                 break;
             }
@@ -467,4 +480,3 @@ void LockMgr::release( const TxId& holder,
     // finally, release the sharedContainerLock
     release(holder, SHARED_STORE, store);
 }
-
