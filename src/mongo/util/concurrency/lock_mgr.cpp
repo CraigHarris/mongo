@@ -27,8 +27,8 @@
 */
 
 #include <boost/thread/locks.hpp>
-#include "mongo/db/structure/lock_mgr.h"
 #include "mongo/util/assert_util.h"
+#include "mongo/util/concurrency/lock_mgr.h"
 
 using namespace std;
 using namespace boost;
@@ -74,6 +74,39 @@ LockMgr::~LockMgr( ) {
         locks != _locks.end(); ++locks) {
         delete locks->second;
     }
+}
+
+bool LockMgr::isLocked( const TxId& holder,
+                        const LockMode& mode,
+                        const RecordStore* store) {
+    map<const RecordStore*, list<LockId>*>::iterator locks = _containerLocks.begin();
+    if (locks == _containerLocks.end()) { return false; }
+    for (list<LockId>::iterator nextLockId = locks->second->begin();
+         nextLockId != locks->second->end(); ++nextLockId) {
+        LockRequest* nextLockRequest = _locks[*nextLockId];
+        if (nextLockRequest->xid == holder && nextLockRequest->mode == mode) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool LockMgr::isLocked( const TxId& holder,
+                        const LockMode& mode,
+                        const RecordStore* store,
+                        const RecordId& recId) {
+    map<const RecordStore*, map<RecordId, list<LockId>*> >::iterator storeLocks = _recordLocks.begin();
+    if (storeLocks == _recordLocks.end()) { return false; }
+    map<RecordId, list<LockId>*>::iterator recordLocks = storeLocks->second.begin();
+    if (recordLocks == storeLocks->second.end()) { return false; }
+    for (list<LockId>::iterator nextLockId = recordLocks->second->begin();
+         nextLockId != recordLocks->second->end(); ++nextLockId) {
+        LockRequest* nextLockRequest = _locks[*nextLockId];
+        if (nextLockRequest->xid == holder && nextLockRequest->mode == mode) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
@@ -147,7 +180,7 @@ void LockMgr::abort(const TxId& goner) {
 	}
     }
 
-    throw "TransactionAborted";
+    throw AbortException();
 }
 
 void LockMgr::acquire(const TxId& requestor,
@@ -209,100 +242,108 @@ void LockMgr::acquire( const TxId& requestor,
     // first, acquire a lock on the store
     acquire(requestor, LockMgr::SHARED_STORE, store);
 
+    // create the lock request and add to TxId's set of lock requests
     unique_lock<boost::mutex> guard(_guard);
 
     LockRequest* lr = new LockRequest(requestor, mode, store, recId);
     _locks[lr->lid] = lr;
 
-    // see if we already have a lock on this record
-    map<RecordId,list<LockId>*>::iterator rec_iter = _recordLocks[store].find(recId);
-    if (rec_iter != _recordLocks[store].end()) {
-        list<LockId>* queue = rec_iter->second;
-        for (list<LockId>::iterator nextLockId = queue->begin();
-             nextLockId != queue->end(); ++nextLockId) {
-            LockRequest* nextRequest = _locks[*nextLockId];
-            if (nextRequest->xid == requestor) {
-                if (nextRequest->mode == mode) {
-                    _locks.erase(lr->lid);
-                    delete lr;
-                    return; // we already have the lock
-                }
-                if (LockMgr::EXCLUSIVE_RECORD == nextRequest->mode) {
-                    // since we're not blocked, we must be at the front
-                    invariant(nextLockId == queue->begin());
-
-                    // add our SHARED_RECORD request immediately after
-                    // our EXCLUSIVE_RECORD request, so that when we
-                    // release the EXCLUSIVE, we'll be granted the SHARED
-                    //
-                    _recordLocks[store][lr->lid]->push_back(lr->lid);
-                    return;
-                }
-
-                // we're asking for an upgrade.  this is ok if there are
-                // no other upgrade requests.
-                //
-                // the problem with other upgrade requests is that our view
-                // of the record may change while we have a shared lock, but
-                // before we're granted the exclusive lock.
-
-                set<TxId> otherSharers;
-                list<LockId>::iterator nextSharerId = queue->begin();
-                for (; nextSharerId != queue->end(); ++nextSharerId) {
-                    if (*nextSharerId == nextRequest->lid) continue; // skip ourselves
-                    LockRequest* nextSharer = _locks[*nextSharerId];
-                    if (LockMgr::EXCLUSIVE_RECORD == nextSharer->mode) {
-                        set<TxId>::iterator nextUpgrader = otherSharers.find(nextSharer->xid);
-                        if (nextUpgrader != otherSharers.end() && *nextUpgrader != requestor) {
-                            // we have to abort
-                            release(requestor); // release our locks
-                            throw "FIX-ME";
-                        }
-                        break;
-                    }
-                    otherSharers.insert(nextSharer->xid);
-                }
-
-                // safe to upgrade
-                queue->insert(nextSharerId, lr->lid);
-                if (otherSharers.size() > 1) {
-                    // there are other sharers, so we block on their completion
-                }
-                return;
-            }
-        }
-    }
-
-    // most of the time, there will be no locks on the desired record
-
-    // add lock request to list of request for recId
-    rec_iter = _recordLocks[store].find(recId);
-    if (rec_iter == _recordLocks[store].end()) {
-	list<LockId>* recLocks = new list<LockId>();
-	_recordLocks[store][recId] = recLocks;
-	recLocks->push_back(lr->lid);
-    }
-    else {
-	rec_iter->second->push_back(lr->lid);
-    }
-
     // add lock request to set of requests of requesting TxId
     map<TxId,set<LockId>*>::iterator xa_iter = _xaLocks.find(requestor);
     if (xa_iter == _xaLocks.end()) {
 	set<TxId>* myLocks = new set<LockId>();
-	_xaLocks[requestor] = myLocks;
 	myLocks->insert(lr->lid);
+	_xaLocks[requestor] = myLocks;
     }
     else {
 	xa_iter->second->insert(lr->lid);
     }
 
-    map<RecordId,list<LockId>*>::iterator locksOnRecord = _recordLocks[store].find(recId);
-    if (locksOnRecord != _recordLocks[store].end()) {
-        list<LockId>::iterator nextLockId = locksOnRecord->second->begin();
-	LockRequest* nextLockRequest = _locks[*nextLockId];
-        if (!isCompatible(mode, nextLockRequest->mode)) {
+    // if this is the 1st lock request against this store, or recId, init and exit
+    map<const RecordStore*, map<RecordId,list<LockId>*> >::iterator storeLocks = _recordLocks.find(store);
+    if (storeLocks == _recordLocks.end()) {
+        map<RecordId, list<LockId>*> recordsLocks;
+        list<LockId>* locks = new list<LockId>();
+        locks->push_back(lr->lid);
+        recordsLocks[recId] = locks;
+        _recordLocks[store] = recordsLocks;
+        return;
+    }
 
+    map<RecordId,list<LockId>*>::iterator recLocks = storeLocks->second.find(recId);
+    if (recLocks == storeLocks->second.end()) {
+        list<LockId>* locks = new list<LockId>();
+        locks->push_back(lr->lid);
+        storeLocks->second.insert(pair<RecordId,list<LockId>*>(recId,locks));
+        return;
+    }
+
+    // check to see if requestor has already locked recId
+    list<LockId>* queue = recLocks->second;
+    for (list<LockId>::iterator nextLockId = queue->begin();
+         nextLockId != queue->end(); ++nextLockId) {
+        LockRequest* nextRequest = _locks[*nextLockId];
+        if (nextRequest->xid != requestor) {
+            continue;
+        }
+
+        // nextRequest is owned by requestor
+
+        if (nextRequest->mode == mode) {
+            // we already have the lock, don't need the one we created above
+            _xaLocks[requestor]->erase(lr->lid);
+            _locks.erase(lr->lid);
+            delete lr;
+            return;
+        }
+        else if (LockMgr::EXCLUSIVE_RECORD == nextRequest->mode) {
+            // downgrade: we're asking for a SHARED_RECORD lock and have an EXCLUSIVE
+            // since we're not blocked, the EXCLUSIVE must be at the front
+            invariant(nextLockId == queue->begin());
+
+            // add our SHARED_RECORD request immediately after
+            // our EXCLUSIVE_RECORD request, so that when we
+            // release the EXCLUSIVE, we'll be granted the SHARED
+            //
+            queue->insert(++nextLockId, lr->lid);
+            return;
+        }
+
+        // we're asking for an upgrade.  this is ok if there are
+        // no other upgrade requests.
+        //
+        // the problem with other upgrade requests is that our view
+        // of the record may change while we have a shared lock, but
+        // before we're granted the exclusive lock.
+
+        set<TxId> otherSharers;
+        list<LockId>::iterator nextSharerId = queue->begin();
+        for (; nextSharerId != queue->end(); ++nextSharerId) {
+            if (*nextSharerId == nextRequest->lid) continue; // skip 
+            LockRequest* nextSharer = _locks[*nextSharerId];
+            if (LockMgr::EXCLUSIVE_RECORD == nextSharer->mode) {
+                set<TxId>::iterator nextUpgrader = otherSharers.find(nextSharer->xid);
+                if (nextUpgrader != otherSharers.end() && *nextUpgrader != requestor) {
+                    abort(requestor);
+                    return; // abort throws
+                }
+                break;
+            }
+            otherSharers.insert(nextSharer->xid);
+        }
+
+        // safe to upgrade
+        queue->insert(nextSharerId, lr->lid);
+        if (otherSharers.size() > 1) {
+            // there are other sharers, so we block on their completion
+        }
+        return;
+    }
+
+    list<LockId>::iterator nextLockId = queue->begin();
+    if (nextLockId != queue->end()) {
+	LockRequest* nextLockRequest = _locks[*nextLockId];
+        if (! isCompatible(mode, nextLockRequest->mode)) {
 	    const TxId& blocker = nextLockRequest->xid;
 
             // check for deadlock
@@ -335,6 +376,9 @@ void LockMgr::acquire( const TxId& requestor,
 				requestorsWaiters->second->end());
 	    }
 
+            // add our request to the queue
+            addLockToQueueUsingPolicy( lr );
+
             // block
 	    lr->sleep = true;
 	    while (lr->sleep) {
@@ -343,8 +387,12 @@ void LockMgr::acquire( const TxId& requestor,
 
 	    // when awakened, remove ourselves from the set of waiters
             _waiters[nextLockRequest->xid]->erase(requestor);
+            return;
         }
     }
+
+    // add our request to the queue
+    addLockToQueueUsingPolicy( lr );
 }
 
 void LockMgr::release( const TxId& holder ) {
@@ -417,10 +465,13 @@ void LockMgr::release( const TxId& holder,
                 ourLock = nextLock;
                 _xaLocks[holder]->erase(*nextLockId);
                 _locks.erase(*nextLockId);
-                queue->erase(nextLockId);
+                queue->erase(nextLockId++); 
                 delete ourLock;
 
                 foundLock = true;
+                if (mode == LockMgr::EXCLUSIVE_RECORD) {
+                    break;
+                }
             }
         }
 
@@ -429,7 +480,12 @@ void LockMgr::release( const TxId& holder,
         // deal with transactions that were waiting for this lock to be released
         //
         if (LockMgr::EXCLUSIVE_RECORD == mode) {
+#if 0
+            // this should be true unless we've upgraded
+            // perhaps we should assert that if there is a first lock on the queue
+            // that it should be owned by holder?
             invariant(nextLockId == queue->begin());
+#endif
             bool seenSharers = false;
             while (++nextLockId != queue->end()) {
                 LockRequest* nextSleeper = _locks[*nextLockId];
@@ -449,7 +505,7 @@ void LockMgr::release( const TxId& holder,
         else if (!seenExclusive) {
             // we were one of possibly many SHARED_RECORD lock holders.
             // continue iterating, until we find an exclusive lock
-            while (++nextLockId != queue->end()) {
+            for (;nextLockId != queue->end(); ++nextLockId) {
                 LockRequest* nextLock = _locks[*nextLockId];
                 if (LockMgr::SHARED_RECORD == nextLock->mode) {
                     otherSharers.insert(nextLock->xid);

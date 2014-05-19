@@ -54,6 +54,12 @@ namespace mongo {
     typedef size_t TxId;
     typedef size_t RecordId;
 
+    class AbortException : public std::exception {
+    public:
+        AbortException() {}
+        const char* what() const throw () { return "AbortException"; }
+    };
+
     class LockMgr {
     public:
 
@@ -104,7 +110,7 @@ namespace mongo {
         };
 
         LockMgr(const LockingPolicy& policy=FIRST_COME);
-        virtual ~LockMgr() = 0;
+        virtual ~LockMgr();
 
         /*
          * test whether a TxId has locked RecordStore in a mode
@@ -126,7 +132,7 @@ namespace mongo {
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
-                              const RecordStore* store ) = 0;
+                              const RecordStore* store );
 
         /*
          * acquire a RecordId in a RecordStore in a mode
@@ -134,14 +140,14 @@ namespace mongo {
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
                               const RecordStore* store,
-                              const RecordId& recId ) = 0;
+                              const RecordId& recId );
 
         /*
          * release a RecordStore
          */
         virtual void release( const TxId& holder,
                               const LockMode& mode,
-                              const RecordStore* store) = 0;
+                              const RecordStore* store);
 
         /*
          * release a RecordId in a RecordStore
@@ -149,12 +155,12 @@ namespace mongo {
         virtual void release( const TxId& holder,
                               const LockMode& mode,
                               const RecordStore* store,
-                              const RecordId& recId) = 0;
+                              const RecordId& recId);
 
         /*
          * release all resources acquired by a transaction
          */
-        virtual void release( const TxId& holder) = 0;
+        virtual void release( const TxId& holder);
 
 
         // --- for testing and logging
@@ -162,17 +168,17 @@ namespace mongo {
         /**
          * iterate over locks held by TxId
          */
-        virtual std::iterator<LockRequest*> begin(const TxId& xa) = 0;
+        virtual std::iterator<LockRequest*> begin(const TxId& xa);
 
         /**
          * iterate over locks on a given store
          */
-        virtual std::iterator<LockRequest*> begin(const RecordStore* store) = 0;
+        virtual std::iterator<LockRequest*> begin(const RecordStore* store);
 
         /**
          * iterate over locks on a given record
          */
-        virtual std::iterator<LockRequest*> begin(const RecordStore* store, const RecordId& recId) = 0;
+        virtual std::iterator<LockRequest*> begin(const RecordStore* store, const RecordId& recId);
 #endif
     private:
         void addLockToQueueUsingPolicy( LockRequest* lr );
