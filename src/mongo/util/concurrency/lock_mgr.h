@@ -101,6 +101,21 @@ namespace mongo {
         virtual ~LockMgr() = 0;
 
         /*
+         * test whether a TxId has locked RecordStore in a mode
+         */
+        virtual bool isLocked( const TxId& holder,
+                               const LockMode& mode,
+                               const RecordStore* store);
+
+        /*
+         * test whether a TxId has locked a RecordId in a mode
+         */
+        virtual bool isLocked( const TxId& holder,
+                               const LockMode& mode,
+                               const RecordStore* store,
+                               const RecordId& recId);
+
+        /*
          * acquire a RecordStore in a mode
          */
         virtual void acquire( const TxId& requestor,

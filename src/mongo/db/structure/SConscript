@@ -6,7 +6,6 @@ env.Library(
     source= [
         'record_store.cpp',
         'record_store_heap.cpp',
-        'lock_mgr.cpp',
         ],
     LIBDEPS= [
         '$BUILD_DIR/mongo/bson',
