@@ -60,6 +60,8 @@ namespace mongo {
         const char* what() const throw () { return "AbortException"; }
     };
 
+    void justSleep(const TxId& blocker);
+
     class LockMgr {
     public:
 
@@ -140,7 +142,8 @@ namespace mongo {
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
                               const RecordStore* store,
-                              const RecordId& recId );
+                              const RecordId& recId,
+                              void (*notifier)(const TxId&) = &justSleep);
 
         /*
          * release a RecordStore

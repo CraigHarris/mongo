@@ -70,6 +70,7 @@ namespace {
 LockMgr::LockMgr( const LockingPolicy& policy ) : _policy(policy), _guard() { }
 
 LockMgr::~LockMgr( ) {
+    unique_lock<boost::mutex> guard(_guard);
     for(map<LockId,LockRequest*>::iterator locks = _locks.begin();
         locks != _locks.end(); ++locks) {
         delete locks->second;
@@ -79,6 +80,7 @@ LockMgr::~LockMgr( ) {
 bool LockMgr::isLocked( const TxId& holder,
                         const LockMode& mode,
                         const RecordStore* store) {
+    unique_lock<boost::mutex> guard(_guard);
     map<const RecordStore*, list<LockId>*>::iterator locks = _containerLocks.begin();
     if (locks == _containerLocks.end()) { return false; }
     for (list<LockId>::iterator nextLockId = locks->second->begin();
@@ -95,6 +97,7 @@ bool LockMgr::isLocked( const TxId& holder,
                         const LockMode& mode,
                         const RecordStore* store,
                         const RecordId& recId) {
+    unique_lock<boost::mutex> guard(_guard);
     map<const RecordStore*, map<RecordId, list<LockId>*> >::iterator storeLocks = _recordLocks.begin();
     if (storeLocks == _recordLocks.end()) { return false; }
     map<RecordId, list<LockId>*>::iterator recordLocks = storeLocks->second.begin();
@@ -237,7 +240,8 @@ void LockMgr::acquire(const TxId& requestor,
 void LockMgr::acquire( const TxId& requestor,
                        const LockMode& mode,
                        const RecordStore* store,
-                       const RecordId& recId ) {
+                       const RecordId& recId,
+                       void (*sleepNotifier)(const TxId&)) {
 
     // first, acquire a lock on the store
     acquire(requestor, LockMgr::SHARED_STORE, store);
@@ -378,6 +382,9 @@ void LockMgr::acquire( const TxId& requestor,
 
             // add our request to the queue
             addLockToQueueUsingPolicy( lr );
+
+            // call the sleep notification function
+            (*sleepNotifier)(blocker);
 
             // block
 	    lr->sleep = true;

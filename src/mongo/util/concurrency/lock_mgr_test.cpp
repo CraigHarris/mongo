@@ -4,6 +4,8 @@
 #include "mongo/util/concurrency/lock_mgr.h"
 
 namespace mongo {
+    void justSleep(const TxId& blocker) { }
+
     TEST(LockMgrTest, SingleTx) {
         LockMgr lm;
         RecordStore* store= (RecordStore*)0x4000;
