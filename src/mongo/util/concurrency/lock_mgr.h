@@ -37,6 +37,7 @@
 #include <set>
 
 #include "mongo/db/structure/record_store.h"
+#include "mongo/util/log.h"
 
 /*
  * LockMgr controls access to resources through two functions: acquire and release
@@ -59,8 +60,6 @@ namespace mongo {
         AbortException() {}
         const char* what() const throw () { return "AbortException"; }
     };
-
-    void justSleep(const TxId& blocker);
 
     class LockMgr {
     public:
@@ -111,6 +110,14 @@ namespace mongo {
             boost::condition_variable lock;
         };
 
+	class Notifier {
+	public:
+	    virtual void operator()(const TxId& blocker) const = 0;
+/* { log() << "in do nothing notifier" << std::endl; } */
+
+	    virtual ~Notifier() { }
+	};
+
         LockMgr(const LockingPolicy& policy=FIRST_COME);
         virtual ~LockMgr();
 
@@ -143,7 +150,7 @@ namespace mongo {
                               const LockMode& mode,
                               const RecordStore* store,
                               const RecordId& recId,
-                              void (*notifier)(const TxId&) = &justSleep);
+                              const Notifier* notifier = NULL);
 
         /*
          * release a RecordStore
@@ -165,6 +172,13 @@ namespace mongo {
          */
         virtual void release( const TxId& holder);
 
+	/**
+	* called internally for deadlock
+	* possibly called publicly to stop a long transaction
+	* also used for testing
+	*/
+        void abort( const TxId& goner );
+
 
         // --- for testing and logging
 #if 0
@@ -185,7 +199,6 @@ namespace mongo {
 #endif
     private:
         void addLockToQueueUsingPolicy( LockRequest* lr );
-        void abort( const TxId& goner );
 
         LockingPolicy _policy;
 

@@ -28,6 +28,7 @@
 
 #include <boost/thread/locks.hpp>
 #include "mongo/util/assert_util.h"
+#include "mongo/util/log.h"
 #include "mongo/util/concurrency/lock_mgr.h"
 
 using namespace std;
@@ -241,7 +242,7 @@ void LockMgr::acquire( const TxId& requestor,
                        const LockMode& mode,
                        const RecordStore* store,
                        const RecordId& recId,
-                       void (*sleepNotifier)(const TxId&)) {
+                       const Notifier* sleepNotifier ) {
 
     // first, acquire a lock on the store
     acquire(requestor, LockMgr::SHARED_STORE, store);
@@ -384,7 +385,12 @@ void LockMgr::acquire( const TxId& requestor,
             addLockToQueueUsingPolicy( lr );
 
             // call the sleep notification function
-            (*sleepNotifier)(blocker);
+	    if (NULL != sleepNotifier) {
+		log() << "before sleep notifier" << endl;
+		(*sleepNotifier)(blocker);
+	    } else {
+		log() << "NULL sleep notifier" << endl;
+	    }
 
             // block
 	    lr->sleep = true;

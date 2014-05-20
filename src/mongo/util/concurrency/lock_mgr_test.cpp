@@ -3,6 +3,7 @@
 #include <boost/thread/thread.hpp>
 #include "mongo/unittest/unittest.h"
 #include "mongo/util/concurrency/lock_mgr.h"
+#include "mongo/util/log.h"
 
 namespace mongo {
 
@@ -122,15 +123,12 @@ namespace mongo {
 	TxRequest buffer[10];
     };
 
-    void TxThreadFunc( LockMgr* lm, TxCommandBuffer* cmd, TxResponseBuffer* rsp ) {
-    }
-
-    class ClientTransaction {
+    class ClientTransaction : public LockMgr::Notifier {
     public:
 	// these are called in the main driver program
 	
 	ClientTransaction( LockMgr* lm, const TxId& xid) : _lm(lm), _xid(xid), _thr(&ClientTransaction::processCmd, this) { }
-	~ClientTransaction( ) { _thr.join(); }
+	virtual ~ClientTransaction( ) { _thr.join(); }
 
 	void acquire( const LockMgr::LockMode& mode, const RecordId recId, const TxRsp& rspCode ) {
 	    _cmd.post( ACQUIRE, _xid, mode, (RecordStore*)0x4000, recId );
@@ -159,33 +157,36 @@ namespace mongo {
 	    _cmd.post( QUIT, 0, LockMgr::INVALID, 0, 0 );
 	}
 	
-
-	// this is run within the client threads
+	// these are run within the client threads
 	void processCmd( ) {
 	    bool more = true;
 	    while (more) {
 		TxRequest* req = _cmd.consume( );
 		switch (req->cmd) {
 		case ACQUIRE:
-		    _lm->acquire(_xid, req->mode, req->store, req->recId);
+		    _lm->acquire(_xid, req->mode, req->store, req->recId, this);
 		    _rsp.post(ACQUIRED);
 		    break;
 		case RELEASE:
 		    _lm->release(_xid, req->mode, req->store, req->recId);
 		    _rsp.post(RELEASED);
 		    break;
-#if 0
 		case ABORT:
 		    _lm->abort(_xid);
 		    _rsp.post(ABORTED);
 		    break;
-#endif
 		case QUIT:
 		default:
 		    more = false;
 		    break;
 		}
 	    }
+	}
+
+	// inherited from Notifier, used by LockMgr::acquire
+	virtual void operator()(const TxId& blocker) {
+	    log() << "in sleep notifier" << endl;
+	    _rsp.post(BLOCKED);
 	}
 
     private:
