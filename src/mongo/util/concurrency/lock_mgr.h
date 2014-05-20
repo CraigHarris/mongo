@@ -200,6 +200,19 @@ namespace mongo {
     private:
         void addLockToQueueUsingPolicy( LockRequest* lr );
 
+        /*
+         * called by public release and internally by abort
+         * assumes caller as acquired a mutex
+         */
+        virtual void releaseWithMutex( const TxId& holder,
+                                       const LockMode& mode,
+                                       const RecordStore* store);
+
+        virtual void releaseWithMutex( const TxId& holder,
+                                       const LockMode& mode,
+                                       const RecordStore* store,
+                                       const RecordId& recId);
+
         LockingPolicy _policy;
 
         boost::mutex _guard;

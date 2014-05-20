@@ -150,10 +150,8 @@ namespace mongo {
 	}
 
 	void wakened( ) {
-#if 0
 	    TxResponse* rsp = _rsp.consume( );
-	    ASSERT( AWAKENED == rsp->rspCode );
-#endif
+	    ASSERT( ACQUIRED == rsp->rspCode );
 	}
 
 	void quit( ) {
@@ -167,8 +165,12 @@ namespace mongo {
 		TxRequest* req = _cmd.consume( );
 		switch (req->cmd) {
 		case ACQUIRE:
-		    _lm->acquire(_xid, req->mode, req->store, req->recId, this);
-		    _rsp.post(ACQUIRED);
+                    try {
+                        _lm->acquire(_xid, req->mode, req->store, req->recId, this);
+                        _rsp.post(ACQUIRED);
+                    } catch (const AbortException& err) {
+                        _rsp.post(ABORTED);
+                    }
 		    break;
 		case RELEASE:
 		    _lm->release(_xid, req->mode, req->store, req->recId);
@@ -289,113 +291,120 @@ namespace mongo {
 	ClientTransaction t1( &lm, 1 );
 	ClientTransaction t2( &lm, 2 );
 
-	// no conflicts with shared locks on same/different objects
+        try {
 
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
-	t1.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            // no conflicts with shared locks on same/different objects
 
-	t1.release( LockMgr::SHARED_RECORD, 1 );
-	t1.release( LockMgr::SHARED_RECORD, 2 );
-	t2.release( LockMgr::SHARED_RECORD, 1 );
-	t2.release( LockMgr::SHARED_RECORD, 2 );
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
+            t1.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
 
-
-	// simple lock conflicts
-
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t1.release( LockMgr::SHARED_RECORD, 1 );
-	t2.wakened( );
-	t2.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-	t2.wakened( );
-	t2.release( LockMgr::SHARED_RECORD, 1 );
-
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1);
-	t2.wakened( );
-	t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
+            t1.release( LockMgr::SHARED_RECORD, 1 );
+            t1.release( LockMgr::SHARED_RECORD, 2 );
+            t2.release( LockMgr::SHARED_RECORD, 1 );
+            t2.release( LockMgr::SHARED_RECORD, 2 );
 
 
-	// deadlock
+            // simple lock conflicts
 
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, BLOCKED );
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
-	t1.wakened( );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 2);
-	t1.release( LockMgr::SHARED_RECORD, 1);
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+            t1.release( LockMgr::SHARED_RECORD, 1 );
+            t2.wakened( );
+            t2.release( LockMgr::EXCLUSIVE_RECORD, 1 );
 
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
-	t2.wakened( );
-	t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
-	t2.release( LockMgr::SHARED_RECORD, 2);
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t2.wakened( );
+            t2.release( LockMgr::SHARED_RECORD, 1 );
+
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1);
+            t2.wakened( );
+            t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
 
 
-	// Downgrades
+            // deadlock
 
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-	t2.wakened( );
-	t1.release( LockMgr::SHARED_RECORD, 1);
-	t2.release( LockMgr::SHARED_RECORD, 1);
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, BLOCKED );
+            t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
+            t1.wakened( );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 2);
+            t1.release( LockMgr::SHARED_RECORD, 1);
 
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-	t2.wakened( );
-	t1.release( LockMgr::SHARED_RECORD, 1);
-	t2.release( LockMgr::SHARED_RECORD, 1);
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
+            t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
+            t2.wakened( );
+            t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
+            t2.release( LockMgr::SHARED_RECORD, 2);
 
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-	t1.release( LockMgr::SHARED_RECORD, 1);
-	t2.wakened( );
-	t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
 
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-	t1.release( LockMgr::SHARED_RECORD, 1);
-	t2.wakened( );
-	t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
+            // Downgrades
+
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t2.wakened( );
+            t1.release( LockMgr::SHARED_RECORD, 1);
+            t2.release( LockMgr::SHARED_RECORD, 1);
+
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t2.wakened( );
+            t1.release( LockMgr::SHARED_RECORD, 1);
+            t2.release( LockMgr::SHARED_RECORD, 1);
+
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t1.release( LockMgr::SHARED_RECORD, 1);
+            t2.wakened( );
+            t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
+
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t1.release( LockMgr::SHARED_RECORD, 1);
+            t2.wakened( );
+            t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
 	
 
-	// Upgrades
+            // Upgrades
 
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-	t2.wakened( );
-	t1.release( LockMgr::SHARED_RECORD, 1);
-	t2.release( LockMgr::SHARED_RECORD, 1);
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t2.wakened( );
+            t1.release( LockMgr::SHARED_RECORD, 1);
+            t2.release( LockMgr::SHARED_RECORD, 1);
 
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t2.release( LockMgr::SHARED_RECORD, 1);
-	t1.wakened( );
-	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-	t1.release( LockMgr::SHARED_RECORD, 1);
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+            t2.release( LockMgr::SHARED_RECORD, 1);
+            t1.wakened( );
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t1.release( LockMgr::SHARED_RECORD, 1);
 
-        t1.quit( );
-        t2.quit( );
+            t1.quit( );
+            t2.quit( );
+        } catch ( ... ) {
+            t1.quit( );
+            t2.quit( );
+            throw;
+        }
     }
 }

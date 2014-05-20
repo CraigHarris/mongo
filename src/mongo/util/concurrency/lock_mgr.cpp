@@ -177,10 +177,10 @@ void LockMgr::abort(const TxId& goner) {
 
 	if (LockMgr::SHARED_STORE == nextLockRequest->mode ||
 	    LockMgr::EXCLUSIVE_STORE == nextLockRequest->mode) {
-	    release(goner, nextLockRequest->mode, nextLockRequest->store);
+	    releaseWithMutex(goner, nextLockRequest->mode, nextLockRequest->store);
 	}
 	else {
-	    release(goner, nextLockRequest->mode, nextLockRequest->store, nextLockRequest->recId);
+	    releaseWithMutex(goner, nextLockRequest->mode, nextLockRequest->store, nextLockRequest->recId);
 	}
     }
 
@@ -349,7 +349,9 @@ void LockMgr::acquire( const TxId& requestor,
     if (nextLockId != queue->end()) {
 	LockRequest* nextLockRequest = _locks[*nextLockId];
         if (! isCompatible(mode, nextLockRequest->mode)) {
-	    const TxId& blocker = nextLockRequest->xid;
+            // nextLockRequest may be deleted by the time we return from blocking
+            // so pull out everything we might need after awakening below
+	    const TxId blocker = nextLockRequest->xid;
 
             // check for deadlock
 	    map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
@@ -358,6 +360,9 @@ void LockMgr::acquire( const TxId& requestor,
 		    // the transaction that would block requestor is already blocked by requestor
 		    // if requestor waited for blocker there would be a deadlock
 		    //
+                    _xaLocks[requestor]->erase(lr->lid);
+                    _locks.erase(lr->lid);
+                    delete lr;
 		    abort(requestor);
 		}
             }
@@ -369,7 +374,7 @@ void LockMgr::acquire( const TxId& requestor,
 	    set<TxId>* waiters;
 	    if (blockersWaiters == _waiters.end()) {
 		waiters = new set<TxId>();
-		_waiters[nextLockRequest->xid] = waiters;
+		_waiters[blocker] = waiters;
 	    }
 	    else {
 		waiters = blockersWaiters->second;
@@ -399,7 +404,7 @@ void LockMgr::acquire( const TxId& requestor,
 	    }
 
 	    // when awakened, remove ourselves from the set of waiters
-            _waiters[nextLockRequest->xid]->erase(requestor);
+            _waiters[blocker]->erase(requestor);
             return;
         }
     }
@@ -418,12 +423,10 @@ void LockMgr::release( const TxId& holder ) {
     }
 }
 
-void LockMgr::release( const TxId& holder,
-                       const LockMode& mode,
-                       const RecordStore* store ) {
+void LockMgr::releaseWithMutex( const TxId& holder,
+                                const LockMode& mode,
+                                const RecordStore* store ) {
 #if 0
-    unique_lock<boost::mutex> guard(_guard);
-
     // find the lock to release
     const LockId& lockId = _containerLocks[store]->front();
 
@@ -450,98 +453,112 @@ void LockMgr::release( const TxId& holder,
 
 void LockMgr::release( const TxId& holder,
                        const LockMode& mode,
+                       const RecordStore* store ) {
+    unique_lock<boost::mutex> guard(_guard);
+    releaseWithMutex( holder, mode, store );
+}
+
+void LockMgr::releaseWithMutex(const TxId& holder,
+                               const LockMode& mode,
+                               const RecordStore* store,
+                               const RecordId& recId) {
+
+    bool seenExclusive = false;
+    bool foundLock = false;
+    set<TxId> otherSharers;
+
+    list<LockId>* queue = _recordLocks[store][recId];
+    list<LockId>::iterator nextLockId = queue->begin();
+    LockRequest* ourLock = NULL;
+
+    // find the lock to release
+    for( ; !foundLock && nextLockId != queue->end(); ++nextLockId) {
+        LockRequest* nextLock = _locks[*nextLockId];
+        if (! nextLock->matches(holder, mode, store, recId)) {
+            if (LockMgr::SHARED_RECORD == nextLock->mode && !seenExclusive)
+                otherSharers.insert(nextLock->xid);
+            else
+                seenExclusive = true;
+        }
+        else {
+            // this is our lock.  remove it
+            //
+            ourLock = nextLock;
+            _xaLocks[holder]->erase(*nextLockId);
+            _locks.erase(*nextLockId);
+            queue->erase(nextLockId++); 
+            delete ourLock;
+
+            foundLock = true;
+            break; // don't increment nextLockId again
+        }
+    }
+
+    invariant(foundLock);
+
+    // deal with transactions that were waiting for this lock to be released
+    //
+    if (LockMgr::EXCLUSIVE_RECORD == mode) {
+#if 0
+        // this should be true unless we've upgraded
+        // perhaps we should assert that if there is a first lock on the queue
+        // that it should be owned by holder?
+        invariant(nextLockId == queue->begin());
+#endif
+        bool seenSharers = false;
+        for (; nextLockId != queue->end(); ++nextLockId) {
+            LockRequest* nextSleeper = _locks[*nextLockId];
+            if (LockMgr::EXCLUSIVE_RECORD == nextSleeper->mode) {
+                if (!seenSharers)
+                    nextSleeper->sleep = false;
+                nextSleeper->lock.notify_one();
+                break;
+            }
+            else {
+                seenSharers = true;
+                nextSleeper->sleep = false;
+                nextSleeper->lock.notify_one();
+            }
+        }
+    }
+    else if (!seenExclusive) {
+        // we were one of possibly many SHARED_RECORD lock holders.
+        // continue iterating, until we find an exclusive lock
+        for (; nextLockId != queue->end(); ++nextLockId) {
+            LockRequest* nextLock = _locks[*nextLockId];
+            if (LockMgr::SHARED_RECORD == nextLock->mode) {
+                otherSharers.insert(nextLock->xid);
+                continue;
+            }
+
+            // first exclusive lock request found. it's blocked.
+            // notify it if there are no otherSharers
+            //
+            // it's possible the Exclusive locker previously held
+            // a shared lock, then upgraded and blocked
+            // 
+            otherSharers.erase(nextLock->xid);
+            if (0 == otherSharers.size()) {
+                // no other sharers, awaken the exclusive locker
+                nextLock->sleep = false;
+                nextLock->lock.notify_one();
+            }
+            break;
+        }
+    }
+    else {
+        // we're releasing a readlock that was blocked
+        // this can only happen if we're aborting
+    }
+}
+
+void LockMgr::release( const TxId& holder,
+                       const LockMode& mode,
                        const RecordStore* store,
                        const RecordId& recId) {
     {
         unique_lock<boost::mutex> guard(_guard);
-
-        bool seenExclusive = false;
-        bool foundLock = false;
-        set<TxId> otherSharers;
-
-        list<LockId>* queue = _recordLocks[store][recId];
-        list<LockId>::iterator nextLockId = queue->begin();
-        LockRequest* ourLock = NULL;
-
-        // find the lock to release
-        for( ; !foundLock && nextLockId != queue->end(); ++nextLockId) {
-            LockRequest* nextLock = _locks[*nextLockId];
-            if (! nextLock->matches(holder, mode, store, recId)) {
-                if (LockMgr::SHARED_RECORD == nextLock->mode && !seenExclusive)
-                    otherSharers.insert(nextLock->xid);
-                else
-                    seenExclusive = true;
-            }
-            else {
-                // this is our lock.  remove it
-                //
-                ourLock = nextLock;
-                _xaLocks[holder]->erase(*nextLockId);
-                _locks.erase(*nextLockId);
-                queue->erase(nextLockId++); 
-                delete ourLock;
-
-                foundLock = true;
-                break; // don't increment nextLockId again
-            }
-        }
-
-        invariant(foundLock);
-
-        // deal with transactions that were waiting for this lock to be released
-        //
-        if (LockMgr::EXCLUSIVE_RECORD == mode) {
-#if 0
-            // this should be true unless we've upgraded
-            // perhaps we should assert that if there is a first lock on the queue
-            // that it should be owned by holder?
-            invariant(nextLockId == queue->begin());
-#endif
-            bool seenSharers = false;
-            while (++nextLockId != queue->end()) {
-                LockRequest* nextSleeper = _locks[*nextLockId];
-                if (LockMgr::EXCLUSIVE_RECORD == nextSleeper->mode) {
-                    if (!seenSharers)
-			nextSleeper->sleep = false;
-                        nextSleeper->lock.notify_one();
-                    break;
-                }
-                else {
-                    seenSharers = true;
-		    nextSleeper->sleep = false;
-                    nextSleeper->lock.notify_one();
-                }
-            }
-        }
-        else if (!seenExclusive) {
-            // we were one of possibly many SHARED_RECORD lock holders.
-            // continue iterating, until we find an exclusive lock
-            for (;nextLockId != queue->end(); ++nextLockId) {
-                LockRequest* nextLock = _locks[*nextLockId];
-                if (LockMgr::SHARED_RECORD == nextLock->mode) {
-                    otherSharers.insert(nextLock->xid);
-                    continue;
-                }
-
-                // first exclusive lock request found. it's blocked.
-                // notify it if there are no otherSharers
-                //
-                // it's possible the Exclusive locker previously held
-                // a shared lock, then upgraded and blocked
-                // 
-                otherSharers.erase(nextLock->xid);
-                if (0 == otherSharers.size()) {
-                    // no other sharers, awaken the exclusive locker
-		    nextLock->sleep = false;
-                    nextLock->lock.notify_one();
-                }
-                break;
-            }
-        }
-        else {
-            // we're releasing a readlock that was blocked
-            // this can only happen if we're aborting
-        }
+        releaseWithMutex( holder, mode, store, recId );
     }
 
     // finally, release the sharedContainerLock
