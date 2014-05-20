@@ -242,7 +242,7 @@ void LockMgr::acquire( const TxId& requestor,
                        const LockMode& mode,
                        const RecordStore* store,
                        const RecordId& recId,
-                       const Notifier* sleepNotifier ) {
+                       Notifier* sleepNotifier ) {
 
     // first, acquire a lock on the store
     acquire(requestor, LockMgr::SHARED_STORE, store);
@@ -482,9 +482,7 @@ void LockMgr::release( const TxId& holder,
                 delete ourLock;
 
                 foundLock = true;
-                if (mode == LockMgr::EXCLUSIVE_RECORD) {
-                    break;
-                }
+                break; // don't increment nextLockId again
             }
         }
 

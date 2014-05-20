@@ -112,7 +112,7 @@ namespace mongo {
 
 	class Notifier {
 	public:
-	    virtual void operator()(const TxId& blocker) const = 0;
+	    virtual void operator()(const TxId& blocker) = 0;
 /* { log() << "in do nothing notifier" << std::endl; } */
 
 	    virtual ~Notifier() { }
@@ -150,7 +150,7 @@ namespace mongo {
                               const LockMode& mode,
                               const RecordStore* store,
                               const RecordId& recId,
-                              const Notifier* notifier = NULL);
+                              Notifier* notifier = NULL);
 
         /*
          * release a RecordStore

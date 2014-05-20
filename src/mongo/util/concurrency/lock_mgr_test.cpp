@@ -50,8 +50,8 @@ namespace mongo {
 	    boost::unique_lock<boost::mutex> guard(_guard);
 	    while (_count == 10)
 		_full.wait(guard);
-	    buffer[_writePos].rspCode = rspCode;
-	    _writePos = ++_writePos % 10;
+	    buffer[_writePos++].rspCode = rspCode;
+	    _writePos %= 10;
 	    _count++;
 	    _empty.notify_one( );
 	}
@@ -60,8 +60,8 @@ namespace mongo {
 	    boost::unique_lock<boost::mutex> guard(_guard);
 	    while (_count == 0)
 		_empty.wait(guard);
-	    TxResponse* result = &buffer[_readPos];
-	    _readPos = ++_readPos % 10;
+	    TxResponse* result = &buffer[_readPos++];
+	    _readPos %= 10;
 	    _count--;
 	    _full.notify_one( );
 	    return result;
@@ -96,7 +96,8 @@ namespace mongo {
 	    buffer[_writePos].mode = mode;
 	    buffer[_writePos].store = store;
 	    buffer[_writePos].recId = recId;
-	    _writePos = ++_writePos % 10;
+            _writePos++;
+	    _writePos %= 10;
 	    _count++;
 	    _empty.notify_one( );
 	}
@@ -105,8 +106,8 @@ namespace mongo {
 	    boost::unique_lock<boost::mutex> guard(_guard);
 	    while (_count == 0)
 		_empty.wait(guard);
-	    TxRequest* result = &buffer[_readPos];
-	    _readPos = ++_readPos % 10;
+	    TxRequest* result = &buffer[_readPos++];
+	    _readPos %= 10;
 	    _count--;
 	    _full.notify_one( );
 	    return result;
@@ -149,8 +150,10 @@ namespace mongo {
 	}
 
 	void wakened( ) {
+#if 0
 	    TxResponse* rsp = _rsp.consume( );
 	    ASSERT( AWAKENED == rsp->rspCode );
+#endif
 	}
 
 	void quit( ) {
@@ -176,11 +179,13 @@ namespace mongo {
 		    _rsp.post(ABORTED);
 		    break;
 		case QUIT:
+                    log() << "t" << _xid << ": in QUIT" << endl;
 		default:
-		    more = false;
+                    more = false;
 		    break;
 		}
 	    }
+            log() << "t" << _xid << ": ending" << endl;
 	}
 
 	// inherited from Notifier, used by LockMgr::acquire
@@ -389,5 +394,8 @@ namespace mongo {
 	t1.wakened( );
 	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
 	t1.release( LockMgr::SHARED_RECORD, 1);
+
+        t1.quit( );
+        t2.quit( );
     }
 }
