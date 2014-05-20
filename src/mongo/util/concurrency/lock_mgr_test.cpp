@@ -52,6 +52,7 @@ namespace mongo {
 	    buffer[_writePos].rspCode = rspCode;
 	    _writePos = ++_writePos % 10;
 	    _count++;
+	    _empty.notify_one( );
 	}
 
 	TxResponse* consume( ) {
@@ -61,6 +62,7 @@ namespace mongo {
 	    TxResponse* result = &buffer[_readPos];
 	    _readPos = ++_readPos % 10;
 	    _count--;
+	    _full.notify_one( );
 	    return result;
 	}
 
@@ -95,6 +97,7 @@ namespace mongo {
 	    buffer[_writePos].recId = recId;
 	    _writePos = ++_writePos % 10;
 	    _count++;
+	    _empty.notify_one( );
 	}
 
 	TxRequest* consume( ) {
@@ -102,8 +105,9 @@ namespace mongo {
 	    while (_count == 0)
 		_empty.wait(guard);
 	    TxRequest* result = &buffer[_readPos];
-	    ++_readPos = _readPos % 10;
+	    _readPos = ++_readPos % 10;
 	    _count--;
+	    _full.notify_one( );
 	    return result;
 	}
 
@@ -125,7 +129,7 @@ namespace mongo {
     public:
 	// these are called in the main driver program
 	
-	ClientTransaction( LockMgr* lm, const TxId& xid) : _lm(lm), _xid(xid), _thr(processCmd, this) { }
+	ClientTransaction( LockMgr* lm, const TxId& xid) : _lm(lm), _xid(xid), _thr(&ClientTransaction::processCmd, this) { }
 	~ClientTransaction( ) { _thr.join(); }
 
 	void acquire( const LockMgr::LockMode& mode, const RecordId recId, const TxRsp& rspCode ) {
