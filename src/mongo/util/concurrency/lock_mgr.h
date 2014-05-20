@@ -118,6 +118,43 @@ namespace mongo {
 	    virtual ~Notifier() { }
 	};
 
+        class LockStats {
+        public:
+            LockStats( )
+                : _numRequests(0),
+                  _numPreexistingRequests(0),
+                  _numBlocks(0),
+                  _numDeadlocks(0),
+                  _numDowngrades(0),
+                  _numUpgrades(0),
+                  _numMillisBlocked(0) { }
+
+            void incRequests() { _numRequests++; }
+            void incPreexisting() { _numPreexistingRequests++; }
+            void incBlocks() { _numBlocks++; }
+            void incDeadlocks() { _numDeadlocks++; }
+            void incDowngrades() { _numDowngrades++; }
+            void incUpgrades() { _numUpgrades++; }
+            void incTimeBlocked( unsigned long long numMillis ) { _numMillisBlocked += numMillis; }
+
+            unsigned long long getNumRequests() const { return _numRequests; }
+            unsigned long long getNumPreexistingRequests() const { return _numPreexistingRequests; }
+            unsigned long long getNumBlocks() const { return _numBlocks; }
+            unsigned long long getNumDeadlocks() const { return _numDeadlocks; }
+            unsigned long long getNumDowngrades() const { return _numDowngrades; }
+            unsigned long long getNumUpgrades() const { return _numUpgrades; }
+            unsigned long long getNumMillisBlocked() const { return _numMillisBlocked; }
+
+        private:
+            unsigned long long _numRequests;
+            unsigned long long _numPreexistingRequests;
+            unsigned long long _numBlocks;
+            unsigned long long _numDeadlocks;
+            unsigned long long _numDowngrades;
+            unsigned long long _numUpgrades;
+            unsigned long long _numMillisBlocked;
+        };
+
         LockMgr(const LockingPolicy& policy=FIRST_COME);
         virtual ~LockMgr();
 
@@ -179,6 +216,8 @@ namespace mongo {
 	*/
         void abort( const TxId& goner );
 
+        const LockStats& getStats( );
+
 
         // --- for testing and logging
 #if 0
@@ -198,7 +237,16 @@ namespace mongo {
         virtual std::iterator<LockRequest*> begin(const RecordStore* store, const RecordId& recId);
 #endif
     private:
+        /**
+         * adds a lock request to the list of requests for a resource
+         * using the LockingPolicy.  Called by acquire
+         */
         void addLockToQueueUsingPolicy( LockRequest* lr );
+
+        /**
+         * set up for future deadlock detection, called by acquire
+         */
+        void addWaiter( const TxId& blocker, const TxId& waiter );
 
         /*
          * called by public release and internally by abort
@@ -228,5 +276,8 @@ namespace mongo {
 
         // for deadlock detection
         std::map<TxId, std::set<TxId>*> _waiters;
+
+        // stats
+        LockStats _stats;
     };
 }

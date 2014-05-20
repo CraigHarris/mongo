@@ -29,6 +29,7 @@
 #include <boost/thread/locks.hpp>
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
+#include "mongo/util/timer.h"
 #include "mongo/util/concurrency/lock_mgr.h"
 
 using namespace std;
@@ -76,6 +77,10 @@ LockMgr::~LockMgr( ) {
         locks != _locks.end(); ++locks) {
         delete locks->second;
     }
+}
+
+const LockMgr::LockStats& LockMgr::getStats( ) {
+    return _stats;
 }
 
 bool LockMgr::isLocked( const TxId& holder,
@@ -187,6 +192,26 @@ void LockMgr::abort(const TxId& goner) {
     throw AbortException();
 }
 
+void LockMgr::addWaiter( const TxId& blocker, const TxId& requestor ) {
+    map<TxId, set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
+    set<TxId>* waiters;
+    if (blockersWaiters == _waiters.end()) {
+        waiters = new set<TxId>();
+        _waiters[blocker] = waiters;
+    }
+    else {
+        waiters = blockersWaiters->second;
+    }
+
+    waiters->insert(requestor);
+
+    map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
+    if (requestorsWaiters != _waiters.end()) {
+        waiters->insert(requestorsWaiters->second->begin(),
+                        requestorsWaiters->second->end());
+    }
+}
+
 void LockMgr::acquire(const TxId& requestor,
                       const LockMode& mode,
                       const RecordStore* store) {
@@ -244,6 +269,8 @@ void LockMgr::acquire( const TxId& requestor,
                        const RecordId& recId,
                        Notifier* sleepNotifier ) {
 
+    _stats.incRequests();
+
     // first, acquire a lock on the store
     acquire(requestor, LockMgr::SHARED_STORE, store);
 
@@ -285,10 +312,18 @@ void LockMgr::acquire( const TxId& requestor,
 
     // check to see if requestor has already locked recId
     list<LockId>* queue = recLocks->second;
+    set<TxId> sharedOwners;
+    LockRequest* firstExclusiveRequest = NULL;
     for (list<LockId>::iterator nextLockId = queue->begin();
          nextLockId != queue->end(); ++nextLockId) {
         LockRequest* nextRequest = _locks[*nextLockId];
         if (nextRequest->xid != requestor) {
+            if (LockMgr::SHARED_RECORD == mode && mode == nextRequest->mode) {
+                sharedOwners.insert(nextRequest->xid);
+            }
+            else if (LockMgr::EXCLUSIVE_RECORD == nextRequest->mode) {
+                firstExclusiveRequest = nextRequest;
+            }
             continue;
         }
 
@@ -306,6 +341,8 @@ void LockMgr::acquire( const TxId& requestor,
             // since we're not blocked, the EXCLUSIVE must be at the front
             invariant(nextLockId == queue->begin());
 
+            _stats.incDowngrades();
+
             // add our SHARED_RECORD request immediately after
             // our EXCLUSIVE_RECORD request, so that when we
             // release the EXCLUSIVE, we'll be granted the SHARED
@@ -321,6 +358,8 @@ void LockMgr::acquire( const TxId& requestor,
         // of the record may change while we have a shared lock, but
         // before we're granted the exclusive lock.
 
+        _stats.incUpgrades();
+
         set<TxId> otherSharers;
         list<LockId>::iterator nextSharerId = queue->begin();
         for (; nextSharerId != queue->end(); ++nextSharerId) {
@@ -329,8 +368,10 @@ void LockMgr::acquire( const TxId& requestor,
             if (LockMgr::EXCLUSIVE_RECORD == nextSharer->mode) {
                 set<TxId>::iterator nextUpgrader = otherSharers.find(nextSharer->xid);
                 if (nextUpgrader != otherSharers.end() && *nextUpgrader != requestor) {
+                    _xaLocks[requestor]->erase(lr->lid);
+                    _locks.erase(lr->lid);
+                    delete lr;
                     abort(requestor);
-                    return; // abort throws
                 }
                 break;
             }
@@ -339,16 +380,47 @@ void LockMgr::acquire( const TxId& requestor,
 
         // safe to upgrade
         queue->insert(nextSharerId, lr->lid);
-        if (otherSharers.size() > 1) {
+        otherSharers.erase(requestor);
+        if (otherSharers.size() > 0) {
             // there are other sharers, so we block on their completion
+
+            for (set<TxId>::iterator nextBlocker = otherSharers.begin();
+                 nextBlocker != otherSharers.end(); ++nextBlocker) {
+                addWaiter( *nextBlocker, requestor );
+            }
+
+            // call the sleep notification function
+            if (NULL != sleepNotifier) {
+                // call the sleep notification function
+                // arg should be xid of blocker?
+                (*sleepNotifier)(lr->xid);
+            }
+
+            // block
+            lr->sleep = true;
+            _stats.incBlocks();
+            while (lr->sleep) {
+                Timer timer;
+                lr->lock.wait(guard);
+                _stats.incTimeBlocked( timer.millis() );
+            }
+
+	    // when awakened, remove ourselves from the set of waiters
+            for (set<TxId>::iterator nextBlocker = otherSharers.begin();
+                 nextBlocker != otherSharers.end(); ++nextBlocker) {
+                _waiters[*nextBlocker]->erase(requestor);
+            }
         }
         return;
     }
 
     list<LockId>::iterator nextLockId = queue->begin();
     if (nextLockId != queue->end()) {
+        _stats.incPreexisting();
 	LockRequest* nextLockRequest = _locks[*nextLockId];
-        if (! isCompatible(mode, nextLockRequest->mode)) {
+        if ((! isCompatible(mode, nextLockRequest->mode)) ||
+            (NULL != firstExclusiveRequest &&
+             sharedOwners.find(firstExclusiveRequest->xid) != sharedOwners.end())) {
             // nextLockRequest may be deleted by the time we return from blocking
             // so pull out everything we might need after awakening below
 	    const TxId blocker = nextLockRequest->xid;
@@ -363,45 +435,36 @@ void LockMgr::acquire( const TxId& requestor,
                     _xaLocks[requestor]->erase(lr->lid);
                     _locks.erase(lr->lid);
                     delete lr;
+
+                    _stats.incDeadlocks();
+
 		    abort(requestor);
 		}
             }
 
 	    // set up for future deadlock detection
-	    // add requestor to nextLockRequest's waiters
+	    // add requestor to blocker's waiters
 	    //
-	    map<TxId, set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
-	    set<TxId>* waiters;
-	    if (blockersWaiters == _waiters.end()) {
-		waiters = new set<TxId>();
-		_waiters[blocker] = waiters;
-	    }
-	    else {
-		waiters = blockersWaiters->second;
-	    }
-
-	    waiters->insert(requestor);
-	    if (requestorsWaiters != _waiters.end()) {
-		waiters->insert(requestorsWaiters->second->begin(),
-				requestorsWaiters->second->end());
-	    }
+            addWaiter( blocker, requestor );
 
             // add our request to the queue
             addLockToQueueUsingPolicy( lr );
 
             // call the sleep notification function
-	    if (NULL != sleepNotifier) {
-		log() << "before sleep notifier" << endl;
-		(*sleepNotifier)(blocker);
-	    } else {
-		log() << "NULL sleep notifier" << endl;
-	    }
+            if (NULL != sleepNotifier) {
+                // call the sleep notification function
+                // arg should be xid of blocker?
+                (*sleepNotifier)(lr->xid);
+            }
 
-            // block
-	    lr->sleep = true;
-	    while (lr->sleep) {
-		lr->lock.wait(guard);
-	    }
+            // wait for blocker to release
+            lr->sleep = true;
+            _stats.incBlocks();
+            while (lr->sleep) {
+                Timer timer;
+                lr->lock.wait(guard);
+                _stats.incTimeBlocked( timer.millis() );
+            }
 
 	    // when awakened, remove ourselves from the set of waiters
             _waiters[blocker]->erase(requestor);
