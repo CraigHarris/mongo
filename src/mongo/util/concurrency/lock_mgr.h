@@ -113,7 +113,6 @@ namespace mongo {
 	class Notifier {
 	public:
 	    virtual void operator()(const TxId& blocker) = 0;
-/* { log() << "in do nothing notifier" << std::endl; } */
 
 	    virtual ~Notifier() { }
 	};

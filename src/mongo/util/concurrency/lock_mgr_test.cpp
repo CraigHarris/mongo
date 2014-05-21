@@ -1,4 +1,46 @@
-// lock_mgr_test.cpp
+/**
+*    Copyright (C) MongoDB Inc.
+*
+*    This program is free software: you can redistribute it and/or  modify
+*    it under the terms of the GNU Affero General Public License, version 3,
+*    as published by the Free Software Foundation.
+*
+*    This program is distributed in the hope that it will be useful,
+*    but WITHOUT ANY WARRANTY; without even the implied warranty of
+*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*    GNU Affero General Public License for more details.
+*
+*    You should have received a copy of the GNU Affero General Public License
+*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*
+*    As a special exception, the copyright holders give permission to link the
+*    code of portions of this program with the OpenSSL library under certain
+*    conditions as described in each individual source file and distribute
+*    linked combinations including the program with the OpenSSL library. You
+*    must comply with the GNU Affero General Public License in all respects for
+*    all of the code used other than as permitted herein. If you modify file(s)
+*    with this exception, you may extend this exception to your version of the
+*    file(s), but you are not obligated to do so. If you do not wish to do so,
+*    delete this exception statement from your version. If you delete this
+*    exception statement from all source files in the program, then also delete
+*    it in the license file.
+*/
+
+/** 
+ * tests for util/concurrency/lock_mgr.* capabilities
+ *
+ * Testing concurrency requires multiple threads.  In this test, these are packaged as
+ * instances of a ClientTransaction class.  The test's main thread creates instances
+ * of ClientTransactions and communicates with them through a pair of producer/consumer
+ * buffers.  The driver thread sends requests to ClientTransaction threads using a
+ * TxCommandBuffer, and waits for responses in a TxResponseBuffer. This protocol
+ * allows precise control over timing.
+ *
+ * The producer/consumer buffer is possibly overkill. At present there is only
+ * one producer and one consumer using any one buffer.  Also, the current set of
+ * tests are 'lock-step', with the driver never issuing more than one command
+ * before waiting for a response.
+ */
 
 #include <boost/thread/thread.hpp>
 #include "mongo/unittest/unittest.h"
@@ -181,7 +223,7 @@ namespace mongo {
 		    _rsp.post(ABORTED);
 		    break;
 		case QUIT:
-                    log() << "t" << _xid << ": in QUIT" << endl;
+//                  log() << "t" << _xid << ": in QUIT" << endl;
 		default:
                     more = false;
 		    break;
@@ -192,7 +234,7 @@ namespace mongo {
 
 	// inherited from Notifier, used by LockMgr::acquire
 	virtual void operator()(const TxId& blocker) {
-	    log() << "in sleep notifier" << endl;
+//	    log() << "in sleep notifier" << endl;
 	    _rsp.post(BLOCKED);
 	}
 
@@ -204,8 +246,6 @@ namespace mongo {
 	boost::thread _thr;
 	
     };
-
-    void justSleep(const TxId& blocker) { }
 
     TEST(LockMgrTest, SingleTx) {
         LockMgr lm;
@@ -306,12 +346,20 @@ namespace mongo {
             t2.release( LockMgr::SHARED_RECORD, 2 );
 
 
+	    // no conflicts with exclusive locks on different objects
+	    t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+	    t2.acquire( LockMgr::EXCLUSIVE_RECORD, 2, ACQUIRED );
+	    t1.release( LockMgr::EXCLUSIVE_RECORD, 1);
+	    t2.release( LockMgr::EXCLUSIVE_RECORD, 2);
+
+
             // simple lock conflicts
 
             t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	    // t2's request is incompatible with t1's lock, so it should block
             t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
             t1.release( LockMgr::SHARED_RECORD, 1 );
-            t2.wakened( );
+            t2.wakened( ); // with t1's lock released, t2 should wake
             t2.release( LockMgr::EXCLUSIVE_RECORD, 1 );
 
             t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
@@ -327,21 +375,25 @@ namespace mongo {
             t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
 
 
-            // deadlock
+            // deadlock test 1
 
             t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
             t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
             t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, BLOCKED );
+	    // t2's request would form a dependency cycle, so it should abort
             t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
-            t1.wakened( );
+            t1.wakened( ); // with t2's locks released, t1 should wake
             t1.release( LockMgr::EXCLUSIVE_RECORD, 2);
             t1.release( LockMgr::SHARED_RECORD, 1);
+
+	    // deadlock test 2
 
             t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
             t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
             t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+	    // t1's request would form a dependency cycle, so it should abort
             t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
-            t2.wakened( );
+            t2.wakened( ); // with t1's locks released, t2 should wake
             t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
             t2.release( LockMgr::SHARED_RECORD, 2);
 
@@ -350,17 +402,31 @@ namespace mongo {
 
             t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
             t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	    // t1 still has exclusive on resource 1, so t2 must wait
             t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
             t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-            t2.wakened( );
+            t2.wakened( ); // with the exclusive lock released, t2 wakes
             t1.release( LockMgr::SHARED_RECORD, 1);
             t2.release( LockMgr::SHARED_RECORD, 1);
 
             t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	    // t1 still has exclusive on resource 1, so t2 must wait
             t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+            t1.release( LockMgr::SHARED_RECORD, 1);
+	    // with t1 still holding exclusive on resource 1, t2 still blocked
+            t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+            t2.wakened( ); // with the exclusive lock released, t2 wakes
+            t2.release( LockMgr::SHARED_RECORD, 1);
+
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+	    // t1 still has exclusive on resource 1, so t2 must wait
+            t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+	    // even though t2 is waiting for resource 1, t1 can still use it shared,
+	    // because it already owns exclusive lock and can't block on itself
             t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
             t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
-            t2.wakened( );
+            t2.wakened( ); // with the exclusive lock released, t2 wakes
             t1.release( LockMgr::SHARED_RECORD, 1);
             t2.release( LockMgr::SHARED_RECORD, 1);
 
@@ -384,7 +450,7 @@ namespace mongo {
             // Upgrades
 
             t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+            t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED ); // upgrade
             t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
             t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
             t2.wakened( );
@@ -393,9 +459,10 @@ namespace mongo {
 
             t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
             t2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	    // t1 can't use resource 1 exclusively yet, because t2 is using it
             t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
             t2.release( LockMgr::SHARED_RECORD, 1);
-            t1.wakened( );
+            t1.wakened( ); // with t2's shared lock released, t1 wakes
             t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
             t1.release( LockMgr::SHARED_RECORD, 1);
 
@@ -406,5 +473,178 @@ namespace mongo {
             t2.quit( );
             throw;
         }
+    }
+
+    TEST(LockMgrTest, TxPolicy) {
+
+	{
+	    // Test FirstComeFirstServe policy
+	    LockMgr lm_first;
+	    ClientTransaction t1( &lm_first, 1 );
+	    ClientTransaction t2( &lm_first, 2 );
+	    ClientTransaction t3( &lm_first, 3 );
+	    try {
+		// test1
+		t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+		t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+		t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+		// t2 should wake first, because its request came before t3's
+		t2.wakened( );
+		t2.release( LockMgr::SHARED_RECORD, 1 );
+		t3.wakened( );
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+
+		// test2
+		t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+		t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+		t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+		// t3 should wake first, because its request came before t2's
+		t3.wakened( );
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+		t2.wakened( );
+		t2.release( LockMgr::SHARED_RECORD, 1 );
+
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+	    } catch ( ... ) {
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+		throw;
+	    }
+	}
+
+	{
+	    // Test READERS_FIRST policy
+	    // shared request are considered read requests
+
+	    LockMgr lm_readers(LockMgr::READERS_FIRST);
+	    ClientTransaction t1( &lm_readers, 1 );
+	    ClientTransaction t2( &lm_readers, 2 );
+	    ClientTransaction t3( &lm_readers, 3 );
+	    try {
+		t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+		t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+		t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+
+		// t2 should wake first, even though t3 came first in time
+		// because t2 is a reader and t3 is a writer
+		t2.wakened( );
+		t2.release( LockMgr::SHARED_RECORD, 1 );
+		t3.wakened( );
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+	    } catch ( ... ) {
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+		throw;
+	    }
+	}
+
+	{
+	    // Test OLDEST_TX_FIRST policy
+	    // for now, smaller TxIds are considered older
+
+	    LockMgr lm_oldest(LockMgr::OLDEST_TX_FIRST);
+	    ClientTransaction t1( &lm_oldest, 1 );
+	    ClientTransaction t2( &lm_oldest, 2 );
+	    ClientTransaction t3( &lm_oldest, 3 );
+	    try {
+		// test 1
+		t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+		t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+		t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+
+		// t2 should wake first, even though t3 came first in time
+		// because t2 is older than t3
+		t2.wakened( );
+		t2.release( LockMgr::SHARED_RECORD, 1 );
+		t3.wakened( );
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+
+		// test 2
+		t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+		t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+		t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+
+		// t2 should wake first, because it's older than t3
+		t2.wakened( );
+		t2.release( LockMgr::SHARED_RECORD, 1 );
+		t3.wakened( );
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+	    } catch ( ... ) {
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+		throw;
+	    }
+	}
+
+	{
+	    LockMgr lm_blockers(LockMgr::BIGGEST_BLOCKER_FIRST);
+	    ClientTransaction t1( &lm_blockers, 1 );
+	    ClientTransaction t2( &lm_blockers, 2 );
+	    ClientTransaction t3( &lm_blockers, 3 );
+	    ClientTransaction t4( &lm_blockers, 4 );
+	    try {
+		// BIGGEST_BLOCKER_FIRST policy
+
+		// set up t3 as the biggest blocker
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 2, ACQUIRED );
+		t4.acquire( LockMgr::EXCLUSIVE_RECORD, 2, BLOCKED );
+
+		// test 1
+		t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+		t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+		t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+		// t3 should wake first, because it's a bigger blocker than t2
+		t3.wakened( );
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+		t2.wakened( );
+		t2.release( LockMgr::SHARED_RECORD, 1 );
+
+		// test 2
+		t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+		t2.acquire( LockMgr::SHARED_RECORD, 1, BLOCKED );
+		t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
+		t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+		// t3 should wake first, even though t2 came first,
+		// because it's a bigger blocker than t2
+		t3.wakened( );
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 1 );
+		t2.wakened( );
+		t2.release( LockMgr::SHARED_RECORD, 1 );
+
+		t3.release( LockMgr::EXCLUSIVE_RECORD, 2 );
+		t4.wakened( );
+		t4.release( LockMgr::EXCLUSIVE_RECORD, 2 );
+
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+		t4.quit( );
+	    } catch ( ... ) {
+		t1.quit( );
+		t2.quit( );
+		t3.quit( );
+		t4.quit( );
+		throw;
+	    }
+	}
     }
 }

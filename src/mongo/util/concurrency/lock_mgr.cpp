@@ -121,6 +121,16 @@ bool LockMgr::isLocked( const TxId& holder,
 void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
     list<LockId>* queue = _recordLocks[lr->store][lr->recId];
     list<LockId>::iterator nextLockId = queue->begin();
+    if (nextLockId != queue->end()) {
+	// skip over the first lock, which currently holds the lock
+	// if we're incompatible with the first lock, we never want 
+	// to come before it.
+	//
+	// if lr is shared and there are several sharers leading the queue
+	// then its relative position among the sharers doesn't matter
+	//
+	++nextLockId;
+    }
     switch (_policy) {
     case FIRST_COME:
         queue->push_back(lr->lid);
@@ -133,6 +143,7 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
         for (; nextLockId != queue->end(); ++nextLockId) {
             LockMgr::LockRequest* nextRequest = _locks[*nextLockId];
             if (LockMgr::EXCLUSIVE_RECORD==nextRequest->mode) {
+		// insert shared lock before first exclusive lock
                 queue->insert(nextLockId, lr->lid);
                 return;
             }
@@ -141,7 +152,8 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
     case OLDEST_TX_FIRST:
         for (; nextLockId != queue->end(); ++nextLockId) {
             LockMgr::LockRequest* nextRequest = _locks[*nextLockId];
-            if (lr->xid > nextRequest->xid) {
+            if (lr->xid < nextRequest->xid) {
+		// smaller xid is older, so queue it before
                 queue->insert(nextLockId, lr->lid);
                 return;
             }
