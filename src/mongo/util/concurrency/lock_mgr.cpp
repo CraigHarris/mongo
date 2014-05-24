@@ -27,6 +27,7 @@
 */
 
 #include <boost/thread/locks.hpp>
+#include <sstream>
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
@@ -60,6 +61,16 @@ bool LockMgr::LockRequest::matches( const TxId& xid,
 	this->mode == mode &&
 	this->store == store &&
 	this->recId == recId;
+}
+
+string LockMgr::LockRequest::toString( ) const {
+    stringstream result;
+    result << "<lid:" << lid
+           << ",xid:" << xid
+           << ",mode:" << mode
+           << ",recId:" << recId
+           << ">";
+    return result.str();
 }
 
 namespace {
@@ -118,6 +129,41 @@ bool LockMgr::isLocked( const TxId& holder,
     return false;
 }
 
+void LockMgr::addWaiter( const TxId& blocker, const TxId& requestor ) {
+    map<TxId, set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
+    set<TxId>* waiters;
+    if (blockersWaiters == _waiters.end()) {
+        waiters = new set<TxId>();
+        _waiters[blocker] = waiters;
+    }
+    else {
+        waiters = blockersWaiters->second;
+    }
+
+    waiters->insert(requestor);
+
+    map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
+    if (requestorsWaiters != _waiters.end()) {
+        waiters->insert(requestorsWaiters->second->begin(),
+                        requestorsWaiters->second->end());
+    }
+}
+
+void LockMgr::addWaiters( LockRequest* blocker,
+			  list<LockId>::iterator nextLockId,
+			  list<LockId>::iterator lastLockId ) {
+    for(; nextLockId != lastLockId; ++nextLockId ) {
+	LockRequest* nextLockRequest = _locks[*nextLockId];
+	if (! isCompatible( blocker->mode, nextLockRequest->mode)) {
+	    addWaiter( blocker->xid, nextLockRequest->xid );
+	}
+    }
+    
+}
+
+/*
+ * called only when there are already LockRequests associated with a recordId
+ */
 void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
     list<LockId>* queue = _recordLocks[lr->store][lr->recId];
     list<LockId>::iterator nextLockId = queue->begin();
@@ -142,9 +188,13 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
         }
         for (; nextLockId != queue->end(); ++nextLockId) {
             LockMgr::LockRequest* nextRequest = _locks[*nextLockId];
-            if (LockMgr::EXCLUSIVE_RECORD==nextRequest->mode) {
+            if (LockMgr::EXCLUSIVE_RECORD==nextRequest->mode && nextRequest->sleep) {
 		// insert shared lock before first exclusive lock
                 queue->insert(nextLockId, lr->lid);
+
+		// set remaining incompatible requests as lr's waiters
+		addWaiters( lr, nextLockId, queue->end() );
+		
                 return;
             }
         }
@@ -152,9 +202,12 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
     case OLDEST_TX_FIRST:
         for (; nextLockId != queue->end(); ++nextLockId) {
             LockMgr::LockRequest* nextRequest = _locks[*nextLockId];
-            if (lr->xid < nextRequest->xid) {
+            if (lr->xid < nextRequest->xid && nextRequest->sleep) {
 		// smaller xid is older, so queue it before
                 queue->insert(nextLockId, lr->lid);
+
+		// set remaining incompatible requests as lr's waiters
+		addWaiters( lr, nextLockId, queue->end() );
                 return;
             }
         }
@@ -167,8 +220,11 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
             map<TxId,set<TxId>*>::iterator nextRequestWaiters = _waiters.find(nextRequest->xid);
             size_t nextRequestNumWaiters = (nextRequestWaiters == _waiters.end())
                                            ? 0 : nextRequestWaiters->second->size();
-            if (lrNumWaiters > nextRequestNumWaiters) {
+            if (lrNumWaiters > nextRequestNumWaiters && nextRequest->sleep) {
                 queue->insert(nextLockId, lr->lid);
+
+		// set remaining incompatible requests as lr's waiters
+		addWaiters( lr, nextLockId, queue->end() );
                 return;
             }
         }
@@ -185,9 +241,18 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
 void LockMgr::abort(const TxId& goner) {
     // cleanup locks
     map<TxId, set<LockId>*>::iterator locks = _xaLocks.find(goner);
-    invariant(locks != _xaLocks.end());
-    for (set<LockId>::iterator nextLockId = locks->second->begin();
-         nextLockId != locks->second->end(); ++nextLockId) {
+
+    if (locks == _xaLocks.end()) {
+	// weird, but possible to abort a transaction with no locks
+	throw AbortException();
+    }
+
+    // make a copy of the TxId's locks, because releasing
+    // would otherwise affect the iterator. XXX find a better way!
+    set<TxId> copyOfLocks = *locks->second;
+
+    for (set<LockId>::iterator nextLockId = copyOfLocks.begin();
+         nextLockId != copyOfLocks.end(); ++nextLockId) {
         map<LockId,LockRequest*>::iterator nextLock = _locks.find(*nextLockId);
         invariant(nextLock != _locks.end());
         LockRequest* nextLockRequest = nextLock->second;
@@ -202,26 +267,6 @@ void LockMgr::abort(const TxId& goner) {
     }
 
     throw AbortException();
-}
-
-void LockMgr::addWaiter( const TxId& blocker, const TxId& requestor ) {
-    map<TxId, set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
-    set<TxId>* waiters;
-    if (blockersWaiters == _waiters.end()) {
-        waiters = new set<TxId>();
-        _waiters[blocker] = waiters;
-    }
-    else {
-        waiters = blockersWaiters->second;
-    }
-
-    waiters->insert(requestor);
-
-    map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
-    if (requestorsWaiters != _waiters.end()) {
-        waiters->insert(requestorsWaiters->second->begin(),
-                        requestorsWaiters->second->end());
-    }
 }
 
 void LockMgr::acquire(const TxId& requestor,
@@ -488,14 +533,17 @@ void LockMgr::acquire( const TxId& requestor,
     addLockToQueueUsingPolicy( lr );
 }
 
-void LockMgr::release( const TxId& holder ) {
+size_t LockMgr::release( const TxId& holder ) {
     map<TxId, set<LockId>*>::iterator lockIdsHeld = _xaLocks.find(holder);
-    if (lockIdsHeld == _xaLocks.end()) { return; }
+    if (lockIdsHeld == _xaLocks.end()) { return 0; }
+    size_t numLocksReleased = 0;
     for (set<LockId>::iterator nextLockId = lockIdsHeld->second->begin();
 	 nextLockId != lockIdsHeld->second->end(); ++nextLockId) {
 	LockRequest* nextLock = _locks[*nextLockId];
 	release( holder, nextLock->mode, nextLock->store, nextLock->recId );
+	numLocksReleased++;
     }
+    return numLocksReleased;
 }
 
 void LockMgr::releaseWithMutex( const TxId& holder,
@@ -542,7 +590,19 @@ void LockMgr::releaseWithMutex(const TxId& holder,
     bool foundLock = false;
     set<TxId> otherSharers;
 
-    list<LockId>* queue = _recordLocks[store][recId];
+    map<const RecordStore*,map<RecordId,list<LockId>*> >::iterator storeLocks = _recordLocks.find(store);
+    if (storeLocks == _recordLocks.end()) {
+	// XXX ? report no lock requests against store ?
+	return;
+    }
+
+    map<RecordId,list<LockId>*>::iterator recordLocks = storeLocks->second.find(recId);
+    if (recordLocks == storeLocks->second.end()) {
+	// XXX ? report no locks requested for this recId ?
+	return;
+    }
+    
+    list<LockId>* queue = recordLocks->second;
     list<LockId>::iterator nextLockId = queue->begin();
     LockRequest* ourLock = NULL;
 
@@ -555,7 +615,7 @@ void LockMgr::releaseWithMutex(const TxId& holder,
             else
                 seenExclusive = true;
         }
-        else {
+        else if (mode == nextLock->mode) {
             // this is our lock.  remove it
             //
             ourLock = nextLock;
@@ -567,9 +627,19 @@ void LockMgr::releaseWithMutex(const TxId& holder,
             foundLock = true;
             break; // don't increment nextLockId again
         }
+	else {
+	    // we've locked this resource but not in this mode
+	    // XXX should we record this fact so that we can
+	    // report a specific failure if we don't find the
+	    // lock in the right mode??
+	}
     }
 
-    invariant(foundLock);
+    if (! foundLock) {
+	// can't release a lock that hasn't been acquired in the specified mode
+	// XXX should we return specific status codes
+	return;
+    }
 
     // deal with transactions that were waiting for this lock to be released
     //
@@ -639,3 +709,66 @@ void LockMgr::release( const TxId& holder,
     // finally, release the sharedContainerLock
     release(holder, SHARED_STORE, store);
 }
+
+string LockMgr::toString( ) const {
+    stringstream result;
+    result << "Policy: ";
+    switch(_policy) {
+    case FIRST_COME:
+        result << "FirstCome";
+        break;
+    case READERS_FIRST:
+        result << "ReadersFirst";
+        break;
+    case OLDEST_TX_FIRST:
+        result << "OldestFirst";
+        break;
+    case BIGGEST_BLOCKER_FIRST:
+        result << "BiggestBlockerFirst";
+        break;
+    case QUICKEST_TO_FINISH:
+	result << "QuickestToFinish";
+	break;
+    }
+    result << endl;
+
+    result << "\t_locks:" << endl;
+    for (map<LockId,LockRequest*>::const_iterator locks = _locks.begin();
+	 locks != _locks.end(); ++locks) {
+	result << "\t\t" << locks->first << locks->second->toString() << endl;
+    }
+
+    map<const RecordStore*,map<RecordId,list<LockId>*> >::const_iterator storeLocks = _recordLocks.begin();
+    result << "\t_recordLocks:" << endl;
+    for (map<RecordId,list<LockId>*>::const_iterator recordLocks = storeLocks->second.begin();
+	 recordLocks != storeLocks->second.end(); ++recordLocks) {
+	bool firstTime=true;
+	result << "\t\t" << recordLocks->first << ": {";
+	for (list<LockId>::const_iterator nextLockId = recordLocks->second->begin();
+	     nextLockId != recordLocks->second->end(); ++nextLockId) {
+	    if (firstTime) firstTime=false;
+	    else result << ", ";
+	    result << *nextLockId;
+	}
+	result << "}" << endl;
+
+    }
+
+    result << "\t_waiters:" << endl;
+    for (map<TxId, set<TxId>*>::const_iterator txWaiters = _waiters.begin();
+	 txWaiters != _waiters.end(); ++txWaiters) {
+	bool firstTime=true;
+	result << "\t\t" << txWaiters->first << ": {";
+	for (set<TxId>::const_iterator nextWaiter = txWaiters->second->begin();
+	     nextWaiter != txWaiters->second->end(); ++nextWaiter) {
+	    if (firstTime) firstTime=false;
+	    else result << ", ";
+	    result << *nextWaiter;
+	}
+	result << "}" << endl;
+    }
+
+    
+    return result.str();
+}
+    

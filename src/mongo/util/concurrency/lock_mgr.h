@@ -33,8 +33,8 @@
 #include <iterator>
 #include <list>
 #include <map>
-#include <vector>
 #include <set>
+#include <string>
 
 #include "mongo/db/structure/record_store.h"
 #include "mongo/util/log.h"
@@ -100,6 +100,8 @@ namespace mongo {
 			  const RecordStore* store,
 			  const RecordId& recId );
 
+	    std::string toString( ) const;
+
             static LockId nextLid;
 	    bool sleep;
             LockId lid;
@@ -157,14 +159,14 @@ namespace mongo {
         LockMgr(const LockingPolicy& policy=FIRST_COME);
         virtual ~LockMgr();
 
-        /*
+        /**
          * test whether a TxId has locked RecordStore in a mode
          */
         virtual bool isLocked( const TxId& holder,
                                const LockMode& mode,
                                const RecordStore* store);
 
-        /*
+        /**
          * test whether a TxId has locked a RecordId in a mode
          */
         virtual bool isLocked( const TxId& holder,
@@ -172,15 +174,17 @@ namespace mongo {
                                const RecordStore* store,
                                const RecordId& recId);
 
-        /*
-         * acquire a RecordStore in a mode
+        /**
+         * acquire a RecordStore in a mode.
+	 * can throw AbortException
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
                               const RecordStore* store );
 
-        /*
+        /**
          * acquire a RecordId in a RecordStore in a mode
+	 * can throw AbortException
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
@@ -188,14 +192,14 @@ namespace mongo {
                               const RecordId& recId,
                               Notifier* notifier = NULL);
 
-        /*
+        /**
          * release a RecordStore
          */
         virtual void release( const TxId& holder,
                               const LockMode& mode,
                               const RecordStore* store);
 
-        /*
+        /**
          * release a RecordId in a RecordStore
          */
         virtual void release( const TxId& holder,
@@ -203,10 +207,10 @@ namespace mongo {
                               const RecordStore* store,
                               const RecordId& recId);
 
-        /*
+        /**
          * release all resources acquired by a transaction
          */
-        virtual void release( const TxId& holder);
+        virtual size_t release( const TxId& holder);
 
 	/**
 	* called internally for deadlock
@@ -216,6 +220,8 @@ namespace mongo {
         void abort( const TxId& goner );
 
         const LockStats& getStats( );
+
+	std::string toString( ) const;
 
 
         // --- for testing and logging
@@ -236,6 +242,20 @@ namespace mongo {
         virtual std::iterator<LockRequest*> begin(const RecordStore* store, const RecordId& recId);
 #endif
     private:
+
+        /**
+         * set up for future deadlock detection, called from acquire
+         */
+        void addWaiter( const TxId& blocker, const TxId& waiter );
+
+	/**
+	 * when inserting a new lock request into the middle of a queue,
+	 * add any remaining incompatible requests in the queue to the
+	 * new lock request's set of waiters... for future deadlock detection
+	 */
+	void addWaiters( LockRequest* blocker,
+			 list<LockId>::iterator nextLockId,
+			 list<LockId>::iterator lastLockId );
         /**
          * adds a lock request to the list of requests for a resource
          * using the LockingPolicy.  Called by acquire
@@ -243,11 +263,6 @@ namespace mongo {
         void addLockToQueueUsingPolicy( LockRequest* lr );
 
         /**
-         * set up for future deadlock detection, called by acquire
-         */
-        void addWaiter( const TxId& blocker, const TxId& waiter );
-
-        /*
          * called by public release and internally by abort
          * assumes caller as acquired a mutex
          */
