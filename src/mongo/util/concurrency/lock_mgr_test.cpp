@@ -303,9 +303,13 @@ namespace mongo {
         lm.acquire(t1, LockMgr::SHARED_RECORD, store, r1);
         ASSERT( lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
 
-        // release the twice-acquired lock, with single call to release?
+        // release the twice-acquired lock, once.  Still locked
         lm.release(t1, LockMgr::SHARED_RECORD, store, r1);
-        ASSERT( ! lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
+        ASSERT( lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
+
+        // after 2nd release, it's not locked
+        lm.release(t1, LockMgr::SHARED_RECORD, store, r1);
+        ASSERT( !lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
 
 
 

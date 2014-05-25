@@ -52,14 +52,25 @@
  */
 
 namespace mongo {
-    typedef size_t TxId;
+    typedef size_t TxId;        // identifies requesting transaction
     typedef size_t RecordId;
+    typedef size_t ResourceId;  // identifies requested resource
+    typedef size_t Containerid; // identifies container of requested resource
 
     class AbortException : public std::exception {
     public:
         AbortException() {}
         const char* what() const throw () { return "AbortException"; }
     };
+
+    /**
+     *  LockMgr is used to control access to resources. Usually a singleton. For deadlock detection
+     *  all resources used by a set of transactions that could deadlock, should use one LockMgr.
+     *
+     *  Primary functions are:
+     *     acquire - a transaction acquires a resource for shared or exclusive use
+     *     release - a transaction releases a resource previously acquired for shared/exclusive use
+     */
 
     class LockMgr {
     public:
@@ -76,8 +87,15 @@ namespace mongo {
             FIRST_COME,
             READERS_FIRST,
             OLDEST_TX_FIRST,
-            BIGGEST_BLOCKER_FIRST,
-            QUICKEST_TO_FINISH
+            BIGGEST_BLOCKER_FIRST
+        };
+
+        enum ReleaseStatus {
+            RELEASED,
+            COUNT_DECREMENTED,
+            CONTAINER_NOT_ACQUIRED,
+            RESOURCE_NOT_ACQUIRED,
+            RESOURCE_NOT_ACQUIRED_IN_MODE
         };
 
         typedef size_t LockId;
@@ -95,29 +113,31 @@ namespace mongo {
 
             virtual ~LockRequest();
 
-	    bool matches( const TxId& xid,
-			  const LockMode& mode,
-			  const RecordStore* store,
-			  const RecordId& recId );
+            bool matches( const TxId& xid,
+                          const LockMode& mode,
+                          const RecordStore* store,
+                          const RecordId& recId );
 
-	    std::string toString( ) const;
+            std::string toString( ) const;
 
             static LockId nextLid;
-	    bool sleep;
-            LockId lid;
-            TxId xid;
-            LockMode mode;
-            const RecordStore* store;
-            RecordId recId;
+            bool sleep;                // true if waiting, false if resource acquired
+            LockId lid; 
+            TxId xid;                  // transaction that made this request
+            LockMode mode;             // shared or exclusive use
+            const RecordStore* store;  // container of resource requested
+            RecordId recId;            // resource requested
+            size_t count;              // # times xid requested this resource in this mode
+                                       // request will be deleted when count goes to 0
             boost::condition_variable lock;
         };
 
-	class Notifier {
-	public:
-	    virtual void operator()(const TxId& blocker) = 0;
+        class Notifier {
+        public:
+            virtual void operator()(const TxId& blocker) = 0;
 
-	    virtual ~Notifier() { }
-	};
+            virtual ~Notifier() { }
+        };
 
         class LockStats {
         public:
@@ -160,23 +180,8 @@ namespace mongo {
         virtual ~LockMgr();
 
         /**
-         * test whether a TxId has locked RecordStore in a mode
-         */
-        virtual bool isLocked( const TxId& holder,
-                               const LockMode& mode,
-                               const RecordStore* store);
-
-        /**
-         * test whether a TxId has locked a RecordId in a mode
-         */
-        virtual bool isLocked( const TxId& holder,
-                               const LockMode& mode,
-                               const RecordStore* store,
-                               const RecordId& recId);
-
-        /**
          * acquire a RecordStore in a mode.
-	 * can throw AbortException
+         * can throw AbortException
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
@@ -184,7 +189,7 @@ namespace mongo {
 
         /**
          * acquire a RecordId in a RecordStore in a mode
-	 * can throw AbortException
+         * can throw AbortException
          */
         virtual void acquire( const TxId& requestor,
                               const LockMode& mode,
@@ -202,60 +207,73 @@ namespace mongo {
         /**
          * release a RecordId in a RecordStore
          */
-        virtual void release( const TxId& holder,
-                              const LockMode& mode,
-                              const RecordStore* store,
-                              const RecordId& recId);
+        virtual ReleaseStatus release( const TxId& holder,
+                                       const LockMode& mode,
+                                       const RecordStore* store,
+                                       const RecordId& recId);
 
         /**
          * release all resources acquired by a transaction
          */
         virtual size_t release( const TxId& holder);
 
-	/**
-	* called internally for deadlock
-	* possibly called publicly to stop a long transaction
-	* also used for testing
-	*/
+        /**
+        * called internally for deadlock
+        * possibly called publicly to stop a long transaction
+        * also used for testing
+        */
         void abort( const TxId& goner );
 
         const LockStats& getStats( );
 
-	std::string toString( ) const;
 
 
         // --- for testing and logging
-#if 0
-        /**
-         * iterate over locks held by TxId
-         */
-        virtual std::iterator<LockRequest*> begin(const TxId& xa);
+
+         std::string toString( ) const;
 
         /**
-         * iterate over locks on a given store
+         * test whether a TxId has locked RecordStore in a mode
          */
-        virtual std::iterator<LockRequest*> begin(const RecordStore* store);
+        virtual bool isLocked( const TxId& holder,
+                               const LockMode& mode,
+                               const RecordStore* store);
 
         /**
-         * iterate over locks on a given record
+         * test whether a TxId has locked a RecordId in a mode
          */
-        virtual std::iterator<LockRequest*> begin(const RecordStore* store, const RecordId& recId);
-#endif
+        virtual bool isLocked( const TxId& holder,
+                               const LockMode& mode,
+                               const RecordStore* store,
+                               const RecordId& recId);
+
     private:
+
+        /**
+         * returns true if a newRequest should be honored before an oldRequest according
+         * to the lockManager's policy.  Used by acquire to decide whether a new share request
+         * conflicts with a previous upgrade-to-exclusive request that is blocked.
+         */
+        bool comesBeforeUsingPolicy( const LockRequest* newReq, const LockRequest* oldReq ) const;
+
+        /**
+         *
+         */
+        bool conflictExists( const LockRequest* lr, const list<LockId>* queue, TxId* outBlocker );
 
         /**
          * set up for future deadlock detection, called from acquire
          */
         void addWaiter( const TxId& blocker, const TxId& waiter );
 
-	/**
-	 * when inserting a new lock request into the middle of a queue,
-	 * add any remaining incompatible requests in the queue to the
-	 * new lock request's set of waiters... for future deadlock detection
-	 */
-	void addWaiters( LockRequest* blocker,
-			 list<LockId>::iterator nextLockId,
-			 list<LockId>::iterator lastLockId );
+        /**
+         * when inserting a new lock request into the middle of a queue,
+         * add any remaining incompatible requests in the queue to the
+         * new lock request's set of waiters... for future deadlock detection
+         */
+        void addWaiters( LockRequest* blocker,
+                         list<LockId>::iterator nextLockId,
+                         list<LockId>::iterator lastLockId );
         /**
          * adds a lock request to the list of requests for a resource
          * using the LockingPolicy.  Called by acquire
@@ -263,33 +281,57 @@ namespace mongo {
         void addLockToQueueUsingPolicy( LockRequest* lr );
 
         /**
-         * called by public release and internally by abort
-         * assumes caller as acquired a mutex
+         * called by public release and internally by abort.
+         * assumes caller as acquired a mutex.
          */
         virtual void releaseWithMutex( const TxId& holder,
                                        const LockMode& mode,
                                        const RecordStore* store);
 
-        virtual void releaseWithMutex( const TxId& holder,
-                                       const LockMode& mode,
-                                       const RecordStore* store,
-                                       const RecordId& recId);
+        virtual ReleaseStatus releaseWithMutex( const TxId& holder,
+                                                const LockMode& mode,
+                                                const RecordStore* store,
+                                                const RecordId& recId);
 
+        // The LockingPolicy controls which requests should be honored first.  This is
+        // used to guide the position of a request in a list of requests waiting for
+        // a resource or resource container.
+        //
+        // XXX At some point, we may want this to also guide the decision of which
+        // transaction to abort in case of deadlock.  For now, the transaction whose
+        // request would lead to a deadlock is aborted.  Since deadlocks are rare,
+        // careful choices may not matter much.
+        //
         LockingPolicy _policy;
 
+        // synchronizes access to the lock manager, which is shared across threads
         boost::mutex _guard;
 
         // owns the LockRequest*
         std::map<LockId,LockRequest*> _locks;
 
+        // Lists of lock requests associated with a resource or container.
+        //
+        // The containing lists have two sections.  Some number (at least one) of requests 
+        // at the front of a list are "active".  All remaining lock requests are blocked by
+        // some earlier (not necessarily active) lock request, and are waiting.  The order
+        // of lock request in the waiting section is determined by the LockPolicty.
+        // The order of lock request in the active/front portion of the list is irrelevant.
+        //
         std::map<const RecordStore*, std::map<RecordId, std::list<LockId>*> > _recordLocks;
         std::map<const RecordStore*, std::list<LockId>*> _containerLocks;
 
-        // for cleanup and abort processing
+        // For cleanup and abort processing, all LockRequests made by a transaction
         std::map<TxId, std::set<LockId>*> _xaLocks;
 
-        // for deadlock detection
+        // For deadlock detection: the set of transactions blocked by another transaction
+        // 
         std::map<TxId, std::set<TxId>*> _waiters;
+
+        // track transactions that have aborted, and don't accept further 
+        // lock requests from them (which shouldn't happen anyway).
+        //
+        std::set<TxId> _abortedTxIds;
 
         // stats
         LockStats _stats;
