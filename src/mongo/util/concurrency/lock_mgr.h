@@ -35,6 +35,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "mongo/db/structure/record_store.h"
 #include "mongo/util/log.h"
@@ -198,6 +199,18 @@ namespace mongo {
                               Notifier* notifier = NULL);
 
         /**
+         * for bulk operations:
+         * acquire one of a vector of RecordIds in a mode,
+         * hopefully without blocking, return index of 
+         * acquired RecordId, or -1 if vector was empty
+         */
+        virtual int acquireOne( const TxId& requestor,
+                                const LockMode& mode,
+                                const RecordStore* store,
+                                const vector<RecordId>& records,
+                                Notifier* notifier = NULL );
+
+        /**
          * release a RecordStore
          */
         virtual void release( const TxId& holder,
@@ -223,6 +236,20 @@ namespace mongo {
         * also used for testing
         */
         void abort( const TxId& goner );
+
+        /**
+         * override default LockMgr's default LockingPolicy for a transaction
+         *
+         * positive priority moves transaction's resource requests toward the front
+         * of the queue, behind only those requests with higher priority
+         *
+         * negative priority moves transaction's resource requests toward the back
+         * of the queue, ahead of only those requests with lower priority.
+         *
+         * zero priority uses the LockMgr's default LockingPolicy
+         */
+        void setTransactionPriority( const TxId& xid, int priority );
+        int  getTransactionPriority( const TxId& xid ) const;
 
         const LockStats& getStats( );
 
@@ -254,12 +281,24 @@ namespace mongo {
          * to the lockManager's policy.  Used by acquire to decide whether a new share request
          * conflicts with a previous upgrade-to-exclusive request that is blocked.
          */
-        bool comesBeforeUsingPolicy( const LockRequest* newReq, const LockRequest* oldReq ) const;
+        bool comesBeforeUsingPolicy( const TxId& newReqXid,
+                                     const LockMode& newReqMode,
+                                     const LockRequest* oldReq ) const;
 
         /**
-         *
+         * if a lock request would conflict with others on a queue, set the blocker ouput parameter
+         * to the TxId of the first conflicting request, and return true. otherwise return false
          */
-        bool conflictExists( const LockRequest* lr, const list<LockId>* queue, TxId* outBlocker );
+        bool conflictExists( const LockRequest* lr, const list<LockId>* queue, TxId* blocker );
+
+        /**
+         * returns true if acquire would return without waiting
+         * used by acquireOne
+         */
+        bool isAvailable( const TxId& requestor,
+                          const LockMode& mode,
+                          const RecordStore* store,
+                          const RecordId& recId );
 
         /**
          * set up for future deadlock detection, called from acquire
@@ -333,7 +372,35 @@ namespace mongo {
         //
         std::set<TxId> _abortedTxIds;
 
+        // transaction priorities:
+        //     0 => neutral, use LockMgr's default _policy
+        //     + => high, queue forward
+        //     - => low, queue back
+        //
+        std::map<TxId, int> _txPriorities;
+
         // stats
         LockStats _stats;
+    };
+
+    /**
+     * RAII wrapper around LockMgr, for scoped locking
+     */
+    class ResourceLock {
+    public:
+        ResourceLock( LockMgr* lm,
+                      const TxId& requestor,
+                      const LockMgr::LockMode& mode,
+                      const RecordStore* store,
+                      const RecordId& recId,
+                      LockMgr::Notifier* notifier = NULL );
+
+        virtual ~ResourceLock( );
+    private:
+        LockMgr* _lm;   // not owned here
+        TxId _requestor;
+        LockMgr::LockMode _mode;
+        const RecordStore* _store; // not owned here
+        RecordId _recId;
     };
 }

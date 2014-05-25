@@ -63,17 +63,22 @@ bool LockMgr::LockRequest::matches( const TxId& xid,
         this->recId == recId;
 }
 
-bool LockMgr::comesBeforeUsingPolicy( const LockMgr::LockRequest* newRequest,
+bool LockMgr::comesBeforeUsingPolicy( const TxId& requestor,
+				      const LockMode& mode,
                                       const LockMgr::LockRequest* oldRequest ) const {
+    if (getTransactionPriority(requestor) > getTransactionPriority(oldRequest->xid)) {
+	return true;
+    }
+
     switch (_policy) {
     case FIRST_COME:
         return false;
     case READERS_FIRST:
-        return SHARED_RECORD == newRequest->mode;
+        return SHARED_RECORD == mode;
     case OLDEST_TX_FIRST:
-        return newRequest->xid < oldRequest->xid;
+        return requestor < oldRequest->xid;
     case BIGGEST_BLOCKER_FIRST: {
-        map<TxId,set<TxId>*>::const_iterator newRequestWaiters = _waiters.find(newRequest->xid);
+        map<TxId,set<TxId>*>::const_iterator newRequestWaiters = _waiters.find(requestor);
         if (newRequestWaiters == _waiters.end()) {
             // new request isn't blocking anything, can't come first
             return false;
@@ -117,6 +122,18 @@ LockMgr::~LockMgr( ) {
         locks != _locks.end(); ++locks) {
         delete locks->second;
     }
+}
+
+void LockMgr::setTransactionPriority( const TxId& xid, int priority ) {
+    _txPriorities[xid] = priority;
+}
+
+int LockMgr::getTransactionPriority( const TxId& xid ) const {
+    map<TxId, int>::const_iterator txPriority = _txPriorities.find(xid);
+    if (txPriority == _txPriorities.end()) {
+	return 0;
+    }
+    return txPriority->second;
 }
 
 const LockMgr::LockStats& LockMgr::getStats( ) {
@@ -206,6 +223,33 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
         //
         ++nextLockId;
     }
+
+    // use lock request's transaction's priority if specified
+    int txPriority = getTransactionPriority( lr->xid );
+    if (txPriority > 0) {
+        for (; nextLockId != queue->end(); ++nextLockId) {
+            LockMgr::LockRequest* nextRequest = _locks[*nextLockId];
+	    if (txPriority > getTransactionPriority( nextRequest->xid )) {
+                // add in front of request with lower priority that is either
+		// compatible, or blocked
+                queue->insert(nextLockId, lr->lid);
+
+                // set remaining incompatible requests as lr's waiters
+                addWaiters( lr, nextLockId, queue->end() );
+
+                return;
+	    }
+        }
+	queue->push_back( lr->lid );
+	return;
+    }
+    else if (txPriority < 0) {
+	// for now, just push to end
+	// TODO: honor position of low priority requests
+	queue->push_back( lr->lid );
+    }
+
+    // use LockMgr's default policy
     switch (_policy) {
     case FIRST_COME:
         queue->push_back(lr->lid);
@@ -266,6 +310,46 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
     queue->push_back(lr->lid);
 }
 
+bool LockMgr::isAvailable( const TxId& requestor,
+			   const LockMode& mode,
+			   const RecordStore* store,
+			   const RecordId& recId ) {
+    
+    map<const RecordStore*, map<RecordId,list<LockId>*> >::iterator storeLocks = _recordLocks.find(store);
+    if (storeLocks == _recordLocks.end()) {
+	return true; // no lock requests against this RecordStore, so must be available
+    }
+
+    map<RecordId,list<LockId>*>::iterator recLocks = storeLocks->second.find(recId);
+    if (recLocks == storeLocks->second.end()) {
+	return true; // no lock requests against this RecordId, so must be available
+    }
+
+    // walk over the queue of previous requests for this RecordId
+    list<LockId>* queue = recLocks->second;
+    for (list<LockId>::const_iterator nextLockId = queue->begin();
+         nextLockId != queue->end(); ++nextLockId) {
+
+        LockRequest* nextLockRequest = _locks[*nextLockId];
+
+        if (nextLockRequest->matches(requestor, mode, store, recId)) {
+            // we're already on this queue
+	    return !nextLockRequest->sleep;
+        }
+
+        // no conflict if we're compatible
+        if (isCompatible(mode, nextLockRequest->mode)) continue;
+
+        // no conflict if nextLock is blocked and we come before
+        if (nextLockRequest->sleep && comesBeforeUsingPolicy(requestor, mode, nextLockRequest)) return true;
+
+	return false; // we're incompatible and would block
+    }
+
+    // everything on the queue (if anything is on the queue) is compatible
+    return true;
+}
+
 bool LockMgr::conflictExists(const LockRequest* lr, const list<LockId>* queue, TxId* blocker) {
     set<TxId> sharedOwners;
     for (list<LockId>::const_iterator nextLockId = queue->begin();
@@ -287,7 +371,7 @@ bool LockMgr::conflictExists(const LockRequest* lr, const list<LockId>* queue, T
         if (isCompatible(lr->mode, nextLockRequest->mode)) continue;
 
         // no conflict if nextLock is blocked and we come before
-        if (nextLockRequest->sleep && comesBeforeUsingPolicy(lr, nextLockRequest)) continue;
+        if (nextLockRequest->sleep && comesBeforeUsingPolicy(lr->xid, lr->mode, nextLockRequest)) continue;
 
         // there's a conflict
         *blocker = nextLockRequest->xid;
@@ -623,6 +707,40 @@ void LockMgr::acquire( const TxId& requestor,
     }
 }
 
+int LockMgr::acquireOne( const TxId& requestor,
+			 const LockMode& mode,
+			 const RecordStore* store,
+			 const vector<RecordId>& records,
+			 Notifier* notifier) {
+
+    if (records.empty()) { return -1; }
+
+    // first, acquire a lock on the store
+    acquire(requestor, LockMgr::SHARED_STORE, store);
+
+    // previous acquisition will guard, so guarding here avoids recursive mutex
+    unique_lock<boost::mutex> guard(_guard);
+
+    _stats.incRequests();
+
+    // don't accept requests from aborted transactions
+    if (_abortedTxIds.find(requestor) != _abortedTxIds.end()) {
+        throw AbortException();
+    }
+
+    // acquire the first available recordId
+    for (unsigned ix=0; ix < records.size(); ix++) {
+	if (isAvailable( requestor, mode, store, records[ix] )) {
+	    acquire( requestor, mode, store, records[ix], notifier );
+	    return ix;
+	}
+    }
+
+    // sigh. none of the records are currently available. wait on the first.
+    acquire( requestor, mode, store, records[0] );
+    return 0;
+}
+
 size_t LockMgr::release( const TxId& holder ) {
     map<TxId, set<LockId>*>::iterator lockIdsHeld = _xaLocks.find(holder);
     if (lockIdsHeld == _xaLocks.end()) { return 0; }
@@ -861,3 +979,21 @@ string LockMgr::toString( ) const {
     return result.str();
 }
     
+ResourceLock::ResourceLock( LockMgr* lm,
+			    const TxId& requestor,
+			    const LockMgr::LockMode& mode,
+			    const RecordStore* store,
+			    const RecordId& recId,
+			    LockMgr::Notifier* notifier )
+    : _lm(lm),
+      _requestor(requestor),
+      _mode(mode),
+      _store(store),
+      _recId(recId)
+{
+    lm->acquire(requestor, mode, store, recId, notifier);
+}
+
+ResourceLock::~ResourceLock( ) {
+    _lm->release(_requestor, _mode, _store, _recId);
+}
