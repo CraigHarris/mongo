@@ -212,6 +212,8 @@ namespace mongo {
                         _rsp.post(ACQUIRED);
                     } catch (const AbortException& err) {
                         _rsp.post(ABORTED);
+			log() << "t" << _xid << ": aborted, ending" << endl;
+			return;
                     }
 		    break;
 		case RELEASE:
@@ -252,26 +254,36 @@ namespace mongo {
 
     TEST(LockMgrTest, TxError) {
 	LockMgr lm;
+	LockMgr::ReleaseStatus status;
 
 	// release a lock on a RecordStore we haven't locked
 	lm.release(1, LockMgr::SHARED_STORE, 0x0);
 
+
 	// release a lock on a record we haven't locked
-	lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1);
+	status = lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1);
+	ASSERT( LockMgr::CONTAINER_NOT_ACQUIRED == status );
+    
 
 	// release a lock on a record we haven't locked in a store we have locked
 	lm.acquire(1, LockMgr::SHARED_RECORD, 0x0, 2);
-	lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1); // this is in error
-	lm.release(1, LockMgr::SHARED_RECORD, 0x0, 2);
+	status = lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1); // this is in error
+	ASSERT( LockMgr::RESOURCE_NOT_ACQUIRED == status );
+	status = lm.release(1, LockMgr::SHARED_RECORD, 0x0, 2);
+	ASSERT( LockMgr::RELEASED == status );
 
 	// release a record we've locked in a different mode
 	lm.acquire(1, LockMgr::SHARED_RECORD, 0x0, 1);
-	lm.release(1, LockMgr::EXCLUSIVE_RECORD, 0x0, 1); // this is in error
-	lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1);
+	status = lm.release(1, LockMgr::EXCLUSIVE_RECORD, 0x0, 1); // this is in error
+	ASSERT( LockMgr::RESOURCE_NOT_ACQUIRED_IN_MODE == status );
+	status = lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1);
+	ASSERT( LockMgr::RELEASED == status );
 
 	lm.acquire(1, LockMgr::EXCLUSIVE_RECORD, 0x0, 1);
-	lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1); // this is in error
-	lm.release(1, LockMgr::EXCLUSIVE_RECORD, 0x0, 1);
+	status = lm.release(1, LockMgr::SHARED_RECORD, 0x0, 1); // this is in error
+	ASSERT( LockMgr::RESOURCE_NOT_ACQUIRED_IN_MODE == status );
+	status = lm.release(1, LockMgr::EXCLUSIVE_RECORD, 0x0, 1);
+	ASSERT( LockMgr::RELEASED == status );
 
 	// attempt to acquire on a transaction that aborted
 	try {
@@ -279,6 +291,7 @@ namespace mongo {
 	} catch (const AbortException& err) { }
 	try {
 	    lm.acquire(1, LockMgr::SHARED_RECORD, 0x0, 1); // error
+	    ASSERT( false );
 	} catch (const AbortException& error) {
 	}
     }
@@ -288,6 +301,7 @@ namespace mongo {
         RecordStore* store= (RecordStore*)0x4000;
         TxId t1 = 1;
         RecordId r1 = 1;
+	LockMgr::ReleaseStatus status;
 
         // acquire a shared record lock
         ASSERT( ! lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
@@ -304,11 +318,13 @@ namespace mongo {
         ASSERT( lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
 
         // release the twice-acquired lock, once.  Still locked
-        lm.release(t1, LockMgr::SHARED_RECORD, store, r1);
+        status = lm.release(t1, LockMgr::SHARED_RECORD, store, r1);
+	ASSERT( LockMgr::COUNT_DECREMENTED == status);
         ASSERT( lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
 
         // after 2nd release, it's not locked
-        lm.release(t1, LockMgr::SHARED_RECORD, store, r1);
+        status = lm.release(t1, LockMgr::SHARED_RECORD, store, r1);
+	ASSERT( LockMgr::RELEASED == status);
         ASSERT( !lm.isLocked(t1, LockMgr::SHARED_RECORD, store, r1));
 
 
@@ -421,37 +437,42 @@ namespace mongo {
 	LockMgr lm( LockMgr::READERS_FIRST);
 	ClientTransaction t1( &lm, 1 );
 	ClientTransaction t2( &lm, 2 );
-	ClientTransaction t3( &lm, 3 );
+
+	ClientTransaction a1( &lm, 4 );
+	ClientTransaction a2( &lm, 5 );
+	ClientTransaction a3( &lm, 6 );
+	ClientTransaction a4( &lm, 7 );
+	ClientTransaction a5( &lm, 8 );
 
 	// simple deadlock test 1
 	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
+	a1.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
 	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, BLOCKED );
-	// t2's request would form a dependency cycle, so it should abort
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
+	// a1's request would form a dependency cycle, so it should abort
+	a1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
 	t1.wakened( ); // with t2's locks released, t1 should wake
 	t1.release( LockMgr::EXCLUSIVE_RECORD, 2);
 	t1.release( LockMgr::SHARED_RECORD, 1);
 
 	// simple deadlock test 2
-	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	a2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
 	t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
 	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	// t1's request would form a dependency cycle, so it should abort
-	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
-	t2.wakened( ); // with t1's locks released, t2 should wake
+	// a2's request would form a dependency cycle, so it should abort
+	a2.acquire( LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
+	t2.wakened( ); // with a2's locks released, t2 should wake
 	t2.release( LockMgr::EXCLUSIVE_RECORD, 1);
 	t2.release( LockMgr::SHARED_RECORD, 2);
 
 	// three way deadlock
 	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
 	t2.acquire( LockMgr::SHARED_RECORD, 2, ACQUIRED );
-	t3.acquire( LockMgr::SHARED_RECORD, 3, ACQUIRED );
+	a3.acquire( LockMgr::SHARED_RECORD, 3, ACQUIRED );
 	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 2, BLOCKED );
 	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 3, BLOCKED );
-	// t3's request would form a dependency cycle, so it should abort
-	t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
-	t2.wakened( ); // with t3's lock release, t2 should wake
+	// a3's request would form a dependency cycle, so it should abort
+	a3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
+	t2.wakened( ); // with a3's lock release, t2 should wake
 	t2.release( LockMgr::SHARED_RECORD, 2);
 	t1.wakened( ); // with t2's locks released, t1 should wake
 	t2.release( LockMgr::EXCLUSIVE_RECORD, 3);
@@ -472,36 +493,35 @@ namespace mongo {
 
 	// test for missing deadlocks
 	t1.acquire(LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire(LockMgr::SHARED_RECORD, 2, ACQUIRED ); // setup for deadlock with t3
+	t2.acquire(LockMgr::SHARED_RECORD, 2, ACQUIRED ); // setup for deadlock with a4
 	t2.acquire(LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED ); // block on t1
 	// after this, because readers first policy, t2 should
-	// also be waiting on t3.
-	t3.acquire(LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	// after this, t2 should be waiting ONLY on t3
+	// also be waiting on a4.
+	a4.acquire(LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	// after this, t2 should be waiting ONLY on a4
 	t1.release(LockMgr::SHARED_RECORD, 1 );
-	// So t3 should not be allowed to wait on t2's resource.
-	t3.acquire(LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
+	// So a4 should not be allowed to wait on t2's resource.
+	a4.acquire(LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
 	t2.wakened( );
 	t2.release(LockMgr::SHARED_RECORD, 2 );
 	t2.release(LockMgr::EXCLUSIVE_RECORD, 1 );
 
 
 	// test for missing deadlocks: due to downgrades
-	t1.acquire(LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
-	t1.acquire(LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire(LockMgr::SHARED_RECORD, 2, ACQUIRED ); // setup for deadlock with t1
-	t2.acquire(LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED ); // block on t1
-	t1.release(LockMgr::EXCLUSIVE_RECORD, 1 );
-	// at this point, t2 should still be blocked on t1's downgraded lock
-	// So t1 should not be allowed to wait on t2's resource.
-	t1.acquire(LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
+	a5.acquire(LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED );
+	a5.acquire(LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	t2.acquire(LockMgr::SHARED_RECORD, 2, ACQUIRED ); // setup for deadlock with a5
+	t2.acquire(LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED ); // block on a5
+	a5.release(LockMgr::EXCLUSIVE_RECORD, 1 );
+	// at this point, t2 should still be blocked on a5's downgraded lock
+	// So a5 should not be allowed to wait on t2's resource.
+	a5.acquire(LockMgr::EXCLUSIVE_RECORD, 2, ABORTED );
 	t2.wakened( );
 	t2.release(LockMgr::SHARED_RECORD, 2 );
 	t2.release(LockMgr::EXCLUSIVE_RECORD, 1 );
 
 	t1.quit( );
 	t2.quit( );
-	t3.quit( );
     }
 
     TEST(LockMgrTest, TxDowngrade) {
@@ -566,6 +586,9 @@ namespace mongo {
 	ClientTransaction t2( &lm, 2 );
 	ClientTransaction t3( &lm, 3 );
 
+	ClientTransaction a2( &lm, 4 );
+	ClientTransaction a3( &lm, 5 );
+
 	// test upgrade succeeds, blocks subsequent reads
 	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
 	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ACQUIRED ); // upgrade
@@ -599,10 +622,10 @@ namespace mongo {
 
 	// failure to upgrade
 	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	a2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
 	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
-	// with t2's abort, t1 can wake
+	a2.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
+	// with a2's abort, t1 can wake
 	t1.wakened( );
 	t1.release( LockMgr::SHARED_RECORD, 1 );
 	t1.release( LockMgr::EXCLUSIVE_RECORD, 1 );
@@ -611,9 +634,9 @@ namespace mongo {
 	t1.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
 	t2.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
 	t1.acquire( LockMgr::EXCLUSIVE_RECORD, 1, BLOCKED );
-	t3.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
-	t2.release( LockMgr::SHARED_RECORD, 1 ); // t1 still blocked on t3
-	t3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
+	a3.acquire( LockMgr::SHARED_RECORD, 1, ACQUIRED );
+	t2.release( LockMgr::SHARED_RECORD, 1 ); // t1 still blocked on a3
+	a3.acquire( LockMgr::EXCLUSIVE_RECORD, 1, ABORTED );
 
 	t1.quit( );
 	t2.quit( );

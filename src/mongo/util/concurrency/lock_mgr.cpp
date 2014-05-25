@@ -442,9 +442,7 @@ void LockMgr::abort(const TxId& goner) {
     }
 
     // add to set of aborted transactions
-#if 0
     _abortedTxIds.insert(goner);
-#endif
 
     throw AbortException();
 }
@@ -794,11 +792,6 @@ LockMgr::ReleaseStatus LockMgr::releaseWithMutex(const TxId& holder,
                                                  const RecordStore* store,
                                                  const RecordId& recId) {
 
-    bool seenExclusive = false;
-    bool foundLock = false;
-    bool foundResource = false;
-    set<TxId> otherSharers;
-
     map<const RecordStore*,map<RecordId,list<LockId>*> >::iterator storeLocks = _recordLocks.find(store);
     if (storeLocks == _recordLocks.end()) {
         return CONTAINER_NOT_ACQUIRED;
@@ -808,6 +801,11 @@ LockMgr::ReleaseStatus LockMgr::releaseWithMutex(const TxId& holder,
     if (recordLocks == storeLocks->second.end()) {
         return RESOURCE_NOT_ACQUIRED;
     }
+
+    bool seenExclusive = false;
+    bool foundLock = false;
+    bool foundResource = false;
+    set<TxId> otherSharers;
     
     list<LockId>* queue = recordLocks->second;
     list<LockId>::iterator nextLockId = queue->begin();
@@ -817,12 +815,15 @@ LockMgr::ReleaseStatus LockMgr::releaseWithMutex(const TxId& holder,
     for( ; !foundLock && nextLockId != queue->end(); ++nextLockId) {
         LockRequest* nextLock = _locks[*nextLockId];
         if (! nextLock->matches(holder, mode, store, recId)) {
+	    if (nextLock->xid == holder) {
+		foundResource = true;
+	    }
             if (LockMgr::SHARED_RECORD == nextLock->mode && !seenExclusive)
                 otherSharers.insert(nextLock->xid);
             else
                 seenExclusive = true;
         }
-        else if (mode == nextLock->mode) {
+        else {
             // this is our lock.
             if (0 < --nextLock->count) { return COUNT_DECREMENTED; }
 
@@ -835,10 +836,6 @@ LockMgr::ReleaseStatus LockMgr::releaseWithMutex(const TxId& holder,
 
             foundLock = true;
             break; // don't increment nextLockId again
-        }
-        else {
-            // we've locked this resource but not in this mode
-            foundResource = true;
         }
     }
 
