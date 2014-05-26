@@ -43,7 +43,7 @@
 /*
  * LockMgr controls access to resources through two functions: acquire and release
  *
- * Resources are either RecordStores, or Records within an RecordStore, identified by a RecordId.
+ * Resources are either RecordStores, or Records within an RecordStore, identified by a ResourceId.
  * Resources are acquired for either shared or exclusive use, by transactions identified by a TxId.
  * Acquiring Records in any mode implies acquisition of the Record's RecordStore
  *
@@ -54,9 +54,7 @@
 
 namespace mongo {
     typedef size_t TxId;        // identifies requesting transaction
-    typedef size_t RecordId;
-    typedef size_t ResourceId;  // identifies requested resource
-    typedef size_t Containerid; // identifies container of requested resource
+    typedef size_t ResourceId;  // identifies requested resource, 
 
     class AbortException : public std::exception {
     public:
@@ -69,21 +67,23 @@ namespace mongo {
      *  all resources used by a set of transactions that could deadlock, should use one LockMgr.
      *
      *  Primary functions are:
-     *     acquire - a transaction acquires a resource for shared or exclusive use
-     *     release - a transaction releases a resource previously acquired for shared/exclusive use
+     *     acquire    - acquire a resource for shared or exclusive use; may throw Abort.
+     *     acquireOne - acquire one of a vector of resources, hopefully without blocking
+     *     release    - release a resource previously acquired for shared/exclusive use
      */
 
     class LockMgr {
     public:
 
-        enum LockMode {
-            SHARED_RECORD,
-            SHARED_STORE,
-            EXCLUSIVE_RECORD,
-            EXCLUSIVE_STORE,
-            INVALID
-        };
+        /**
+         * LockModes: shared and exclusive
+         */
+        const unsigned kShared = 0x0;
+        const unsigned kExclusive = 0x1;
 
+        /**
+         * Used to decide which blocked requests to honor first when resource becomes available
+         */
         enum LockingPolicy {
             FIRST_COME,
             READERS_FIRST,
@@ -91,55 +91,66 @@ namespace mongo {
             BIGGEST_BLOCKER_FIRST
         };
 
-        enum ReleaseStatus {
+        /** 
+         * returned by ::release, mostly for testing
+         */
+        enum LockStatus {
+            FOUND,
             RELEASED,
             COUNT_DECREMENTED,
-            CONTAINER_NOT_ACQUIRED,
-            RESOURCE_NOT_ACQUIRED,
-            RESOURCE_NOT_ACQUIRED_IN_MODE
+            CONTAINER_NOT_FOUND,
+            RESOURCE_NOT_FOUND,
+            RESOURCE_NOT_FOUND_IN_MODE
         };
 
         typedef size_t LockId;
 
+        /**
+         * Data structure used to record a resource acquisition request
+         */
         class LockRequest {
         public:
             LockRequest( const TxId& xid,
                          const LockMode& mode,
-                         const RecordStore* store);
-
-            LockRequest( const TxId& xid,
-                         const LockMode& mode,
-                         const RecordStore* store,
-                         const RecordId& recId );
+                         const ResourceId& resId);
 
             virtual ~LockRequest();
 
             bool matches( const TxId& xid,
                           const LockMode& mode,
-                          const RecordStore* store,
-                          const RecordId& recId );
+                          const LockId& parentId,
+                          const ResourceId& resId );
 
             std::string toString( ) const;
 
-            static LockId nextLid;
+            static LockId nextLid;     // unique id for each request. zero not used
+
             bool sleep;                // true if waiting, false if resource acquired
-            LockId lid; 
+            LockId parentLid;          // the LockId of the parent of this resource, or zero
+            LockId lid;                // 
             TxId xid;                  // transaction that made this request
             LockMode mode;             // shared or exclusive use
-            const RecordStore* store;  // container of resource requested
-            RecordId recId;            // resource requested
+            ResourceId resId;          // resource requested
             size_t count;              // # times xid requested this resource in this mode
                                        // request will be deleted when count goes to 0
-            boost::condition_variable lock;
+
+            boost::condition_variable lock; // used for waiting and waking
         };
 
+        /**
+         * Used to do something just before an acquisition request blocks.
+         */
         class Notifier {
         public:
             virtual void operator()(const TxId& blocker) = 0;
-
             virtual ~Notifier() { }
         };
 
+        /**
+         * Tracks locking statistics.  For now, just aggregated across all resources/TxIds
+         * Eventually might keep per TxId and/or per Resource, to facilitate identifying
+         * hotspots and problem transactions.
+         */
         class LockStats {
         public:
             LockStats( )
@@ -150,6 +161,9 @@ namespace mongo {
                   _numDowngrades(0),
                   _numUpgrades(0),
                   _numMillisBlocked(0) { }
+
+            LockStats(const LockStats& other);
+            LockStats& operator=(const LockStats& other);
 
             void incRequests() { _numRequests++; }
             void incPreexisting() { _numPreexistingRequests++; }
@@ -181,61 +195,17 @@ namespace mongo {
         virtual ~LockMgr();
 
         /**
-         * acquire a RecordStore in a mode.
-         * can throw AbortException
+         * For multi-level resource container hierarchies, the caller can optionally
+         * identify the ancestry relationships.  For example, if database resources
+         * contained collection resources, which contained document resources, this
+         * API could be used to relate a specific collection to its parent database.
+         *
+         * Once this is done, a call to acquire a document in a particular collection
+         * could also be used to lock the containing database, without supplying the
+         * resourceId for the database.
          */
-        virtual void acquire( const TxId& requestor,
-                              const LockMode& mode,
-                              const RecordStore* store );
+        virtual void setParent( const ResourceId& container, const ResourceId& parent );
 
-        /**
-         * acquire a RecordId in a RecordStore in a mode
-         * can throw AbortException
-         */
-        virtual void acquire( const TxId& requestor,
-                              const LockMode& mode,
-                              const RecordStore* store,
-                              const RecordId& recId,
-                              Notifier* notifier = NULL);
-
-        /**
-         * for bulk operations:
-         * acquire one of a vector of RecordIds in a mode,
-         * hopefully without blocking, return index of 
-         * acquired RecordId, or -1 if vector was empty
-         */
-        virtual int acquireOne( const TxId& requestor,
-                                const LockMode& mode,
-                                const RecordStore* store,
-                                const vector<RecordId>& records,
-                                Notifier* notifier = NULL );
-
-        /**
-         * release a RecordStore
-         */
-        virtual void release( const TxId& holder,
-                              const LockMode& mode,
-                              const RecordStore* store);
-
-        /**
-         * release a RecordId in a RecordStore
-         */
-        virtual ReleaseStatus release( const TxId& holder,
-                                       const LockMode& mode,
-                                       const RecordStore* store,
-                                       const RecordId& recId);
-
-        /**
-         * release all resources acquired by a transaction
-         */
-        virtual size_t release( const TxId& holder);
-
-        /**
-        * called internally for deadlock
-        * possibly called publicly to stop a long transaction
-        * also used for testing
-        */
-        void abort( const TxId& goner );
 
         /**
          * override default LockMgr's default LockingPolicy for a transaction
@@ -251,7 +221,84 @@ namespace mongo {
         void setTransactionPriority( const TxId& xid, int priority );
         int  getTransactionPriority( const TxId& xid ) const;
 
-        const LockStats& getStats( );
+
+        /**
+         * acquire a resource nested in a container, in a mode.
+         *
+         * If setParent was previously called to relate container to its parent,
+         * then both the container and its identified ancestors will be locked.
+         * 
+         * the locking mode parameter is a bit vector.  The least significant bit
+         * describes whether the resource is locked shared (0) or exclusive (1).
+         * the next least significant bit describes the lock mode of the container,
+         * and so on for the container's ancestors.
+         *
+         * can throw AbortException
+         */
+        virtual void acquire( const TxId& requestor,
+                              const unsigned& mode,
+                              const ResourceId& container,
+                              const ResourceId& resId,
+                              Notifier* notifier = NULL);
+
+        /**
+         * acquire a hierarchical resource, locking it and its ancestors in
+         * specified modes.
+         *
+         * functionally equivalent to the previous call, without needing calls
+         * to setParent of ancestral containers.
+         *
+         * the first ResourceId in the resIdPath is the resource requested,
+         * the next ResourceId in the resIdPath is the resource's container,
+         * followed by the container's parent, etc.
+         *
+         * the first mode specifies whether to acquire the resource shared or
+         * exclusive, the next mode in modes is for the resource's container,
+         * and so on.  If modes is shorter thant resIdPath, the last mode will
+         * be used for any remaining ancestor locking.
+         */
+        virtual void acquire( const TxId& requestor,
+                              const std::list<unsigned>& modes,
+                              const std::list<ResourceId>& resIdPath,
+                              Notifier* notifier = NULL);
+
+        /**
+         * for bulk operations:
+         * acquire one of a vector of ResourceIds in a mode,
+         * hopefully without blocking, return index of 
+         * acquired ResourceId, or -1 if vector was empty
+         */
+        virtual int acquireOne( const TxId& requestor,
+                                const unsigned& mode,
+                                const ResourceId& container,
+                                const vector<ResourceId>& records,
+                                Notifier* notifier = NULL );
+
+        /**
+         * release a ResourceId in a container.
+         * The mode here is just the mode that applies to the resId
+         * The modes that applied to the ancestor containers are
+         * already known
+         */
+        virtual ReleaseStatus release( const TxId& holder,
+                                       const unsigned& mode,
+                                       const ResourceId& container,
+                                       const ResourceId& resId);
+
+        /**
+         * release all resources acquired by a transaction
+         * returns number of locks released
+         */
+        virtual size_t release( const TxId& holder);
+
+        /**
+        * called internally for deadlock
+        * possibly called publicly to stop a long transaction
+        * also used for testing
+        */
+        void abort( const TxId& goner );
+
+        void getStats( LockStats* stats ) const<;
 
 
 
@@ -260,19 +307,12 @@ namespace mongo {
          std::string toString( ) const;
 
         /**
-         * test whether a TxId has locked RecordStore in a mode
+         * test whether a TxId has locked a nested ResourceId in a mode
          */
         virtual bool isLocked( const TxId& holder,
-                               const LockMode& mode,
-                               const RecordStore* store);
-
-        /**
-         * test whether a TxId has locked a RecordId in a mode
-         */
-        virtual bool isLocked( const TxId& holder,
-                               const LockMode& mode,
-                               const RecordStore* store,
-                               const RecordId& recId);
+                               const unsigned& mode,
+                               const ResourceId& parentId,
+                               const ResourceId& resId);
 
     private:
 
@@ -282,7 +322,7 @@ namespace mongo {
          * conflicts with a previous upgrade-to-exclusive request that is blocked.
          */
         bool comesBeforeUsingPolicy( const TxId& newReqXid,
-                                     const LockMode& newReqMode,
+                                     const unsigned& newReqMode,
                                      const LockRequest* oldReq ) const;
 
         /**
@@ -296,9 +336,14 @@ namespace mongo {
          * used by acquireOne
          */
         bool isAvailable( const TxId& requestor,
-                          const LockMode& mode,
-                          const RecordStore* store,
-                          const RecordId& recId );
+                          const unsigned& mode,
+                          const ResourceId& parentId,
+                          const ResourceId& resId );
+
+        LockStatus find_lock( const TxId& requestor,
+                              const unsigned& mode,
+                              const ResourceId& parentId,
+                              const ResourceId& resId );
 
         /**
          * set up for future deadlock detection, called from acquire
@@ -319,18 +364,33 @@ namespace mongo {
          */
         void addLockToQueueUsingPolicy( LockRequest* lr );
 
+        LockId acquire_locks_on_ancestors( const TxId& requestor,
+                                           const unsigned& mode,
+                                           const ResourceId& container );
+
+        void acquire_internal( const TxId& requestor,
+                               const unsigned& mode,
+                               const LockId& containerLid,
+                               const ResourceId& resId,
+                               Notifier* notifier );
+
+        void acquire_internal( const TxId& requestor,
+                               const list<unsigned>& modes,
+                               const list<ResourceId>& resIdPath,
+                               Notifier* notifier );
+
         /**
          * called by public release and internally by abort.
          * assumes caller as acquired a mutex.
          */
-        virtual void releaseWithMutex( const TxId& holder,
-                                       const LockMode& mode,
-                                       const RecordStore* store);
+        LockStatus releaseWithMutex( const TxId& holder,
+                                     const unsigned& mode,
+                                     const ResourceId& parentId,
+                                     const ResourceId& resId);
 
-        virtual ReleaseStatus releaseWithMutex( const TxId& holder,
-                                                const LockMode& mode,
-                                                const RecordStore* store,
-                                                const RecordId& recId);
+        void release_internal( const LockId& lid );
+
+        void abort_internal( const TxId& goner );
 
         // The LockingPolicy controls which requests should be honored first.  This is
         // used to guide the position of a request in a list of requests waiting for
@@ -349,22 +409,24 @@ namespace mongo {
         // owns the LockRequest*
         std::map<LockId,LockRequest*> _locks;
 
-        // Lists of lock requests associated with a resource or container.
+        // maps containerId -> parentId
+        std::map<ResourceId, ResourceId> _containerAncestry;
+
+        // Lists of lock requests associated with a resource,
+        // map lowest-level-container to (map of resourceId to list of lock requests)
         //
-        // The containing lists have two sections.  Some number (at least one) of requests 
+        // The lock-request lists have two sections.  Some number (at least one) of requests 
         // at the front of a list are "active".  All remaining lock requests are blocked by
         // some earlier (not necessarily active) lock request, and are waiting.  The order
         // of lock request in the waiting section is determined by the LockPolicty.
         // The order of lock request in the active/front portion of the list is irrelevant.
         //
-        std::map<const RecordStore*, std::map<RecordId, std::list<LockId>*> > _recordLocks;
-        std::map<const RecordStore*, std::list<LockId>*> _containerLocks;
+        std::map<const ResourceId&, std::map<ResourceId, std::list<LockId>*> > _resourceLocks;
 
-        // For cleanup and abort processing, all LockRequests made by a transaction
+        // For cleanup and abort processing, contains all LockRequests made by a transaction
         std::map<TxId, std::set<LockId>*> _xaLocks;
 
         // For deadlock detection: the set of transactions blocked by another transaction
-        // 
         std::map<TxId, std::set<TxId>*> _waiters;
 
         // track transactions that have aborted, and don't accept further 
@@ -390,17 +452,13 @@ namespace mongo {
     public:
         ResourceLock( LockMgr* lm,
                       const TxId& requestor,
-                      const LockMgr::LockMode& mode,
-                      const RecordStore* store,
-                      const RecordId& recId,
+                      const unsigned& mode,
+                      const ResourceId& parentId,
+                      const ResourceId& resId,
                       LockMgr::Notifier* notifier = NULL );
 
         virtual ~ResourceLock( );
     private:
-        LockMgr* _lm;   // not owned here
-        TxId _requestor;
-        LockMgr::LockMode _mode;
-        const RecordStore* _store; // not owned here
-        RecordId _recId;
+        LockId _lid;
     };
 }
