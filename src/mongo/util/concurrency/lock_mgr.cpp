@@ -555,16 +555,12 @@ void LockMgr::acquire( const TxId& requestor,
     // check to see iof requestor has already locked recId
     list<LockId>* queue = recLocks->second;
     set<TxId> sharedOwners;
-    LockRequest* firstExclusiveRequest = NULL;
     for (list<LockId>::iterator nextLockId = queue->begin();
          nextLockId != queue->end(); ++nextLockId) {
         LockRequest* nextRequest = _locks[*nextLockId];
         if (nextRequest->xid != requestor) {
             if (LockMgr::SHARED_RECORD == mode && mode == nextRequest->mode) {
                 sharedOwners.insert(nextRequest->xid);
-            }
-            else if (LockMgr::EXCLUSIVE_RECORD == nextRequest->mode) {
-                firstExclusiveRequest = nextRequest;
             }
             continue;
         }
