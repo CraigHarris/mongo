@@ -112,13 +112,14 @@ namespace mongo {
         public:
             LockRequest( const TxId& xid,
                          const unsigned& mode,
+                         const ResourceId& container,
                          const ResourceId& resId);
 
             virtual ~LockRequest();
 
             bool matches( const TxId& xid,
                           const unsigned& mode,
-                          const LockId& parentId,
+                          const ResourceId& parentId,
                           const ResourceId& resId );
 
             std::string toString( ) const;
@@ -130,6 +131,7 @@ namespace mongo {
             LockId lid;                // 
             TxId xid;                  // transaction that made this request
             unsigned mode;             // shared or exclusive use
+            ResourceId container;      // container of the resource, or 0 if top-level
             ResourceId resId;          // resource requested
             size_t count;              // # times xid requested this resource in this mode
                                        // request will be deleted when count goes to 0
@@ -191,6 +193,17 @@ namespace mongo {
             unsigned long long _numMillisBlocked;
         };
 
+        /**
+         * Singleton-factory - retrieves a common instance of LockMgr.
+         * Most callers should use this interface for getting an instance
+         */
+        static LockMgr* getSingleton(const LockingPolicy& policy=FIRST_COME);
+
+        /**
+         * It's possibly useful to allow multiple LockMgrs for non-overlapping sets
+         * of resources, so the constructor is left public.  But most callers should
+         * use the singleton factory method above to get the one and only LockMgr
+         */
         LockMgr(const LockingPolicy& policy=FIRST_COME);
         virtual ~LockMgr();
 
@@ -286,7 +299,7 @@ namespace mongo {
 				    const ResourceId& resId);
 
 	/**
-	 *
+	 * releases the lock returned by acquire.  should perhaps replace above?
 	 */
 	virtual LockStatus releaseLock( const LockId& lid );
 
@@ -378,17 +391,24 @@ namespace mongo {
                                  boost::unique_lock<boost::mutex>& guard);
 
         /**
-         * called by public release and internally by abort.
+         * called by public ::release and internally by abort.
          * assumes caller as acquired a mutex.
          */
-        LockStatus releaseWithMutex( const TxId& holder,
-                                     const unsigned& mode,
-                                     const ResourceId& parentId,
-                                     const ResourceId& resId);
-
         LockStatus release_internal( const LockId& lid );
 
+        /**
+         * called by public ::abort and internally by deadlock
+         */
         void abort_internal( const TxId& goner );
+
+        /**
+         * called externally by getTransactionPriority
+         * and internally by addLockToQueueUsingPolicy
+         */
+        int get_transaction_priority_internal( const TxId& xid );
+
+        // Singleton instance
+        static LockMgr* _singleton;
 
         // The LockingPolicy controls which requests should be honored first.  This is
         // used to guide the position of a request in a list of requests waiting for
