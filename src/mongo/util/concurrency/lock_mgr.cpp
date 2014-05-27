@@ -137,6 +137,26 @@ LockMgr::~LockMgr( ) {
     }
 }
 
+void LockMgr::setPolicy( const LockingPolicy& policy ) {
+    unique_lock<boost::mutex> guard(_guard);
+    if (policy == _policy) return;
+    if (LockMgr::READERS_ONLY == _policy ||
+        LockMgr::WRITERS_ONLY == _policy) {
+        // Awaken requests that were blocked on the old policy
+        // these are waiting on TxId 0
+        map<TxId, set<LockId>*>::iterator lockIdsHeld = _xaLocks.find(0);
+        if (lockIdsHeld != _xaLocks.end()) {
+            for (set<LockId>::iterator nextLockId = lockIdsHeld->second->begin();
+                 nextLockId != lockIdsHeld->second->end(); ++nextLockId) {
+                LockRequest* nextLock = _locks[*nextLockId];
+                nextLock->sleep = false;
+                nextLock->lock.notify_one();
+            }
+        }
+    }
+    _policy = policy;
+}
+
 void LockMgr::setParent( const ResourceId& container, const ResourceId& parent ) {
     unique_lock<boost::mutex> guard(_guard);
     _containerAncestry[container] = parent;
@@ -355,6 +375,18 @@ string LockMgr::toString( ) {
     case BIGGEST_BLOCKER_FIRST:
         result << "BiggestBlockerFirst";
         break;
+    case READERS_ONLY:
+        result << "ReadersOnly";
+        break;
+    case WRITERS_ONLY:
+        result << "WritersOnly";
+        break;
+    case SHUTDOWN_QUIESCE:
+        result << "ShutdownQuiesce";
+        break;
+    case SHUTDOWN:
+        result << "Shutdown";
+        break;
     }
     result << endl;
 
@@ -511,6 +543,7 @@ void LockMgr::addWaiters( LockRequest* blocker,
  * called only when there are already LockRequests associated with a recordId
  */
 void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
+
     list<LockId>* queue = _resourceLocks[lr->container][lr->resId];
     list<LockId>::iterator nextLockId = queue->begin();
     if (nextLockId != queue->end()) {
@@ -522,6 +555,54 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
         // then relative position among the sharers doesn't matter
         //
         ++nextLockId;
+    }
+
+    // handle for exceptional policies
+    switch(_policy) {
+    case LockMgr::READERS_ONLY:
+        if (LockMgr::kExclusive == (lr->mode & 0x1)) {
+            // find the last reader on the queue, then advance the nextLockId
+            // forward iterator past that point.
+            LockId lastReader = *nextLockId;
+            for (list<LockId>::reverse_iterator tail = queue->rbegin();
+                 tail != queue->rend(); ++tail) {
+                LockRequest* nextLock = _locks[*tail];
+                if (LockMgr::kShared == nextLock->mode) {
+                    lastReader = nextLock->lid;
+                    break;
+                }
+            }
+            for (; nextLockId != queue->end(); ++nextLockId) {
+                if (*nextLockId == lastReader) {
+                    ++nextLockId;
+                    break;
+                }
+            }
+            // we're now positioned past the last reader if there is one
+        }
+        break;
+    case LockMgr::WRITERS_ONLY:
+        if (LockMgr::kShared == (lr->mode & 0x1)) {
+            // find the last writer on the queue, then advance the nextLockId
+            // forward iterator past that point
+            LockId lastWriter = *nextLockId;
+            for (list<LockId>::reverse_iterator tail = queue->rbegin();
+                 tail != queue->rend(); ++tail) {
+                LockRequest* nextLock = _locks[*tail];
+                if (LockMgr:kExclusive == nextLock->mode) {
+                    lastWriter = nextLock->lid;
+                    break;
+                }
+            }
+            for (;nextLockId != queue->end(); ++nextLockId) {
+                if (*nextLockId != lastWriter) {
+                    ++nextLockId;
+                    break;
+                }
+            }
+            // we're now positioned past the last writer if there is one
+        }
+        break;
     }
 
     // use lock request's transaction's priority if specified
@@ -611,13 +692,31 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr ) {
 }
 
 /*
+ * Used by acquireOne
  * XXX: there's overlap between this, conflictExists and find_lock
  */
 bool LockMgr::isAvailable( const TxId& requestor,
 			   const unsigned& mode,
 			   const ResourceId& store,
 			   const ResourceId& resId ) {
-    
+
+    // check for exceptional policies
+    switch(_policy) {
+    case LockMgr::READERS_ONLY:
+        if (LockMgr::kExclusive == (mode & 0x1)) return false;
+        break;
+    case LockMgr::WRITERS_ONLY:
+        if (LockMgr::kShared == (mode & 0x1)) return false;
+        break;
+    case LockMgr::SHUTDOWN_QUIESCE:
+        // don't accept requests from new transactions
+        if (_xaLocks.find(requestor) == _xaLocks.end()) throw AbortException();
+        break;
+    case LockMgr::SHUTDOWN:
+        // nothing will be available
+        throw AbortException();
+    }
+
     map<ResourceId, map<ResourceId,list<LockId>*> >::iterator storeLocks = _resourceLocks.find(store);
     if (storeLocks == _resourceLocks.end()) {
 	return true; // no lock requests against this container, so must be available
@@ -655,6 +754,23 @@ bool LockMgr::isAvailable( const TxId& requestor,
 }
 
 bool LockMgr::conflictExists(const LockRequest* lr, const list<LockId>* queue, TxId* blocker) {
+
+    // check for exceptional policies
+    switch(_policy) {
+    case LockMgr::READERS_ONLY:
+        if (LockMgr::kExclusive == (mode & 0x1)) {
+            *blocker = 0; // indicates blocked by LockMgr policy
+            return true;
+        }
+        break;
+    case LockMgr::WRITERS_ONLY:
+        if ( LockMgr::kShared == (mode & 0x1))  {
+            *blocker = 0; // indicates blocked by LockMgr policy
+            return true;
+        }
+        break;
+    }
+
     set<TxId> sharedOwners;
     for (list<LockId>::const_iterator nextLockId = queue->begin();
          nextLockId != queue->end(); ++nextLockId) {
@@ -748,6 +864,18 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
 					   Notifier* sleepNotifier,
                                            unique_lock<boost::mutex>& guard) {
 
+    // handle exceptional policies
+    switch (_policy) {
+    case LockMgr::SHUTDOWN_QUIESCE:
+        // don't accept requests from new transactions
+        if (_xaLocks.find(requestor) == _xaLocks.end()) {
+            throw AbortException();
+        }
+        break;
+    case LockMgr::SHUTDOWN:
+        throw AbortException();
+    }
+
     // create the lock request and add to TxId's set of lock requests
     LockRequest* lr = new LockRequest(requestor, mode, store, resId);
     _locks[lr->lid] = lr;
@@ -755,12 +883,24 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
     // add lock request to set of requests of requesting TxId
     map<TxId,set<LockId>*>::iterator xa_iter = _xaLocks.find(requestor);
     if (xa_iter == _xaLocks.end()) {
-        set<TxId>* myLocks = new set<LockId>();
+        set<LockId>* myLocks = new set<LockId>();
         myLocks->insert(lr->lid);
         _xaLocks[requestor] = myLocks;
     }
     else {
         xa_iter->second->insert(lr->lid);
+    }
+
+    // handle other excpeitonal policies
+    switch (_policy) {
+    case LockMgr::READERS_ONLY:
+        if (LockMgr::kExclusive == mode&0x1) {
+        }
+        break;
+    case LockMgr::WRITERS_ONLY:
+        if (LockMgr::kShared == mode&0x1) {
+        }
+        break;
     }
 
     // if this is the 1st lock request against this store, init and exit

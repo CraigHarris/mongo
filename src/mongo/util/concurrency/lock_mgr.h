@@ -88,7 +88,11 @@ namespace mongo {
             FIRST_COME,
             READERS_FIRST,
             OLDEST_TX_FIRST,
-            BIGGEST_BLOCKER_FIRST
+            BIGGEST_BLOCKER_FIRST,
+            READERS_ONLY,
+            WRITERS_ONLY,
+            SHUTDOWN_QUIESCE,
+            SHUTDOWN
         };
 
         /** 
@@ -206,6 +210,12 @@ namespace mongo {
          */
         LockMgr(const LockingPolicy& policy=FIRST_COME);
         virtual ~LockMgr();
+
+        /**
+         * Change the current policy, typically used to temporarily
+         * block all readers, writers, or any new resource acquisition
+         */
+        virtual void setPolicy(const LockingPolicy& policy);
 
         /**
          * For multi-level resource container hierarchies, the caller can optionally
