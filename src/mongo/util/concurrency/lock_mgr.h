@@ -258,8 +258,8 @@ namespace mongo {
          * be used for any remaining ancestor locking.
          */
         virtual LockId acquire( const TxId& requestor,
-				const std::list<unsigned>& modes,
-				const std::list<ResourceId>& resIdPath,
+				const std::vector<unsigned>& modes,
+				const std::vector<ResourceId>& resIdPath,
 				Notifier* notifier = NULL);
 
         /**
@@ -370,21 +370,12 @@ namespace mongo {
          */
         void addLockToQueueUsingPolicy( LockRequest* lr );
 
-        LockId acquire_locks_on_ancestors( const TxId& requestor,
-                                           const unsigned& mode,
-                                           const ResourceId& container,
-					   Notifier* notifier );
-
         LockId acquire_internal( const TxId& requestor,
 				 const unsigned& mode,
 				 const LockId& containerLid,
 				 const ResourceId& resId,
-				 Notifier* notifier );
-
-        LockId acquire_internal( const TxId& requestor,
-				 const list<unsigned>& modes,
-				 const list<ResourceId>& resIdPath,
-				 Notifier* notifier );
+				 Notifier* notifier,
+                                 boost::unique_lock<boost::mutex>& guard);
 
         /**
          * called by public release and internally by abort.

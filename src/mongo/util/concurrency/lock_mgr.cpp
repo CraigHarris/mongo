@@ -106,6 +106,9 @@ namespace {
 
 /*---------- LockMgr public functions (mutex guarded) ---------*/
 
+unsigned const LockMgr::kShared;
+unsigned const LockMgr::kExclusive;
+
 LockMgr::LockMgr( const LockingPolicy& policy ) : _policy(policy), _guard() { }
 
 LockMgr::~LockMgr( ) {
@@ -149,27 +152,74 @@ LockMgr::LockId LockMgr::acquire( const TxId& requestor,
 
     _stats.incRequests();
 
-    // first, acquire locks on the container hierarchy
-    LockId containerLock = acquire_locks_on_ancestors(requestor, mode>>1, container, notifier);
+    // construct lineage from _containerAncestry
+    vector<ResourceId> lineage(8); // typically < 4 levels: system.database.collection.document?
+    lineage.push_back( resId );
+    lineage.push_back( container );
+    ResourceId nextAncestor = _containerAncestry[container];
+    while (0 != nextAncestor) {
+        lineage.push_back(nextAncestor);
+        nextAncestor = _containerAncestry[nextAncestor];
+    }
 
-    return acquire_internal( requestor, mode, containerLock, resId, notifier );
+    LockId parent = 0;
+    size_t nextAncestorIdx = lineage.size()-1;
+    while (true) {
+        // if modes is shorter than lineage, extend with kShared
+        unsigned nextMode = (nextAncestorIdx < sizeof(unsigned))
+                          ? (mode & (0x1 << nextAncestorIdx)) : LockMgr::kShared;
+        parent = acquire_internal( requestor,
+                                   nextMode,
+                                   parent,
+                                   lineage[nextAncestorIdx],
+                                   notifier,
+                                   guard );
+
+        if (0 == nextAncestorIdx--) break;
+    }
+    return parent;
 }
 
 LockMgr::LockId LockMgr::acquire( const TxId& requestor,
-				  const std::list<unsigned>& modes,
-				  const std::list<ResourceId>& resIdPath,
+				  const std::vector<unsigned>& modes,
+				  const std::vector<ResourceId>& lineage,
 				  Notifier* notifier) {
     unique_lock<boost::mutex> guard(_guard);
-    return acquire_internal( requestor, modes, resIdPath, notifier );
+
+    // don't accept requests from aborted transactions
+    if (_abortedTxIds.find(requestor) != _abortedTxIds.end()) {
+        throw AbortException();
+    }
+
+    _stats.incRequests();
+
+    // loop backwards over lineage, locking ancestors first.
+    LockId parent = 0;
+    size_t nextAncestorIdx = lineage.size()-1;
+    while (true) {
+        // if modes is shorter than lineage, extend with kShared
+        unsigned nextMode = (nextAncestorIdx < modes.size() && !modes.empty())
+                          ?  modes[nextAncestorIdx] : LockMgr::kShared;
+
+        parent = acquire_internal( requestor,
+                                   nextMode,
+                                   parent,
+                                   lineage[nextAncestorIdx],
+                                   notifier,
+                                   guard );
+
+        if (0 == nextAncestorIdx--) break;
+    }
+    return parent;
 }
 
 int LockMgr::acquireOne( const TxId& requestor,
 			 const unsigned& mode,
-			 const ResourceId& store,
-			 const vector<ResourceId>& records,
+			 const ResourceId& container,
+			 const vector<ResourceId>& resources,
 			 Notifier* notifier) {
 
-    if (records.empty()) { return -1; }
+    if (resources.empty()) { return -1; }
 
     unique_lock<boost::mutex> guard(_guard);
 
@@ -180,20 +230,43 @@ int LockMgr::acquireOne( const TxId& requestor,
 
     _stats.incRequests();
 
-    // first, acquire locks on the container hierarchy
-    LockId storeLock = acquire_locks_on_ancestors(requestor, mode>>1, store, notifier);
+    // construct lineage from _containerAncestry
+    vector<ResourceId> lineage(8); // typically < 4 levels: system.database.collection.document?
+    lineage.push_back( container );
+    ResourceId nextAncestor = _containerAncestry[container];
+    while (0 != nextAncestor) {
+        lineage.push_back(nextAncestor);
+        nextAncestor = _containerAncestry[nextAncestor];
+    }
+
+    // acquire locks on container hierarchy, top to bottom
+    LockId parent = 0;
+    size_t nextAncestorIdx = lineage.size()-1;
+    while (true) {
+        // if modes is shorter than lineage, extend with kShared
+        unsigned nextMode = (nextAncestorIdx < sizeof(unsigned))
+                          ? (mode & (0x1 << (nextAncestorIdx+1))) : LockMgr::kShared;
+        parent = acquire_internal( requestor,
+                                   nextMode,
+                                   parent,
+                                   lineage[nextAncestorIdx],
+                                   notifier,
+                                   guard );
+
+        if (0 == nextAncestorIdx--) break;
+    }
 
 
     // acquire the first available recordId
-    for (unsigned ix=0; ix < records.size(); ix++) {
-	if (isAvailable( requestor, mode, store, records[ix] )) {
-	    acquire_internal( requestor, mode, storeLock, records[ix], notifier );
+    for (unsigned ix=0; ix < resources.size(); ix++) {
+	if (isAvailable( requestor, mode, container, resources[ix] )) {
+	    acquire_internal( requestor, mode, parent, resources[ix], notifier, guard );
 	    return ix;
 	}
     }
 
     // sigh. none of the records are currently available. wait on the first.
-    acquire_internal( requestor, mode, storeLock, records[0], notifier );
+    acquire_internal( requestor, mode, parent, resources[0], notifier, guard );
     return 0;
 }
 
@@ -644,21 +717,12 @@ void LockMgr::abort_internal(const TxId& goner) {
     throw AbortException();
 }
 
-LockMgr::LockId LockMgr::acquire_locks_on_ancestors( const TxId& requestor,
-						     const unsigned& mode,
-						     const ResourceId& container,
-						     Notifier* notifier ) {
-    ResourceId parent = _containerAncestry[container];
-    LockId result = acquire_internal( requestor, mode, parent, container, notifier );
-    _locks[result]->parentLid = acquire_locks_on_ancestors( requestor, mode>>1, parent, notifier );
-    return result;
-}
-
 LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
 					   const unsigned& mode,
 					   const ResourceId& store,
 					   const ResourceId& resId,
-					   Notifier* sleepNotifier ) {
+					   Notifier* sleepNotifier,
+                                           unique_lock<boost::mutex>& guard) {
 
     // create the lock request and add to TxId's set of lock requests
     LockRequest* lr = new LockRequest(requestor, mode, resId);
@@ -842,6 +906,8 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
         // add our request to the queue
         addLockToQueueUsingPolicy( lr );
     }
+
+    return lr->lid;
 }
 
 LockMgr::LockStatus LockMgr::release_internal( const LockId& lid ) {
