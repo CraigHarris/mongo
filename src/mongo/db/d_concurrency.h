@@ -59,8 +59,6 @@ namespace mongo {
         static bool atLeastReadLocked(const StringData& ns); // true if this db is locked
         static void assertAtLeastReadLocked(const StringData& ns);
         static void assertWriteLocked(const StringData& ns);
-
-        static bool dbLevelLockingEnabled(); 
         
         static LockStat* globalLockStat();
         static LockStat* nestableLockStat( Nestable db );
@@ -86,19 +84,6 @@ namespace mongo {
             ParallelBatchWriterMode() : _lk(_batchLock) {}
             static void iAmABatchParticipant();
             static RWLockRecursive &_batchLock;
-        };
-
-    private:
-        class ParallelBatchWriterSupport : boost::noncopyable {
-        public:
-            ParallelBatchWriterSupport();
-
-        private:
-            void tempRelease();
-            void relock();
-
-            scoped_ptr<RWLockRecursive::Shared> _lk;
-            friend class ScopedLock;
         };
 
     public:
@@ -128,6 +113,19 @@ namespace mongo {
             virtual void _relock() = 0;
 
         private:
+
+            class ParallelBatchWriterSupport : boost::noncopyable {
+            public:
+                ParallelBatchWriterSupport();
+
+            private:
+                void tempRelease();
+                void relock();
+
+                scoped_ptr<RWLockRecursive::Shared> _lk;
+                friend class ScopedLock;
+            };
+
             ParallelBatchWriterSupport _pbws_lk;
 
             void _recordTime( long long micros );
@@ -177,7 +175,7 @@ namespace mongo {
             void lockTop(LockState&);
             void lockNestable(Nestable db);
             void lockOther(const StringData& db);
-            void lockDB(const string& ns);
+            void lockDB(const std::string& ns);
             void unlockDB();
 
         protected:
@@ -192,7 +190,7 @@ namespace mongo {
             bool _locked_w;
             bool _locked_W;
             WrapperForRWLock *_weLocked;
-            const string _what;
+            const std::string _what;
             bool _nested;
         };
 
@@ -201,7 +199,7 @@ namespace mongo {
             void lockTop(LockState&);
             void lockNestable(Nestable db);
             void lockOther(const StringData& db);
-            void lockDB(const string& ns);
+            void lockDB(const std::string& ns);
             void unlockDB();
 
         protected:
@@ -215,7 +213,7 @@ namespace mongo {
         private:
             bool _locked_r;
             WrapperForRWLock *_weLocked;
-            string _what;
+            std::string _what;
             bool _nested;
             
         };

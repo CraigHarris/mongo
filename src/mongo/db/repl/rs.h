@@ -35,9 +35,7 @@
 #include "mongo/db/commands.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/repl/consensus.h"
-#include "mongo/db/repl/heartbeat_info.h"
 #include "mongo/db/repl/manager.h"
-#include "mongo/db/repl/member.h"
 #include "mongo/db/repl/oplogreader.h"
 #include "mongo/db/repl/repl_set.h"
 #include "mongo/db/repl/repl_set_impl.h"
@@ -65,15 +63,17 @@
  */
 
 namespace mongo {
+namespace replset {
 
     extern bool replSet; // true if using repl sets
     extern class ReplSet *theReplSet; // null until initialized
-    extern int maxSyncSourceLagSecs;
 
     class ReplSetCmdline;
 
     // Main entry point for replica sets
     void startReplSets(ReplSetCmdline *replSetCmdline);
+
+    bool isCurrentlyAReplSetPrimary();
 
     /**
      * does local authentication
@@ -110,4 +110,5 @@ namespace mongo {
         return true;
     }
 
-}
+} // namespace replset
+} // namespace mongo

@@ -34,7 +34,7 @@
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
 #include "mongo/db/storage/record.h"
-#include "mongo/db/storage/transaction.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/db/structure/record_store_v1_repair_iterator.h"
 #include "mongo/util/timer.h"
 #include "mongo/util/touch_pages.h"
@@ -161,7 +161,7 @@ namespace mongo {
 
     }
 
-    DiskLoc RecordStoreV1Base::_findFirstSpot( TransactionExperiment* txn,
+    DiskLoc RecordStoreV1Base::_findFirstSpot( OperationContext* txn,
                                                const DiskLoc& extDiskLoc, Extent* e ) {
         DiskLoc emptyLoc = extDiskLoc;
         emptyLoc.inc( Extent::HeaderSize() );
@@ -175,7 +175,7 @@ namespace mongo {
             ofs = newOfs;
         }
 
-        DeletedRecord* empty = txn->writing(drec(emptyLoc));
+        DeletedRecord* empty = txn->recoveryUnit()->writing(drec(emptyLoc));
         empty->lengthWithHeaders() = delRecLength;
         empty->extentOfs() = e->myLoc.getOfs();
         empty->nextDeleted().Null();
@@ -205,7 +205,7 @@ namespace mongo {
     }
 
 
-    StatusWith<DiskLoc> RecordStoreV1Base::insertRecord( TransactionExperiment* txn,
+    StatusWith<DiskLoc> RecordStoreV1Base::insertRecord( OperationContext* txn,
                                                          const DocWriter* doc,
                                                          int quotaMax ) {
         int docSize = doc->documentSize();
@@ -224,18 +224,20 @@ namespace mongo {
         Record *r = recordFor( loc.getValue() );
         fassert( 17319, r->lengthWithHeaders() >= lenWHdr );
 
-        r = reinterpret_cast<Record*>( txn->writingPtr(r, lenWHdr) );
+        r = reinterpret_cast<Record*>( txn->recoveryUnit()->writingPtr(r, lenWHdr) );
         doc->writeDocument( r->data() );
 
         _addRecordToRecListInExtent(txn, r, loc.getValue());
 
         _details->incrementStats( txn, r->netLength(), 1 );
 
+        _paddingFits( txn );
+
         return loc;
     }
 
 
-    StatusWith<DiskLoc> RecordStoreV1Base::insertRecord( TransactionExperiment* txn,
+    StatusWith<DiskLoc> RecordStoreV1Base::insertRecord( OperationContext* txn,
                                                          const char* data,
                                                          int len,
                                                          int quotaMax ) {
@@ -243,6 +245,18 @@ namespace mongo {
             return StatusWith<DiskLoc>( ErrorCodes::InvalidLength,
                                         "record has to be >= 4 bytes" );
         }
+
+        StatusWith<DiskLoc> status = _insertRecord( txn, data, len, quotaMax );
+        if ( status.isOK() )
+            _paddingFits( txn );
+
+        return status;
+    }
+
+    StatusWith<DiskLoc> RecordStoreV1Base::_insertRecord( OperationContext* txn,
+                                                          const char* data,
+                                                          int len,
+                                                          int quotaMax ) {
 
         int lenWHdr = getRecordAllocationSize( len + Record::HeaderSize );
         fassert( 17208, lenWHdr >= ( len + Record::HeaderSize ) );
@@ -255,7 +269,7 @@ namespace mongo {
         fassert( 17210, r->lengthWithHeaders() >= lenWHdr );
 
         // copy the data
-        r = reinterpret_cast<Record*>( txn->writingPtr(r, lenWHdr) );
+        r = reinterpret_cast<Record*>( txn->recoveryUnit()->writingPtr(r, lenWHdr) );
         memcpy( r->data(), data, len );
 
         _addRecordToRecListInExtent(txn, r, loc.getValue());
@@ -265,7 +279,71 @@ namespace mongo {
         return loc;
     }
 
-    void RecordStoreV1Base::deleteRecord( TransactionExperiment* txn, const DiskLoc& dl ) {
+    StatusWith<DiskLoc> RecordStoreV1Base::updateRecord( OperationContext* txn,
+                                                         const DiskLoc& oldLocation,
+                                                         const char* data,
+                                                         int dataSize,
+                                                         int quotaMax,
+                                                         UpdateMoveNotifier* notifier ) {
+        Record* oldRecord = recordFor( oldLocation );
+        if ( oldRecord->netLength() >= dataSize ) {
+            // we fit
+            _paddingFits( txn );
+            memcpy( txn->recoveryUnit()->writingPtr( oldRecord->data(), dataSize ), data, dataSize );
+            return StatusWith<DiskLoc>( oldLocation );
+        }
+
+        if ( isCapped() )
+            return StatusWith<DiskLoc>( ErrorCodes::InternalError,
+                                        "failing update: objects in a capped ns cannot grow",
+                                        10003 );
+
+        // we have to move
+
+        _paddingTooSmall( txn );
+
+        StatusWith<DiskLoc> newLocation = _insertRecord( txn, data, dataSize, quotaMax );
+        if ( !newLocation.isOK() )
+            return newLocation;
+
+        // insert worked, so we delete old record
+        if ( notifier ) {
+            Status moveStatus = notifier->recordStoreGoingToMove( txn,
+                                                                  oldLocation,
+                                                                  oldRecord->data(),
+                                                                  oldRecord->netLength() );
+            if ( !moveStatus.isOK() )
+                return StatusWith<DiskLoc>( moveStatus );
+        }
+
+        deleteRecord( txn, oldLocation );
+
+        return newLocation;
+    }
+
+
+    Status RecordStoreV1Base::updateWithDamages( OperationContext* txn,
+                                                 const DiskLoc& loc,
+                                                 const char* damangeSource,
+                                                 const mutablebson::DamageVector& damages ) {
+        _paddingFits( txn );
+
+        Record* rec = recordFor( loc );
+        char* root = rec->data();
+
+        // All updates were in place. Apply them via durability and writing pointer.
+        mutablebson::DamageVector::const_iterator where = damages.begin();
+        const mutablebson::DamageVector::const_iterator end = damages.end();
+        for( ; where != end; ++where ) {
+            const char* sourcePtr = damangeSource + where->sourceOffset;
+            void* targetPtr = txn->recoveryUnit()->writingPtr(root + where->targetOffset, where->size);
+            std::memcpy(targetPtr, sourcePtr, where->size);
+        }
+
+        return Status::OK();
+    }
+
+    void RecordStoreV1Base::deleteRecord( OperationContext* txn, const DiskLoc& dl ) {
 
         Record* todelete = recordFor( dl );
         invariant( todelete->netLength() >= 4 ); // this is required for defensive code
@@ -275,26 +353,28 @@ namespace mongo {
             if ( todelete->prevOfs() != DiskLoc::NullOfs ) {
                 DiskLoc prev = getPrevRecordInExtent( dl );
                 Record* prevRecord = recordFor( prev );
-                txn->writingInt( prevRecord->nextOfs() ) = todelete->nextOfs();
+                txn->recoveryUnit()->writingInt( prevRecord->nextOfs() ) = todelete->nextOfs();
             }
 
             if ( todelete->nextOfs() != DiskLoc::NullOfs ) {
                 DiskLoc next = getNextRecord( dl );
                 Record* nextRecord = recordFor( next );
-                txn->writingInt( nextRecord->prevOfs() ) = todelete->prevOfs();
+                txn->recoveryUnit()->writingInt( nextRecord->prevOfs() ) = todelete->prevOfs();
             }
         }
 
         /* remove ourself from extent pointers */
         {
-            Extent *e = txn->writing( _getExtent( _getExtentLocForRecord( dl ) ) );
+            Extent *e =  _getExtent( todelete->myExtentLoc(dl) );
             if ( e->firstRecord == dl ) {
+                txn->recoveryUnit()->writing(&e->firstRecord);
                 if ( todelete->nextOfs() == DiskLoc::NullOfs )
                     e->firstRecord.Null();
                 else
                     e->firstRecord.set(dl.a(), todelete->nextOfs() );
             }
             if ( e->lastRecord == dl ) {
+                txn->recoveryUnit()->writing(&e->lastRecord);
                 if ( todelete->prevOfs() == DiskLoc::NullOfs )
                     e->lastRecord.Null();
                 else
@@ -312,13 +392,13 @@ namespace mongo {
                    to this disk location.  so an incorrectly done remove would cause
                    a lot of problems.
                 */
-                memset( txn->writingPtr(todelete, todelete->lengthWithHeaders() ),
+                memset( txn->recoveryUnit()->writingPtr(todelete, todelete->lengthWithHeaders() ),
                         0, todelete->lengthWithHeaders() );
             }
             else {
                 // this is defensive so we can detect if we are still using a location
                 // that was deleted
-                memset(txn->writingPtr(todelete->data(), 4), 0xee, 4);
+                memset(txn->recoveryUnit()->writingPtr(todelete->data(), 4), 0xee, 4);
                 addDeletedRec(txn, dl);
             }
         }
@@ -329,26 +409,26 @@ namespace mongo {
         return new RecordStoreV1RepairIterator(this);
     }
 
-    void RecordStoreV1Base::_addRecordToRecListInExtent(TransactionExperiment* txn,
+    void RecordStoreV1Base::_addRecordToRecListInExtent(OperationContext* txn,
                                                         Record *r,
                                                         DiskLoc loc) {
         dassert( recordFor(loc) == r );
         Extent *e = _getExtent( _getExtentLocForRecord( loc ) );
         if ( e->lastRecord.isNull() ) {
-            *txn->writing(&e->firstRecord) = loc;
-            *txn->writing(&e->lastRecord) = loc;
+            *txn->recoveryUnit()->writing(&e->firstRecord) = loc;
+            *txn->recoveryUnit()->writing(&e->lastRecord) = loc;
             r->prevOfs() = r->nextOfs() = DiskLoc::NullOfs;
         }
         else {
             Record *oldlast = recordFor(e->lastRecord);
             r->prevOfs() = e->lastRecord.getOfs();
             r->nextOfs() = DiskLoc::NullOfs;
-            txn->writingInt(oldlast->nextOfs()) = loc.getOfs();
-            *txn->writing(&e->lastRecord) = loc;
+            txn->recoveryUnit()->writingInt(oldlast->nextOfs()) = loc.getOfs();
+            *txn->recoveryUnit()->writing(&e->lastRecord) = loc;
         }
     }
 
-    void RecordStoreV1Base::increaseStorageSize( TransactionExperiment* txn,
+    void RecordStoreV1Base::increaseStorageSize( OperationContext* txn,
                                                  int size,
                                                  int quotaMax ) {
         DiskLoc eloc = _extentManager->allocateExtent( txn,
@@ -359,12 +439,12 @@ namespace mongo {
         Extent *e = _extentManager->getExtent( eloc );
         invariant( e );
 
-        *txn->writing( &e->nsDiagnostic ) = _ns;
+        *txn->recoveryUnit()->writing( &e->nsDiagnostic ) = _ns;
 
-        txn->writing( &e->xnext )->Null();
-        txn->writing( &e->xprev )->Null();
-        txn->writing( &e->firstRecord )->Null();
-        txn->writing( &e->lastRecord )->Null();
+        txn->recoveryUnit()->writing( &e->xnext )->Null();
+        txn->recoveryUnit()->writing( &e->xprev )->Null();
+        txn->recoveryUnit()->writing( &e->firstRecord )->Null();
+        txn->recoveryUnit()->writing( &e->lastRecord )->Null();
 
         DiskLoc emptyLoc = _findFirstSpot( txn, eloc, e );
 
@@ -378,8 +458,8 @@ namespace mongo {
         }
         else {
             invariant( !_details->firstExtent().isNull() );
-            *txn->writing(&e->xprev) = _details->lastExtent();
-            *txn->writing(&_extentManager->getExtent(_details->lastExtent())->xnext) = eloc;
+            *txn->recoveryUnit()->writing(&e->xprev) = _details->lastExtent();
+            *txn->recoveryUnit()->writing(&_extentManager->getExtent(_details->lastExtent())->xnext) = eloc;
             _details->setLastExtent( txn, eloc );
         }
 
@@ -388,7 +468,7 @@ namespace mongo {
         addDeletedRec(txn, emptyLoc);
     }
 
-    Status RecordStoreV1Base::validate( TransactionExperiment* txn,
+    Status RecordStoreV1Base::validate( OperationContext* txn,
                                         bool full, bool scanData,
                                         ValidateAdaptor* adaptor,
                                         ValidateResults* results, BSONObjBuilder* output ) const {
@@ -568,12 +648,9 @@ namespace mongo {
                     }
 
                     if ( r->lengthWithHeaders() ==
-                         quantizePowerOf2AllocationSpace( r->lengthWithHeaders() - 1 ) ) {
+                         quantizePowerOf2AllocationSpace( r->lengthWithHeaders() ) ) {
                         // Count the number of records having a size consistent with the
                         // quantizePowerOf2AllocationSpace quantization implementation.
-                        // Because of SERVER-8311, power of 2 quantization is not idempotent and
-                        // r->lengthWithHeaders() - 1 must be checked instead of the record
-                        // length itself.
                         ++nPowerOf2QuantizedSize;
                     }
 
@@ -689,6 +766,18 @@ namespace mongo {
         return Status::OK();
     }
 
+    void RecordStoreV1Base::appendCustomStats( BSONObjBuilder* result, double scale ) const {
+        result->append( "lastExtentSize", _details->lastExtentSize() / scale );
+        result->append( "paddingFactor", _details->paddingFactor() );
+        result->append( "userFlags", _details->userFlags() );
+
+        if ( isCapped() ) {
+            result->appendBool( "capped", true );
+            result->appendNumber( "max", _details->maxCappedDocs() );
+        }
+    }
+
+
     namespace {
         struct touch_location {
             const char* root;
@@ -696,7 +785,7 @@ namespace mongo {
         };
     }
 
-    Status RecordStoreV1Base::touch( TransactionExperiment* txn, BSONObjBuilder* output ) const {
+    Status RecordStoreV1Base::touch( OperationContext* txn, BSONObjBuilder* output ) const {
         Timer t;
 
         // Note: when this class has document level locking, we'll need a lock to get extents
@@ -792,13 +881,18 @@ namespace mongo {
     }
 
     int RecordStoreV1Base::quantizePowerOf2AllocationSpace(int allocSize) {
-        int allocationSize = bucketSizes[ bucket( allocSize ) ];
-        if ( allocationSize == bucketSizes[MaxBucket] ) {
-            // if we get here, it means we're allocating more than 4mb, so round
-            // to the nearest megabyte
-            allocationSize = 1 + ( allocSize | ( ( 1 << 20 ) - 1 ) );
+        for ( int i = 0; i < MaxBucket; i++ ) { // skips the largest (16MB) bucket
+            if ( bucketSizes[i] >= allocSize ) {
+                // Return the size of the first bucket sized >= the requested size.
+                return bucketSizes[i];
+            }
         }
-        return allocationSize;
+
+        // if we get here, it means we're allocating more than 4mb, so round up
+        // to the nearest megabyte >= allocSize
+        const int MB = 1024*1024;
+        invariant(allocSize > 4*MB);
+        return (allocSize + (MB - 1)) & ~(MB - 1); // round up to MB alignment
     }
 
     int RecordStoreV1Base::bucket(int size) {
@@ -811,4 +905,51 @@ namespace mongo {
         return MaxBucket;
     }
 
+    void RecordStoreV1Base::_paddingFits( OperationContext* txn ) {
+        MONGO_SOMETIMES(sometimes, 4) { // do this on a sampled basis to journal less
+            double x = max(1.0, _details->paddingFactor() - 0.001 );
+            _details->setPaddingFactor( txn, x );
+        }
+    }
+
+    void RecordStoreV1Base::_paddingTooSmall( OperationContext* txn ) {
+        MONGO_SOMETIMES(sometimes, 4) { // do this on a sampled basis to journal less
+            /* the more indexes we have, the higher the cost of a move.  so we take that into
+               account herein.  note on a move that insert() calls paddingFits(), thus
+               here for example with no inserts and nIndexes = 1 we have
+               .001*4-.001 or a 3:1 ratio to non moves -> 75% nonmoves.  insert heavy
+               can pushes this down considerably. further tweaking will be a good idea but
+               this should be an adequate starting point.
+            */
+            double N = 4; // magic
+            double x = min(2.0,_details->paddingFactor() + (0.001 * N));
+            _details->setPaddingFactor( txn, x );
+        }
+    }
+
+    Status RecordStoreV1Base::setCustomOption( OperationContext* txn,
+                                               const BSONElement& option,
+                                               BSONObjBuilder* info ) {
+        if ( str::equals( "usePowerOf2Sizes", option.fieldName() ) ) {
+            bool oldPowerOf2 = _details->isUserFlagSet( Flag_UsePowerOf2Sizes );
+            bool newPowerOf2 = option.trueValue();
+
+            if ( oldPowerOf2 != newPowerOf2 ) {
+                // change userFlags
+                info->appendBool( "usePowerOf2Sizes_old", oldPowerOf2 );
+
+                if ( newPowerOf2 )
+                    _details->setUserFlag( txn, Flag_UsePowerOf2Sizes );
+                else
+                    _details->clearUserFlag( txn, Flag_UsePowerOf2Sizes );
+
+                info->appendBool( "usePowerOf2Sizes_new", newPowerOf2 );
+            }
+
+            return Status::OK();
+        }
+
+        return Status( ErrorCodes::InvalidOptions,
+                       str::stream() << "no such option: " << option.fieldName() );
+    }
 }

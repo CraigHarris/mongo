@@ -34,7 +34,6 @@
 
 #include "mongo/db/client.h"
 #include "mongo/db/storage/mmap_v1/dur_stats.h"
-#include "mongo/db/taskqueue.h"
 #include "mongo/util/concurrency/threadlocal.h"
 #include "mongo/util/stacktrace.h"
 
@@ -140,7 +139,6 @@ namespace mongo {
         /** we batch up our write intents so that we do not have to synchronize too often */
         void DurableImpl::declareWriteIntent(void *p, unsigned len) {
             dassert( Lock::somethingWriteLocked() );
-            cc().writeHappened();
             MemoryMappedFile::makeWritable(p, len);
             ThreadLocalIntents *t = tlIntents.getMake();
             t->push(WriteIntent(p,len));
@@ -187,7 +185,6 @@ namespace mongo {
             dassert(storageGlobalParams.dur);
             // DurOp's are rare so it is ok to have the lock cost here
             SimpleMutex::scoped_lock lk(groupCommitMutex);
-            cc().writeHappened();
             _hasWritten = true;
             _intentsAndDurOps._durOps.push_back(p);
         }

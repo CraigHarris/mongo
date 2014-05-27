@@ -68,7 +68,7 @@ namespace mongo {
             out->push_back(Privilege(parseResourcePattern(dbname, cmdObj), actions));
         }
 
-        bool run(const string& dbname, BSONObj& cmdObj, int,
+        bool run(OperationContext* txn, const string& dbname, BSONObj& cmdObj, int,
                  string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             const string ns = dbname + "." + cmdObj.firstElement().valuestr();
             Client::ReadContext ctx(ns);
@@ -111,7 +111,7 @@ namespace mongo {
             IndexDescriptor* desc = idxs[0];
             HaystackAccessMethod* ham =
                 static_cast<HaystackAccessMethod*>( collection->getIndexCatalog()->getIndex(desc) );
-            ham->searchCommand(nearElt.Obj(), maxDistance.numberDouble(), search.Obj(),
+            ham->searchCommand(collection, nearElt.Obj(), maxDistance.numberDouble(), search.Obj(),
                                &result, limit);
             return 1;
         }

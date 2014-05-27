@@ -65,7 +65,7 @@
 #include "mongo/db/repl/rs.h"
 #include "mongo/db/repl/rs_config.h"
 #include "mongo/db/repl/write_concern.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/logger/ramlog.h"
 #include "mongo/s/chunk.h"
 #include "mongo/s/chunk_version.h"
@@ -640,7 +640,7 @@ namespace mongo {
             virtual void saveState() {
                 invariant( false );
             }
-            virtual bool restoreState() {
+            virtual bool restoreState(OperationContext* opCtx) {
                 invariant( false );
             }
             virtual const string& ns() {
@@ -711,7 +711,7 @@ namespace mongo {
             actions.addAction(ActionType::internal);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             return migrateFromStatus.transferMods( errmsg, result );
         }
     } transferModsCommand;
@@ -728,7 +728,7 @@ namespace mongo {
             actions.addAction(ActionType::internal);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             return migrateFromStatus.clone( errmsg, result );
         }
     } initialCloneCommand;
@@ -771,7 +771,7 @@ namespace mongo {
             return parseNsFullyQualified(dbname, cmdObj);
         }
 
-        bool run(const string& dbname, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& dbname, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             // 1. parse options
             // 2. make sure my view is complete and lock
             // 3. start migrate
@@ -805,15 +805,15 @@ namespace mongo {
             // if we do a w=2 after every write
             bool secondaryThrottle = cmdObj["secondaryThrottle"].trueValue();
             if ( secondaryThrottle ) {
-                if ( theReplSet ) {
-                    if ( theReplSet->config().getMajority() <= 1 ) {
+                if (replset::theReplSet) {
+                    if (replset::theReplSet->config().getMajority() <= 1) {
                         secondaryThrottle = false;
                         warning() << "not enough nodes in set to use secondaryThrottle: "
-                                  << " majority: " << theReplSet->config().getMajority()
+                                  << " majority: " << replset::theReplSet->config().getMajority()
                                   << endl;
                     }
                 }
-                else if ( !anyReplEnabled() ) {
+                else if (!replset::anyReplEnabled() ) {
                     secondaryThrottle = false;
                     warning() << "secondaryThrottle selected but no replication" << endl;
                 }
@@ -1155,7 +1155,7 @@ namespace mongo {
                     return false;
                 }
 
-                killCurrentOp.checkForInterrupt();
+                txn->checkForInterrupt();
             }
             timing.done(4);
             MONGO_FP_PAUSE_WHILE(moveChunkHangAtStep4);
@@ -1486,7 +1486,8 @@ namespace mongo {
                 string errMsg;
                 // This is an immediate delete, and as a consequence, there could be more
                 // deletes happening simultaneously than there are deleter worker threads.
-                if (!deleter->deleteNow(ns,
+                if (!deleter->deleteNow(txn,
+                                        ns,
                                         min.getOwned(),
                                         max.getOwned(),
                                         shardKeyPattern.getOwned(),
@@ -1499,7 +1500,8 @@ namespace mongo {
                 log() << "forking for cleanup of chunk data" << migrateLog;
 
                 string errMsg;
-                if (!deleter->queueDelete(ns,
+                if (!deleter->queueDelete(OperationContextImpl::factory,
+                                          ns,
                                           min.getOwned(),
                                           max.getOwned(),
                                           shardKeyPattern.getOwned(),
@@ -1567,9 +1569,9 @@ namespace mongo {
             active = true;
         }
 
-        void go() {
+        void go(OperationContext* txn) {
             try {
-                _go();
+                _go(txn);
             }
             catch ( std::exception& e ) {
                 state = FAIL;
@@ -1594,13 +1596,14 @@ namespace mongo {
             setActive( false );
         }
 
-        void _go() {
+        void _go(OperationContext* txn) {
             verify( getActive() );
             verify( state == READY );
             verify( ! min.isEmpty() );
             verify( ! max.isEmpty() );
             
-            replSetMajorityCount = theReplSet ? theReplSet->config().getMajority() : 0;
+            replSetMajorityCount = replset::theReplSet ?
+                                        replset::theReplSet->config().getMajority() : 0;
 
             log() << "starting receiving-end of migration of chunk " << min << " -> " << max <<
                     " for collection " << ns << " from " << from
@@ -1615,7 +1618,6 @@ namespace mongo {
             {
                 // 0. copy system.namespaces entry if collection doesn't already exist
                 Client::WriteContext ctx( ns );
-                DurTransaction txn;
                 // Only copy if ns doesn't already exist
                 Database* db = ctx.ctx().db();
                 Collection* collection = db->getCollection( ns );
@@ -1624,14 +1626,14 @@ namespace mongo {
                     string system_namespaces = nsToDatabase(ns) + ".system.namespaces";
                     BSONObj entry = conn->findOne( system_namespaces, BSON( "name" << ns ) );
                     if ( entry["options"].isABSONObj() ) {
-                        Status status = userCreateNS( &txn, db, ns, entry["options"].Obj(), true, 0 );
+                        Status status = userCreateNS( txn, db, ns, entry["options"].Obj(), true, 0 );
                         if ( !status.isOK() ) {
                             warning() << "failed to create collection [" << ns << "] "
                                       << " with options: " << status;
                         }
                     }
                     else {
-                        db->createCollection( &txn, ns );
+                        db->createCollection( txn, ns );
                     }
                 }
             }
@@ -1651,9 +1653,8 @@ namespace mongo {
                 for ( unsigned i=0; i<all.size(); i++ ) {
                     BSONObj idx = all[i];
                     Client::WriteContext ctx( ns );
-                    DurTransaction txn;
                     Database* db = ctx.ctx().db();
-                    Collection* collection = db->getCollection( &txn, ns );
+                    Collection* collection = db->getCollection( txn, ns );
                     if ( !collection ) {
                         errmsg = str::stream() << "collection dropped during migration: " << ns;
                         warning() << errmsg;
@@ -1661,7 +1662,7 @@ namespace mongo {
                         return;
                     }
 
-                    Status status = collection->getIndexCatalog()->createIndex(&txn, idx, false);
+                    Status status = collection->getIndexCatalog()->createIndex(txn, idx, false);
                     if ( !status.isOK() && status.code() != ErrorCodes::IndexAlreadyExists ) {
                         errmsg = str::stream() << "failed to create index before migrating data. "
                                                << " idx: " << idx
@@ -1672,8 +1673,8 @@ namespace mongo {
                     }
 
                     // make sure to create index on secondaries as well
-                    logOp( &txn, "i", db->getSystemIndexesName().c_str(), idx,
-                           NULL, NULL, true /* fromMigrate */ );
+                    replset::logOp(txn, "i", db->getSystemIndexesName().c_str(), idx,
+                                   NULL, NULL, true /* fromMigrate */);
                 }
 
                 timing.done(1);
@@ -1684,7 +1685,8 @@ namespace mongo {
                 // 2. delete any data already in range
                 Helpers::RemoveSaver rs( "moveChunk" , ns , "preCleanup" );
                 KeyRange range( ns, min, max, shardKeyPattern );
-                long long num = Helpers::removeRange( range,
+                long long num = Helpers::removeRange( txn,
+                                                      range,
                                                       false, /*maxInclusive*/
                                                       secondaryThrottle, /* secondaryThrottle */
                                                       /*callback*/
@@ -1717,7 +1719,8 @@ namespace mongo {
 
             if (state == FAIL || state == ABORT) {
                 string errMsg;
-                if (!getDeleter()->queueDelete(ns, min, max, shardKeyPattern, secondaryThrottle,
+                if (!getDeleter()->queueDelete(OperationContextImpl::factory, // XXX SERVER-13931
+                                               ns, min, max, shardKeyPattern, secondaryThrottle,
                                                NULL /* notifier */, &errMsg)) {
                     warning() << "Failed to queue delete for migrate abort: " << errMsg << endl;
                 }
@@ -1746,7 +1749,6 @@ namespace mongo {
                         BSONObj o = i.next().Obj();
                         {
                             Client::WriteContext cx( ns );
-                            DurTransaction txn;
 
                             BSONObj localDoc;
                             if ( willOverrideLocalId( cx.ctx().db(), o, &localDoc ) ) {
@@ -1762,14 +1764,15 @@ namespace mongo {
                                 uasserted( 16976, errMsg );
                             }
 
-                            Helpers::upsert( &txn, ns, o, true );
+                            Helpers::upsert( txn, ns, o, true );
                         }
                         thisTime++;
                         numCloned++;
                         clonedBytes += o.objsize();
 
                         if ( secondaryThrottle && thisTime > 0 ) {
-                            if ( ! waitForReplication( cc().getLastOp(), 2, 60 /* seconds to wait */ ) ) {
+                            if (!replset::waitForReplication(cc().getLastOp(),
+                                                             2, 60 /* seconds to wait */)) {
                                 warning() << "secondaryThrottle on, but doc insert timed out after 60 seconds, continuing" << endl;
                             }
                         }
@@ -1802,7 +1805,7 @@ namespace mongo {
                     if ( res["size"].number() == 0 )
                         break;
 
-                    apply( res , &lastOpApplied );
+                    apply( txn, res , &lastOpApplied );
                     
                     const int maxIterations = 3600*50;
                     int i;
@@ -1812,7 +1815,7 @@ namespace mongo {
                             return;
                         }
                         
-                        if ( opReplicatedEnough( lastOpApplied ) )
+                        if (opReplicatedEnough(lastOpApplied))
                             break;
                         
                         if ( i > 100 ) {
@@ -1870,7 +1873,7 @@ namespace mongo {
                         return;
                     }
 
-                    if ( res["size"].number() > 0 && apply( res , &lastOpApplied ) )
+                    if ( res["size"].number() > 0 && apply( txn, res , &lastOpApplied ) )
                         continue;
 
                     if ( state == ABORT ) {
@@ -1927,7 +1930,7 @@ namespace mongo {
 
         }
 
-        bool apply( const BSONObj& xfer , ReplTime* lastOpApplied ) {
+        bool apply( OperationContext* txn, const BSONObj& xfer , ReplTime* lastOpApplied ) {
             ReplTime dummy;
             if ( lastOpApplied == NULL ) {
                 lastOpApplied = &dummy;
@@ -1960,7 +1963,8 @@ namespace mongo {
 
                     // TODO: create a better interface to remove objects directly
                     KeyRange range( ns, id, id, idIndexPattern );
-                    Helpers::removeRange( range ,
+                    Helpers::removeRange( txn,
+                                          range ,
                                           true , /*maxInclusive*/
                                           false , /* secondaryThrottle */
                                           serverGlobalParams.moveParanoia ? &rs : 0 , /*callback*/
@@ -1975,7 +1979,6 @@ namespace mongo {
                 BSONObjIterator i( xfer["reload"].Obj() );
                 while ( i.more() ) {
                     Client::WriteContext cx(ns);
-                    DurTransaction txn;
 
                     BSONObj it = i.next().Obj();
 
@@ -1994,7 +1997,7 @@ namespace mongo {
                     }
 
                     // We are in write lock here, so sure we aren't killing
-                    Helpers::upsert( &txn, ns , it , true );
+                    Helpers::upsert( txn, ns , it , true );
 
                     *lastOpApplied = cx.ctx().getClient()->getLastOp().asDate();
                     didAnything = true;
@@ -2024,7 +2027,7 @@ namespace mongo {
             // if replication is on, try to force enough secondaries to catch up
             // TODO opReplicatedEnough should eventually honor priorities and geo-awareness
             //      for now, we try to replicate to a sensible number of secondaries
-            return mongo::opReplicatedEnough( lastOpApplied , replSetMajorityCount );
+            return replset::opReplicatedEnough(lastOpApplied, replSetMajorityCount);
         }
 
         bool flushPendingWrites( const ReplTime& lastOpApplied ) {
@@ -2133,11 +2136,12 @@ namespace mongo {
 
     void migrateThread() {
         Client::initThread( "migrateThread" );
+        OperationContextImpl txn;
         if (getGlobalAuthorizationManager()->isAuthEnabled()) {
             ShardedConnectionInfo::addHook();
             cc().getAuthorizationSession()->grantInternalAuthorization();
         }
-        migrateStatus.go();
+        migrateStatus.go(&txn);
         cc().shutdown();
     }
 
@@ -2154,7 +2158,7 @@ namespace mongo {
             actions.addAction(ActionType::internal);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
 
             // Active state of TO-side migrations (MigrateStatus) is serialized by distributed
             // collection lock.
@@ -2226,7 +2230,7 @@ namespace mongo {
                 migrateStatus.shardKeyPattern = keya.getOwned();
             }
 
-            if ( migrateStatus.secondaryThrottle && ! anyReplEnabled() ) {
+            if (migrateStatus.secondaryThrottle && ! replset::anyReplEnabled()) {
                 warning() << "secondaryThrottle asked for, but not replication" << endl;
                 migrateStatus.secondaryThrottle = false;
             }
@@ -2253,7 +2257,7 @@ namespace mongo {
             actions.addAction(ActionType::internal);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             migrateStatus.status( result );
             return 1;
         }
@@ -2271,7 +2275,7 @@ namespace mongo {
             actions.addAction(ActionType::internal);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             bool ok = migrateStatus.startCommit();
             migrateStatus.status( result );
             return ok;
@@ -2290,7 +2294,7 @@ namespace mongo {
             actions.addAction(ActionType::internal);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             migrateStatus.abort();
             migrateStatus.status( result );
             return true;

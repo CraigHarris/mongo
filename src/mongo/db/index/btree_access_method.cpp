@@ -40,8 +40,8 @@
 namespace mongo {
 
     // Standard Btree implementation below.
-    BtreeAccessMethod::BtreeAccessMethod(IndexCatalogEntry* btreeState)
-        : BtreeBasedAccessMethod(btreeState) {
+    BtreeAccessMethod::BtreeAccessMethod(IndexCatalogEntry* btreeState, RecordStore* rs )
+        : BtreeBasedAccessMethod(btreeState, rs) {
 
         // The key generation wants these values.
         vector<const char*> fieldNames;
@@ -66,10 +66,7 @@ namespace mongo {
     }
 
     void BtreeAccessMethod::getKeys(const BSONObj& obj, BSONObjSet* keys) {
-        Status s = _keyGenerator->getKeys(obj, keys);
-        if (!s.isOK()) {
-            uasserted(17485, s.toString());
-        }
+        _keyGenerator->getKeys(obj, keys);
     }
 
 }  // namespace mongo

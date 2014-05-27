@@ -45,6 +45,7 @@
 #include "mongo/s/write_ops/batched_command_request.h"
 
 namespace mongo {
+namespace replset {
 
 
     // our config from command line etc.
@@ -188,7 +189,7 @@ namespace mongo {
                                            const BSONObj& cmdObj,
                                            std::vector<Privilege>* out) {} // No auth required
         CmdIsMaster() : Command("isMaster", true, "ismaster") { }
-        virtual bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool /*fromRepl*/) {
+        virtual bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool /*fromRepl*/) {
             /* currently request to arbiter is (somewhat arbitrarily) an ismaster request that is not
                authenticated.
             */
@@ -209,4 +210,5 @@ namespace mongo {
 
     OpCounterServerStatusSection replOpCounterServerStatusSection( "opcountersRepl", &replOpCounters );
 
-}
+} // namespace replset
+} // namespace mongo

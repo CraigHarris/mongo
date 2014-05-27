@@ -45,11 +45,13 @@
 namespace mongo {
 
     class Database;
-    class TransactionExperiment;
+    class OperationContext;
 
-    void dropDatabase(TransactionExperiment* txn, Database* db);
+    void dropDatabase(OperationContext* txn, Database* db);
 
-    Status userCreateNS( TransactionExperiment* txn,
+    void dropAllDatabasesExceptLocal();
+
+    Status userCreateNS( OperationContext* txn,
                          Database* db,
                          const StringData& ns,
                          BSONObj options,

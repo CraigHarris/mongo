@@ -78,7 +78,7 @@ function doQueryOn(p) {
     }
     catch(e) {
         if (typeof(JSON) != "undefined") {
-            err = JSON.parse(e.substring(6));
+            err = JSON.parse(e.message.substring(6));
         }
         else if (e.indexOf("13") > 0) {
             err.code = 13;
@@ -134,19 +134,18 @@ wait(function() {
 
 print("add some more data 1");
 master.auth("bar", "baz");
+bulk = master.foo.initializeUnorderedBulkOp();
 for (var i=0; i<1000; i++) {
-    master.foo.insert({x:i, foo : "bar"});
+    bulk.insert({ x: i, foo: "bar" });
 }
-var result = master.runCommand({getlasterror:1, w:2, wtimeout:60000});
-printjson(result);
-
+assert.writeOK(bulk.execute({ w: 2 }));
 
 print("resync");
 rs.restart(0, {"keyFile" : path+"key1"});
 
 
 print("add some more data 2");
-var bulk = master.foo.initializeUnorderedBulkOp();
+bulk = master.foo.initializeUnorderedBulkOp();
 for (var i=0; i<1000; i++) {
     bulk.insert({ x: i, foo: "bar" });
 }

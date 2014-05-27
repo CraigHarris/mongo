@@ -33,12 +33,38 @@
 #include "mongo/util/fail_point_service.h"
 
 namespace mongo {
+namespace replset {
 
-    long long HeartbeatInfo::timeDown() const {
-        if( up() ) return 0;
-        if( downSince == 0 )
-            return 0; // still waiting on first heartbeat
-        return jsTime() - downSince;
+    unsigned int HeartbeatInfo::numPings;
+
+    HeartbeatInfo::HeartbeatInfo() : 
+        hbstate(MemberState::RS_UNKNOWN), 
+        health(-1.0), 
+        upSince(0),
+        downSince(0), 
+        lastHeartbeat(0),
+        lastHeartbeatRecv(0),
+        skew(INT_MIN), 
+        authIssue(false), 
+        ping(0), 
+        _id(0xffffffff) { 
+    }
+
+    HeartbeatInfo::HeartbeatInfo(unsigned id) :
+        hbstate(MemberState::RS_UNKNOWN),
+        health(-1.0),
+        upSince(0),
+        downSince(0),
+        lastHeartbeat(0),
+        lastHeartbeatRecv(0),
+        skew(INT_MIN),
+        authIssue(false),
+        ping(0),
+        _id(id) {
+    }
+
+    bool HeartbeatInfo::changed(const HeartbeatInfo& old) const {
+        return health != old.health || hbstate != old.hbstate;
     }
 
     void HeartbeatInfo::updateFromLastPoll(const HeartbeatInfo& newInfo) {
@@ -59,4 +85,5 @@ namespace mongo {
     }
 
 
+} // namespace replset
 } // namespace mongo

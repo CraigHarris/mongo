@@ -51,7 +51,7 @@
 #include "mongo/db/query/query_planner.h"
 #include "mongo/db/repl/oplog.h"
 #include "mongo/db/repl/write_concern.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/db/storage_options.h"
 #include "mongo/db/catalog/collection.h"
 #include "mongo/s/d_logic.h"
@@ -60,7 +60,7 @@ namespace mongo {
 
     const BSONObj reverseNaturalObj = BSON( "$natural" << -1 );
 
-    void Helpers::ensureIndex(TransactionExperiment* txn,
+    void Helpers::ensureIndex(OperationContext* txn,
                               Collection* collection,
                               BSONObj keyPattern,
                               bool unique,
@@ -221,7 +221,7 @@ namespace mongo {
         return Runner::RUNNER_ADVANCED == state;
     }
 
-    void Helpers::upsert( TransactionExperiment* txn,
+    void Helpers::upsert( OperationContext* txn,
                           const string& ns,
                           const BSONObj& o,
                           bool fromMigrate ) {
@@ -246,7 +246,7 @@ namespace mongo {
         update(txn, context.db(), request, &debug);
     }
 
-    void Helpers::putSingleton(TransactionExperiment* txn, const char *ns, BSONObj obj) {
+    void Helpers::putSingleton(OperationContext* txn, const char *ns, BSONObj obj) {
         OpDebug debug;
         Client::Context context(ns);
 
@@ -264,7 +264,7 @@ namespace mongo {
         context.getClient()->curop()->done();
     }
 
-    void Helpers::putSingletonGod(TransactionExperiment* txn, const char *ns, BSONObj obj, bool logTheOp) {
+    void Helpers::putSingletonGod(OperationContext* txn, const char *ns, BSONObj obj, bool logTheOp) {
         OpDebug debug;
         Client::Context context(ns);
 
@@ -318,7 +318,8 @@ namespace mongo {
         return true;
     }
 
-    long long Helpers::removeRange( const KeyRange& range,
+    long long Helpers::removeRange( OperationContext* txn,
+                                    const KeyRange& range,
                                     bool maxInclusive,
                                     bool secondaryThrottle,
                                     RemoveSaver* callback,
@@ -366,8 +367,7 @@ namespace mongo {
             // Scoping for write lock.
             {
                 Client::WriteContext ctx(ns);
-                DurTransaction txn;
-                Collection* collection = ctx.ctx().db()->getCollection( &txn, ns );
+                Collection* collection = ctx.ctx().db()->getCollection( txn, ns );
                 if ( !collection )
                     break;
 
@@ -437,15 +437,17 @@ namespace mongo {
                 if ( callback )
                     callback->goingToDelete( obj );
 
-                logOp(&txn, "d", ns.c_str(), obj["_id"].wrap(), 0, 0, fromMigrate);
-                collection->deleteDocument( &txn, rloc );
+                BSONObj deletedId;
+                collection->deleteDocument( txn, rloc, false, false, &deletedId );
+                // The above throws on failure, and so is not logged
+                replset::logOp(txn, "d", ns.c_str(), deletedId, 0, 0, fromMigrate);
                 numDeleted++;
             }
 
             Timer secondaryThrottleTime;
 
             if ( secondaryThrottle && numDeleted > 0 ) {
-                if ( ! waitForReplication( c.getLastOp(), 2, 60 /* seconds to wait */ ) ) {
+                if (!replset::waitForReplication(c.getLastOp(), 2, 60 /* seconds to wait */)) {
                     warning() << "replication to secondaries for removeRange at least 60 seconds behind" << endl;
                 }
                 millisWaitingForReplication += secondaryThrottleTime.millis();
@@ -555,7 +557,7 @@ namespace mongo {
     }
 
 
-    void Helpers::emptyCollection(TransactionExperiment* txn, const char *ns) {
+    void Helpers::emptyCollection(OperationContext* txn, const char *ns) {
         Client::Context context(ns);
         deleteObjects(txn, context.db(), ns, BSONObj(), false);
     }

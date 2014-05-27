@@ -39,6 +39,8 @@
 #include "mongo/db/auth/auth_index_d.h"
 #include "mongo/db/background.h"
 #include "mongo/db/clientcursor.h"
+#include "mongo/db/catalog/collection_catalog_entry.h"
+#include "mongo/db/catalog/collection_options.h"
 #include "mongo/db/catalog/database_holder.h"
 #include "mongo/db/dbhelpers.h"
 #include "mongo/db/structure/catalog/index_details.h"
@@ -51,100 +53,14 @@
 #include "mongo/db/storage/data_file.h"
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
+#include "mongo/db/storage/mmap_v1/mmap_v1_engine.h"
 #include "mongo/db/storage/mmap_v1/mmap_v1_extent_manager.h"
 #include "mongo/db/storage_options.h"
 #include "mongo/db/structure/catalog/namespace_details.h"
 #include "mongo/db/catalog/collection.h"
 
 namespace mongo {
-
-    MONGO_EXPORT_SERVER_PARAMETER(newCollectionsUsePowerOf2Sizes, bool, true);
-
-    Status CollectionOptions::parse( const BSONObj& options ) {
-        reset();
-
-        BSONObjIterator i( options );
-        while ( i.more() ) {
-            BSONElement e = i.next();
-            StringData fieldName = e.fieldName();
-
-            if ( fieldName == "capped" ) {
-                capped = e.trueValue();
-            }
-            else if ( fieldName == "size" ) {
-                if ( !e.isNumber() )
-                    return Status( ErrorCodes::BadValue, "size has to be a number" );
-                cappedSize = e.numberLong();
-                if ( cappedSize < 0 )
-                    return Status( ErrorCodes::BadValue, "size has to be >= 0" );
-                cappedSize += 0xff;
-                cappedSize &= 0xffffffffffffff00LL;
-            }
-            else if ( fieldName == "max" ) {
-                if ( !e.isNumber() )
-                    return Status( ErrorCodes::BadValue, "max has to be a number" );
-                cappedMaxDocs = e.numberLong();
-                if ( !NamespaceDetails::validMaxCappedDocs( &cappedMaxDocs ) )
-                    return Status( ErrorCodes::BadValue,
-                                   "max in a capped collection has to be < 2^31 or not set" );
-            }
-            else if ( fieldName == "$nExtents" ) {
-                if ( e.type() == Array ) {
-                    BSONObjIterator j( e.Obj() );
-                    while ( j.more() ) {
-                        BSONElement inner = j.next();
-                        initialExtentSizes.push_back( inner.numberInt() );
-                    }
-                }
-                else {
-                    initialNumExtents = e.numberLong();
-                }
-            }
-            else if ( fieldName == "autoIndexId" ) {
-                if ( e.trueValue() )
-                    autoIndexId = YES;
-                else
-                    autoIndexId = NO;
-            }
-            else if ( fieldName == "flags" ) {
-                flags = e.numberInt();
-                flagsSet = true;
-            }
-            else if ( fieldName == "temp" ) {
-                temp = e.trueValue();
-            }
-        }
-
-        return Status::OK();
-    }
-
-    BSONObj CollectionOptions::toBSON() const {
-        BSONObjBuilder b;
-        if ( capped ) {
-            b.appendBool( "capped", true );
-            if ( cappedSize )
-                b.appendNumber( "size", cappedSize );
-            if ( cappedMaxDocs )
-                b.appendNumber( "max", cappedMaxDocs );
-        }
-
-        if ( initialNumExtents )
-            b.appendNumber( "$nExtents", initialNumExtents );
-        if ( !initialExtentSizes.empty() )
-            b.append( "$nExtents", initialExtentSizes );
-
-        if ( autoIndexId != DEFAULT )
-            b.appendBool( "autoIndexId", autoIndexId == YES );
-
-        if ( flagsSet )
-            b.append( "flags", flags );
-
-        if ( temp )
-            b.appendBool( "temp", true );
-
-        return b.obj();
-    }
 
     void massertNamespaceNotIndex( const StringData& ns, const StringData& caller ) {
         massert( 17320,
@@ -155,7 +71,6 @@ namespace mongo {
 
     Database::~Database() {
         verify( Lock::isW() );
-        _magic = 0;
 
         for ( CollectionMap::const_iterator i = _collections.begin(); i != _collections.end(); ++i )
             delete i->second;
@@ -196,10 +111,9 @@ namespace mongo {
         return Status::OK();
     }
 
-    Database::Database(TransactionExperiment* txn, const char *nm, bool& newDb, const string& path )
+    Database::Database(OperationContext* txn, const char *nm, bool& newDb, const string& path )
         : _name(nm), _path(path),
-          _namespaceIndex( _path, _name ),
-          _extentManager(new MmapV1ExtentManager(_name, _path, storageGlobalParams.directoryperdb)),
+          _dbEntry(new MMAP1DatabaseCatalogEntry( txn, _name, _path, storageGlobalParams.directoryperdb) ),
           _profileName(_name + ".system.profile"),
           _namespacesName(_name + ".system.namespaces"),
           _indexesName(_name + ".system.indexes"),
@@ -211,54 +125,10 @@ namespace mongo {
             uasserted( 10028, status.toString() );
         }
 
-        try {
-            newDb = _namespaceIndex.exists();
-            _profile = serverGlobalParams.defaultProfile;
-            checkDuplicateUncasedNames(true);
-
-            // If already exists, open.  Otherwise behave as if empty until
-            // there's a write, then open.
-            if (!newDb) {
-                _namespaceIndex.init( txn );
-                openAllFiles(txn);
-
-                // upgrade freelist
-                string oldFreeList = _name + ".$freelist";
-                NamespaceDetails* details = _namespaceIndex.details( oldFreeList );
-                if ( details ) {
-                    if ( !details->firstExtent().isNull() ) {
-                        _extentManager->freeExtents(txn,
-                                                    details->firstExtent(),
-                                                    details->lastExtent());
-                    }
-                    _namespaceIndex.kill_ns( txn, oldFreeList );
-                }
-            }
-            _magic = 781231;
-        }
-        catch(std::exception& e) {
-            log() << "warning database " << path << " " << nm << " could not be opened" << endl;
-            DBException* dbe = dynamic_cast<DBException*>(&e);
-            if ( dbe != 0 ) {
-                log() << "DBException " << dbe->getCode() << ": " << e.what() << endl;
-            }
-            else {
-                log() << e.what() << endl;
-            }
-            _extentManager.reset();
-            throw;
-        }
+        _profile = serverGlobalParams.defaultProfile;
+        newDb = !_dbEntry->exists();
     }
 
-    void Database::checkDuplicateUncasedNames(bool inholderlock) const {
-        string duplicate = duplicateUncasedName(inholderlock, _name, _path );
-        if ( !duplicate.empty() ) {
-            stringstream ss;
-            ss << "db already exists with different case already have: [" << duplicate
-               << "] trying to create [" << _name << "]";
-            uasserted( DatabaseDifferCaseCode , ss.str() );
-        }
-    }
 
     /*static*/
     string Database::duplicateUncasedName( bool inholderlock, const string &name, const string &path, set< string > *duplicates ) {
@@ -296,18 +166,7 @@ namespace mongo {
         return "";
     }
 
-    // todo : we stop once a datafile dne.
-    //        if one datafile were missing we should keep going for
-    //        repair purposes yet we do not.
-    void Database::openAllFiles(TransactionExperiment* txn) {
-        verify(this);
-        Status s = _extentManager->init(txn);
-        if ( !s.isOK() ) {
-            msgasserted( 16966, str::stream() << "_extentManager.init failed: " << s.toString() );
-        }
-    }
-
-    void Database::clearTmpCollections(TransactionExperiment* txn) {
+    void Database::clearTmpCollections(OperationContext* txn) {
 
         Lock::assertWriteLocked( _name );
 
@@ -347,13 +206,13 @@ namespace mongo {
         }
     }
 
-    long long Database::fileSize() const { return _extentManager->fileSize(); }
+    long long Database::fileSize() const { return getExtentManager()->fileSize(); }
 
-    int Database::numFiles() const { return _extentManager->numFiles(); }
+    int Database::numFiles() const { return getExtentManager()->numFiles(); }
 
-    void Database::flushFiles( bool sync ) { return _extentManager->flushFiles( sync ); }
+    void Database::flushFiles( bool sync ) { return getExtentManager()->flushFiles( sync ); }
 
-    bool Database::setProfilingLevel( TransactionExperiment* txn, int newLevel , string& errmsg ) {
+    bool Database::setProfilingLevel( OperationContext* txn, int newLevel , string& errmsg ) {
         if ( _profile == newLevel )
             return true;
 
@@ -374,7 +233,110 @@ namespace mongo {
         return true;
     }
 
-    Status Database::dropCollection( TransactionExperiment* txn, const StringData& fullns ) {
+    long long Database::getIndexSizeForCollection(Collection* coll,
+                                                  BSONObjBuilder* details,
+                                                  int scale ) {
+        if ( !coll )
+            return 0;
+
+        IndexCatalog::IndexIterator ii =
+            coll->getIndexCatalog()->getIndexIterator( true /*includeUnfinishedIndexes*/ );
+
+        long long totalSize = 0;
+
+        while ( ii.more() ) {
+            IndexDescriptor* d = ii.next();
+            string indNS = d->indexNamespace();
+            Collection* indColl = getCollection( indNS ); // XXX
+            if ( ! indColl ) {
+                log() << "error: have index descriptor ["  << indNS
+                      << "] but no entry in the index collection." << endl;
+                continue;
+            }
+            totalSize += indColl->dataSize();
+            if ( details ) {
+                long long const indexSize = indColl->dataSize() / scale;
+                details->appendNumber( d->indexName() , indexSize );
+            }
+        }
+        return totalSize;
+    }
+
+    void Database::getStats( BSONObjBuilder* output, double scale ) {
+        bool empty = isEmpty() || getExtentManager()->numFiles() == 0;
+
+        list<string> collections;
+        if ( !empty )
+            _dbEntry->getCollectionNamespaces( &collections );
+
+        long long ncollections = 0;
+        long long objects = 0;
+        long long size = 0;
+        long long storageSize = 0;
+        long long numExtents = 0;
+        long long indexes = 0;
+        long long indexSize = 0;
+
+        for (list<string>::const_iterator it = collections.begin(); it != collections.end(); ++it) {
+            const string ns = *it;
+
+            Collection* collection = getCollection( ns );
+            if ( !collection )
+                continue;
+
+            ncollections += 1;
+            objects += collection->numRecords();
+            size += collection->dataSize();
+
+            BSONObjBuilder temp;
+            storageSize += collection->getRecordStore()->storageSize( &temp );
+            numExtents += temp.obj()["numExtents"].numberInt(); // XXX
+
+            indexes += collection->getIndexCatalog()->numIndexesTotal();
+            indexSize += getIndexSizeForCollection(collection);
+        }
+
+        output->append      ( "db" , _name );
+        output->appendNumber( "collections" , ncollections );
+        output->appendNumber( "objects" , objects );
+        output->append      ( "avgObjSize" , objects == 0 ? 0 : double(size) / double(objects) );
+        output->appendNumber( "dataSize" , size / scale );
+        output->appendNumber( "storageSize" , storageSize / scale);
+        output->appendNumber( "numExtents" , numExtents );
+        output->appendNumber( "indexes" , indexes );
+        output->appendNumber( "indexSize" , indexSize / scale );
+        if ( !empty ) {
+            output->appendNumber( "fileSize" , fileSize() / scale );
+            output->appendNumber( "nsSizeMB", (int)_dbEntry->namespaceIndex().fileLength() / 1024 / 1024 );
+        }
+        else {
+            output->appendNumber( "fileSize" , 0 );
+        }
+
+        BSONObjBuilder dataFileVersion( output->subobjStart( "dataFileVersion" ) );
+        if ( !empty ) {
+            int major, minor;
+            getFileFormat( &major, &minor );
+            dataFileVersion.append( "major", major );
+            dataFileVersion.append( "minor", minor );
+        }
+        dataFileVersion.done();
+
+        if ( !empty ){
+            int freeListSize = 0;
+            int64_t freeListSpace = 0;
+            getExtentManager()->freeListStats( &freeListSize, &freeListSpace );
+
+            BSONObjBuilder extentFreeList( output->subobjStart( "extentFreeList" ) );
+            extentFreeList.append( "num", freeListSize );
+            extentFreeList.appendNumber( "totalSize",
+                                         static_cast<long long>( freeListSpace / scale ) );
+            extentFreeList.done();
+        }
+
+    }
+
+    Status Database::dropCollection( OperationContext* txn, const StringData& fullns ) {
         LOG(1) << "dropCollection: " << fullns << endl;
         massertNamespaceNotIndex( fullns, "dropCollection" );
 
@@ -467,12 +429,12 @@ namespace mongo {
     }
 
     Collection* Database::getCollection( const StringData& ns ) {
-        DurTransaction txn; // TODO remove once we require reads to have transactions
+        OperationContextImpl txn; // TODO remove once we require reads to have transactions
         return getCollection(&txn, ns);
     }
 
-    Collection* Database::getCollection( TransactionExperiment* txn, const StringData& ns ) {
-        verify( _name == nsToDatabaseSubstring( ns ) );
+    Collection* Database::getCollection( OperationContext* txn, const StringData& ns ) {
+        invariant( _name == nsToDatabaseSubstring( ns ) );
 
         scoped_lock lk( _collectionLock );
 
@@ -480,31 +442,35 @@ namespace mongo {
         if ( it != _collections.end() ) {
             if ( it->second ) {
                 DEV {
-                    NamespaceDetails* details = _namespaceIndex.details( ns );
+                    /* XXX put back?
+                    NamespaceDetails* details = _dbEntry->namespaceIndex().details( ns );
                     if ( details != it->second->_details ) {
                         log() << "about to crash for mismatch on ns: " << ns
                               << " current: " << (void*)details
                               << " cached: " << (void*)it->second->_details;
                     }
                     verify( details == it->second->_details );
+                    */
                 }
                 return it->second;
             }
         }
 
-        NamespaceDetails* details = _namespaceIndex.details( ns );
-        if ( !details ) {
+        auto_ptr<CollectionCatalogEntry> catalogEntry( _dbEntry->getCollectionCatalogEntry( txn, ns ) );
+        if ( !catalogEntry.get() )
             return NULL;
-        }
 
-        Collection* c = new Collection( txn, ns, details, this );
+        auto_ptr<RecordStore> rs( _dbEntry->getRecordStore( txn, ns ) );
+        invariant( rs.get() ); // if catalogEntry exists, so should this
+
+        Collection* c = new Collection( txn, ns, catalogEntry.release(), rs.release(), this );
         _collections[ns] = c;
         return c;
     }
 
 
 
-    Status Database::renameCollection( TransactionExperiment* txn,
+    Status Database::renameCollection( OperationContext* txn,
                                        const StringData& fromNS,
                                        const StringData& toNS,
                                        bool stayTemp ) {
@@ -514,7 +480,7 @@ namespace mongo {
         if ( !s.isOK() )
             return s;
 
-        NamespaceDetails* details = _namespaceIndex.details( toNS );
+        NamespaceDetails* details = _dbEntry->namespaceIndex().details( toNS );
         verify( details );
 
         audit::logRenameCollection( currentClient.get(), fromNS, toNS );
@@ -553,7 +519,7 @@ namespace mongo {
                                         systemIndexCollection, indexName, false);
 
                 IndexDetails& indexDetails = details->idx(indexI);
-                *txn->writing(&indexDetails.info) = newIndexSpecLoc.getValue(); // XXX: dur
+                *txn->recoveryUnit()->writing(&indexDetails.info) = newIndexSpecLoc.getValue(); // XXX: dur
             }
 
             {
@@ -574,21 +540,20 @@ namespace mongo {
         return Status::OK();
     }
 
-    Status Database::_renameSingleNamespace( TransactionExperiment* txn,
+    Status Database::_renameSingleNamespace( OperationContext* txn,
                                              const StringData& fromNS,
                                              const StringData& toNS,
                                              bool stayTemp ) {
-
         // TODO: make it so we dont't need to do this
         string fromNSString = fromNS.toString();
         string toNSString = toNS.toString();
 
         // some sanity checking
-        NamespaceDetails* fromDetails = _namespaceIndex.details( fromNS );
+        NamespaceDetails* fromDetails = _dbEntry->namespaceIndex().details( fromNS );
         if ( !fromDetails )
             return Status( ErrorCodes::BadValue, "from namespace doesn't exist" );
 
-        if ( _namespaceIndex.details( toNS ) )
+        if ( _dbEntry->namespaceIndex().details( toNS ) )
             return Status( ErrorCodes::BadValue, "to namespace already exists" );
 
         // remove anything cached
@@ -605,25 +570,25 @@ namespace mongo {
         // ----
 
         // this could throw, but if it does we're ok
-        _namespaceIndex.add_ns( txn, toNS, fromDetails );
-        NamespaceDetails* toDetails = _namespaceIndex.details( toNS );
+        _dbEntry->namespaceIndex().add_ns( txn, toNS, fromDetails );
+        NamespaceDetails* toDetails = _dbEntry->namespaceIndex().details( toNS );
 
         try {
             toDetails->copyingFrom(txn,
                                    toNSString.c_str(),
-                                   _namespaceIndex,
+                                   _dbEntry->namespaceIndex(),
                                    fromDetails); // fixes extraOffset
         }
         catch( DBException& ) {
             // could end up here if .ns is full - if so try to clean up / roll back a little
-            _namespaceIndex.kill_ns( txn, toNSString );
+            _dbEntry->namespaceIndex().kill_ns( txn, toNSString );
             _clearCollectionCache(toNSString);
             throw;
         }
 
         // at this point, code .ns stuff moved
 
-        _namespaceIndex.kill_ns( txn, fromNSString );
+        _dbEntry->namespaceIndex().kill_ns( txn, fromNSString );
         _clearCollectionCache(fromNSString);
         fromDetails = NULL;
 
@@ -660,10 +625,10 @@ namespace mongo {
     }
 
     Collection* Database::getOrCreateCollection( const StringData& ns ) {
-        DurTransaction txn; // TODO remove once we require reads to have transactions
+        OperationContextImpl txn; // TODO remove once we require reads to have transactions
         return getOrCreateCollection(&txn, ns);
     }
-    Collection* Database::getOrCreateCollection(TransactionExperiment* txn, const StringData& ns) {
+    Collection* Database::getOrCreateCollection(OperationContext* txn, const StringData& ns) {
         Collection* c = getCollection( txn, ns );
         if ( !c ) {
             c = createCollection( txn, ns );
@@ -671,24 +636,13 @@ namespace mongo {
         return c;
     }
 
-    namespace {
-        int _massageExtentSize( const ExtentManager* em, long long size ) {
-            if ( size < em->minSize() )
-                return em->minSize();
-            if ( size > em->maxSize() )
-                return em->maxSize();
-            return static_cast<int>( size );
-        }
-    }
-
-    Collection* Database::createCollection( TransactionExperiment* txn,
+    Collection* Database::createCollection( OperationContext* txn,
                                             const StringData& ns,
                                             const CollectionOptions& options,
                                             bool allocateDefaultSpace,
                                             bool createIdIndex ) {
-        massert( 17399, "collection already exists", _namespaceIndex.details( ns ) == NULL );
+        massert( 17399, "collection already exists", getCollection( ns ) == NULL );
         massertNamespaceNotIndex( ns, "createCollection" );
-        _namespaceIndex.init( txn );
 
         if ( serverGlobalParams.configsvr &&
              !( ns.startsWith( "config." ) ||
@@ -709,55 +663,13 @@ namespace mongo {
 
         audit::logCreateCollection( currentClient.get(), ns );
 
-        _namespaceIndex.add_ns( txn, ns, DiskLoc(), options.capped );
-        BSONObj optionsAsBSON = options.toBSON();
-        _addNamespaceToCatalog( txn, ns, &optionsAsBSON );
+        Status status = _dbEntry->createCollection( txn, ns,
+                                                    options, allocateDefaultSpace );
+        massertStatusOK( status );
+
 
         Collection* collection = getCollection( txn, ns );
-        massert( 17400, "_namespaceIndex.add_ns failed?", collection );
-
-        // allocation strategy set explicitly in flags or by server-wide default
-        if ( !options.capped ) {
-            if ( options.flagsSet ) {
-                collection->setUserFlag( txn, options.flags );
-            }
-            else if ( newCollectionsUsePowerOf2Sizes ) {
-                collection->setUserFlag( txn, NamespaceDetails::Flag_UsePowerOf2Sizes );
-            }
-        }
-
-        if ( options.cappedMaxDocs > 0 )
-            collection->setMaxCappedDocs( txn, options.cappedMaxDocs );
-
-        if ( allocateDefaultSpace ) {
-            if ( options.initialNumExtents > 0 ) {
-                int size = _massageExtentSize( _extentManager.get(),
-                                               options.cappedSize );
-                for ( int i = 0; i < options.initialNumExtents; i++ ) {
-                    collection->increaseStorageSize( txn, size, false );
-                }
-            }
-            else if ( !options.initialExtentSizes.empty() ) {
-                for ( size_t i = 0; i < options.initialExtentSizes.size(); i++ ) {
-                    int size = options.initialExtentSizes[i];
-                    size = _massageExtentSize( _extentManager.get(),
-                                               size );
-                    collection->increaseStorageSize( txn, size, false );
-                }
-            }
-            else if ( options.capped ) {
-                // normal
-                while ( collection->getRecordStore()->storageSize() < options.cappedSize ) {
-                    int sz = _massageExtentSize( _extentManager.get(),
-                                                 options.cappedSize - collection->getRecordStore()->storageSize() );
-                    sz &= 0xffffff00;
-                    collection->increaseStorageSize( txn, sz, true );
-                }
-            }
-            else {
-                collection->increaseStorageSize( txn, _extentManager->initialSize( 128 ), false );
-            }
-        }
+        invariant( collection );
 
         if ( createIdIndex ) {
             if ( collection->requiresIdIndex() ) {
@@ -777,7 +689,7 @@ namespace mongo {
     }
 
 
-    void Database::_addNamespaceToCatalog( TransactionExperiment* txn,
+    void Database::_addNamespaceToCatalog( OperationContext* txn,
                                            const StringData& ns,
                                            const BSONObj* options ) {
         LOG(1) << "Database::_addNamespaceToCatalog ns: " << ns << endl;
@@ -799,9 +711,9 @@ namespace mongo {
         uassertStatusOK( loc.getStatus() );
     }
 
-    Status Database::_dropNS( TransactionExperiment* txn, const StringData& ns ) {
+    Status Database::_dropNS( OperationContext* txn, const StringData& ns ) {
 
-        NamespaceDetails* d = _namespaceIndex.details( ns );
+        NamespaceDetails* d = _dbEntry->namespaceIndex().details( ns );
         if ( !d )
             return Status( ErrorCodes::NamespaceNotFound,
                            str::stream() << "ns not found: " << ns );
@@ -815,28 +727,44 @@ namespace mongo {
         }
 
         // free extents
-        if( !d->firstExtent().isNull() ) {
-            _extentManager->freeExtents(txn, d->firstExtent(), d->lastExtent());
-            d->setFirstExtentInvalid(txn);
-            d->setLastExtentInvalid(txn);
+        if( !d->firstExtent.isNull() ) {
+            getExtentManager()->freeExtents(txn, d->firstExtent, d->lastExtent);
+            *txn->recoveryUnit()->writing( &d->firstExtent ) = DiskLoc().setInvalid();
+            *txn->recoveryUnit()->writing( &d->lastExtent ) = DiskLoc().setInvalid();
         }
 
         // remove from the catalog hashtable
-        _namespaceIndex.kill_ns( txn, ns );
+        _dbEntry->namespaceIndex().kill_ns( txn, ns );
 
         return Status::OK();
     }
 
     void Database::getFileFormat( int* major, int* minor ) {
-        if ( _extentManager->numFiles() == 0 ) {
+        if ( getExtentManager()->numFiles() == 0 ) {
             *major = 0;
             *minor = 0;
             return;
         }
-        DurTransaction txn; // TODO get rid of this once reads need transactions
-        const DataFile* df = _extentManager->getFile( &txn, 0 );
+        OperationContextImpl txn; // TODO get rid of this once reads need transactions
+        const DataFile* df = getExtentManager()->getFile( &txn, 0 );
         *major = df->getHeader()->version;
         *minor = df->getHeader()->versionMinor;
+    }
+
+    MmapV1ExtentManager* Database::getExtentManager() {
+        return _dbEntry->getExtentManager();
+    }
+
+    const MmapV1ExtentManager* Database::getExtentManager() const {
+        return _dbEntry->getExtentManager();
+    }
+
+    bool Database::isEmpty() const {
+        return !_dbEntry->namespaceIndex().allocated();
+    }
+
+    const DatabaseCatalogEntry* Database::getDatabaseCatalogEntry() const {
+        return _dbEntry.get();
     }
 
 } // namespace mongo

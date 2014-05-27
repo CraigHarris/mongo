@@ -56,13 +56,13 @@ namespace mongo {
             }
             return Status::OK();
         }
-        virtual bool run(const string& dbname,
+        virtual bool run(OperationContext* txn, const string& dbname,
                          BSONObj& cmdObj,
                          int,
                          string& errmsg,
                          BSONObjBuilder& result,
                          bool fromRepl) {
-            if (!replSettings.master) {
+            if (!replset::replSettings.master) {
                 return appendCommandStatus(result, Status(
                         ErrorCodes::NoReplicationEnabled,
                         "Must have replication set up to run \"appendOplogNote\""));
@@ -73,7 +73,7 @@ namespace mongo {
                 return appendCommandStatus(result, status);
             }
 
-            logOpComment(dataElement.Obj());
+            replset::logOpComment(dataElement.Obj());
             return true;
         }
 

@@ -53,13 +53,6 @@ namespace mongo {
          * @return if operation was found 
          **/
         bool kill(AtomicUInt i);
-           
-        /** 
-         * blocks until kill is acknowledged by the killee.
-         *
-         * Note: Does not wait for nested ops, only the top level op. 
-         */
-        void blockingKill(AtomicUInt opId);
 
         /** @return true if global interrupt and should terminate the operation */
         bool globalInterruptCheck() const { return _globalKill; }
@@ -72,26 +65,18 @@ namespace mongo {
         /** @return "" if not interrupted.  otherwise, you should stop. */
         const char *checkForInterruptNoAssert();
 
-        /** set all flags for all the threads waiting for the current thread's operation to
-         *  end; part of internal synchronous kill mechanism
-        **/
-        void notifyAllWaiters();
-
         /** Reset the object to its initial state.  Only for testing. */
         void reset();
 
     private:
         void interruptJs( AtomicUInt *op );
         volatile bool _globalKill;
-        boost::condition _condvar;
-        boost::mutex _mtx;
 
         /** 
          * @param i opid of operation to kill
-         * @param pNotifyFlag optional bool to be set to true when kill actually happens
          * @return if operation was found 
          **/
-        bool _killImpl_inclientlock(AtomicUInt i, bool* pNotifyFlag = NULL);
+        bool _killImpl_inclientlock(AtomicUInt i);
     };
 
     extern KillCurrentOp killCurrentOp;

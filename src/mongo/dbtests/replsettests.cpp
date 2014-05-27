@@ -41,22 +41,17 @@
 #include "mongo/db/repl/oplog.h"
 #include "mongo/db/repl/repl_settings.h"  // replSettings
 #include "mongo/db/repl/rs.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/dbtests/dbtests.h"
 #include "mongo/util/time_support.h"
-
-
-namespace mongo {
-    void createOplog();
-}
 
 namespace ReplSetTests {
     const int replWriterThreadCount(32);
     const int replPrefetcherThreadCount(32);
-    class ReplSetTest : public ReplSet {
-        ReplSetConfig *_config;
-        ReplSetConfig::MemberCfg *_myConfig;
-        replset::BackgroundSyncInterface *_syncTail;
+    class ReplSetTest : public mongo::replset::ReplSet {
+        mongo::replset::ReplSetConfig *_config;
+        mongo::replset::ReplSetConfig::MemberCfg *_myConfig;
+        mongo::replset::BackgroundSyncInterface *_syncTail;
     public:
         static const int replWriterThreadCount;
         static const int replPrefetcherThreadCount;
@@ -65,7 +60,7 @@ namespace ReplSetTests {
             ret->init();
             // we need to get() the BackgroundSync so that it has its s_instance initialized
             // since applyOps() eventually calls notify() which makes use of the s_instance
-            replset::BackgroundSync::get();
+            mongo::replset::BackgroundSync::get();
             return ret.release();
         }
         virtual ~ReplSetTest() {
@@ -81,10 +76,10 @@ namespace ReplSetTests {
         virtual bool tryToGoLiveAsASecondary(OpTime& minvalid) {
             return false;
         }
-        virtual const ReplSetConfig& config() {
+        virtual const mongo::replset::ReplSetConfig& config() {
             return *_config;
         }
-        virtual const ReplSetConfig::MemberCfg& myConfig() {
+        virtual const mongo::replset::ReplSetConfig::MemberCfg& myConfig() {
             return *_myConfig;
         }
         virtual bool buildIndexes() const {
@@ -100,8 +95,9 @@ namespace ReplSetTests {
         void init() {
             BSONArrayBuilder members;
             members.append(BSON("_id" << 0 << "host" << "host1"));
-            _config = ReplSetConfig::make(BSON("_id" << "foo" << "members" << members.arr()));
-            _myConfig = new ReplSetConfig::MemberCfg();
+            _config = mongo::replset::ReplSetConfig::make(BSON("_id" << "foo"
+                                                            << "members" << members.arr()));
+            _myConfig = new mongo::replset::ReplSetConfig::MemberCfg();
         }
     };
 
@@ -120,7 +116,7 @@ namespace ReplSetTests {
         virtual void consume() {
             _queue.pop();
         }
-        virtual Member* getSyncTarget() {
+        virtual mongo::replset::Member* getSyncTarget() {
             return 0;
         }
         void addDoc(BSONObj doc) {
@@ -153,7 +149,7 @@ namespace ReplSetTests {
         static void insert( const BSONObj &o, bool god = false ) {
             Lock::DBWrite lk(ns());
             Client::Context ctx(ns());
-            DurTransaction txn;
+            OperationContextImpl txn;
             Database* db = ctx.db();
             Collection* coll = db->getCollection(ns());
             if (!coll) {
@@ -179,7 +175,7 @@ namespace ReplSetTests {
 
         void drop() {
             Client::WriteContext c(ns());
-            DurTransaction txn;
+            OperationContextImpl txn;
 
             Database* db = c.ctx().db();
 
@@ -190,9 +186,9 @@ namespace ReplSetTests {
             db->dropCollection(&txn, ns());
         }
         static void setup() {
-            replSettings.replSet = "foo";
-            replSettings.oplogSize = 5 * 1024 * 1024;
-            createOplog();
+            mongo::replset::replSettings.replSet = "foo";
+            mongo::replset::replSettings.oplogSize = 5 * 1024 * 1024;
+            mongo::replset::createOplog();
 
             // setup background sync instance
             _bgsync = new BackgroundSyncTest();
@@ -204,8 +200,8 @@ namespace ReplSetTests {
             ReplSetTest *rst = ReplSetTest::make();
             rst->setSyncTail(_bgsync);
 
-            delete theReplSet;
-            theReplSet = rst;
+            delete replset::theReplSet;
+            replset::theReplSet = rst;
         }
     };
 
@@ -318,13 +314,13 @@ namespace ReplSetTests {
 
         void create() {
             Client::Context c(_cappedNs);
-            DurTransaction txn;
+            OperationContextImpl txn;
             ASSERT( userCreateNS( &txn, c.db(), _cappedNs, fromjson( spec() ), false ).isOK() );
         }
 
         void dropCapped() {
             Client::Context c(_cappedNs);
-            DurTransaction txn;
+            OperationContextImpl txn;
             Database* db = c.db();
             if ( db->getCollection( &txn, _cappedNs ) ) {
                 db->dropCollection( &txn, _cappedNs );
@@ -361,9 +357,9 @@ namespace ReplSetTests {
         // returns true on success, false on failure
         bool apply(const BSONObj& op) {
             Client::Context ctx( _cappedNs );
-            DurTransaction txn;
+            OperationContextImpl txn;
             // in an annoying twist of api, returns true on failure
-            return !applyOperation_inlock(&txn, ctx.db(), op, true);
+            return !mongo::replset::applyOperation_inlock(&txn, ctx.db(), op, true);
         }
 
         void run() {
@@ -371,7 +367,7 @@ namespace ReplSetTests {
 
             BSONObj op = updateFail();
 
-            Sync s("");
+            mongo::replset::Sync s("");
             verify(!s.shouldRetry(op));
         }
     };
@@ -392,7 +388,7 @@ namespace ReplSetTests {
 
         void insert() {
             Client::Context ctx(cappedNs());
-            DurTransaction txn;
+            OperationContextImpl txn;
             Database* db = ctx.db();
             Collection* coll = db->getCollection(&txn, cappedNs());
             if (!coll) {
@@ -531,7 +527,7 @@ namespace ReplSetTests {
         void run() {
             const int expected = 100;
 
-            theReplSet->syncSourceFeedback.ensureMe();
+            replset::theReplSet->syncSourceFeedback.ensureMe();
 
             drop();
             addInserts(100);

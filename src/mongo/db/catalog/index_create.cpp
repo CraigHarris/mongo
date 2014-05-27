@@ -37,16 +37,13 @@
 #include "mongo/db/catalog/collection.h"
 #include "mongo/db/clientcursor.h"
 #include "mongo/db/curop.h"
-#include "mongo/db/extsort.h"
 #include "mongo/db/kill_current_op.h"
 #include "mongo/db/pdfile_private.h"
 #include "mongo/db/query/internal_plans.h"
 #include "mongo/db/repl/is_master.h"
 #include "mongo/db/repl/oplog.h"
 #include "mongo/db/repl/rs.h"
-#include "mongo/db/storage/transaction.h"
-#include "mongo/db/structure/catalog/index_details.h"
-#include "mongo/db/structure/catalog/namespace_details.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/util/processinfo.h"
 #include "mongo/util/progress_meter.h"
 
@@ -55,7 +52,7 @@ namespace mongo {
     /**
      * Add the provided (obj, dl) pair to the provided index.
      */
-    static void addKeysToIndex(TransactionExperiment* txn,
+    static void addKeysToIndex(OperationContext* txn,
                                Collection* collection,
                                const IndexDescriptor* descriptor,
                                IndexAccessMethod* accessMethod,
@@ -66,7 +63,7 @@ namespace mongo {
         options.dupsAllowed = true;
 
         if ( descriptor->isIdIndex() || descriptor->unique() ) {
-            if ( !ignoreUniqueIndex( descriptor ) ) {
+            if (!replset::ignoreUniqueIndex(descriptor)) {
                 options.dupsAllowed = false;
             }
         }
@@ -76,7 +73,7 @@ namespace mongo {
         uassertStatusOK( ret );
     }
 
-    unsigned long long addExistingToIndex( TransactionExperiment* txn,
+    unsigned long long addExistingToIndex( OperationContext* txn,
                                            Collection* collection,
                                            const IndexDescriptor* descriptor,
                                            IndexAccessMethod* accessMethod,
@@ -135,9 +132,9 @@ namespace mongo {
                     runner->saveState();
                     BSONObj toDelete;
                     collection->deleteDocument( txn, loc, false, true, &toDelete );
-                    logOp( txn, "d", ns.c_str(), toDelete );
+                    replset::logOp(txn, "d", ns.c_str(), toDelete);
 
-                    if (!runner->restoreState()) {
+                    if (!runner->restoreState(txn)) {
                         // Runner got killed somehow.  This probably shouldn't happen.
                         if (runnerEOF) {
                             // Quote: "We were already at the end.  Normal.
@@ -162,7 +159,7 @@ namespace mongo {
             n++;
             progress.hit();
 
-            getDur().commitIfNeeded();
+            txn->recoveryUnit()->commitIfNeeded();
 
             if (canBeKilled) {
                 // Checking for interrupt here is necessary because the bg index 
@@ -185,7 +182,7 @@ namespace mongo {
     // ---------------------------
 
     // throws DBException
-    void buildAnIndex( TransactionExperiment* txn,
+    void buildAnIndex( OperationContext* txn,
                        Collection* collection,
                        IndexCatalogEntry* btreeState,
                        bool mayInterrupt ) {
@@ -233,7 +230,8 @@ namespace mongo {
                  << status.toString(),
                  status.isOK() );
 
-        IndexAccessMethod* bulk = doInBackground ? NULL : btreeState->accessMethod()->initiateBulk(txn);
+        IndexAccessMethod* bulk = doInBackground ?
+            NULL : btreeState->accessMethod()->initiateBulk(txn);
         scoped_ptr<IndexAccessMethod> bulkHolder(bulk);
         IndexAccessMethod* iam = bulk ? bulk : btreeState->accessMethod();
 
@@ -274,11 +272,11 @@ namespace mongo {
                                             false /* cappedOk */,
                                             true /* noWarn */,
                                             &toDelete );
-                if (isMasterNs(ns.c_str())) {
-                    logOp( txn, "d", ns.c_str(), toDelete );
+                if (replset::isMasterNs(ns.c_str())) {
+                    replset::logOp(txn, "d", ns.c_str(), toDelete);
                 }
                 
-                getDur().commitIfNeeded();
+                txn->recoveryUnit()->commitIfNeeded();
 
                 RARELY if ( mayInterrupt ) {
                     txn->checkForInterrupt();
@@ -296,7 +294,7 @@ namespace mongo {
 
     // ----------------------------
 
-    MultiIndexBlock::MultiIndexBlock(TransactionExperiment* txn, Collection* collection)
+    MultiIndexBlock::MultiIndexBlock(OperationContext* txn, Collection* collection)
         : _collection(collection), _txn(txn) {
     }
 

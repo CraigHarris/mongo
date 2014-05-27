@@ -39,7 +39,7 @@
 #include "mongo/db/storage/data_file.h"
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/db/storage/mmap_v1/mmap_v1_extent_manager.h"
 #include "mongo/dbtests/dbtests.h"
 
@@ -65,7 +65,7 @@ namespace PdfileTests {
 
             Lock::GlobalWrite lk_;
             Client::Context _context;
-            DurTransaction _txn;
+            OperationContextImpl _txn;
         };
 
         class InsertNoId : public Base {
@@ -208,31 +208,6 @@ namespace PdfileTests {
         }
     };
 
-    class CollectionOptionsRoundTrip {
-    public:
-
-        void check( const CollectionOptions& options1 ) {
-            CollectionOptions options2;
-            options2.parse( options1.toBSON() );
-            ASSERT_EQUALS( options1.toBSON(), options2.toBSON() );
-        }
-
-        void run() {
-            CollectionOptions options;
-            check( options );
-
-            options.capped = true;
-            options.cappedSize = 10240;
-            options.cappedMaxDocs = 1111;
-            check( options );
-
-            options.setNoIdIndex();
-            options.flags = 5;
-            check( options );
-
-        }
-    };
-
     class All : public Suite {
     public:
         All() : Suite( "pdfile" ) {}
@@ -243,7 +218,6 @@ namespace PdfileTests {
             add< Insert::UpdateDate2 >();
             add< Insert::ValidId >();
             add< ExtentSizing >();
-            add< CollectionOptionsRoundTrip >();
         }
     } myall;
 

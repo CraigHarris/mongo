@@ -39,7 +39,7 @@
 #include "mongo/db/catalog/index_key_validate.h"
 #include "mongo/db/pdfile.h"
 #include "mongo/db/repl/oplog.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 
 namespace mongo {
 
@@ -92,15 +92,14 @@ namespace mongo {
         }
 
         CmdDropIndexes() : Command("dropIndexes", false, "deleteIndexes") { }
-        bool run(const string& dbname, BSONObj& jsobj, int, string& errmsg, BSONObjBuilder& anObjBuilder, bool fromRepl) {
+        bool run(OperationContext* txn, const string& dbname, BSONObj& jsobj, int, string& errmsg, BSONObjBuilder& anObjBuilder, bool fromRepl) {
             Lock::DBWrite dbXLock(dbname);
-            DurTransaction txn;
-            bool ok = wrappedRun(&txn, dbname, jsobj, errmsg, anObjBuilder);
+            bool ok = wrappedRun(txn, dbname, jsobj, errmsg, anObjBuilder);
             if (ok && !fromRepl)
-                logOp(&txn, "c",(dbname + ".$cmd").c_str(), jsobj);
+                replset::logOp(txn, "c",(dbname + ".$cmd").c_str(), jsobj);
             return ok;
         }
-        bool wrappedRun(TransactionExperiment* txn,
+        bool wrappedRun(OperationContext* txn,
                         const string& dbname,
                         BSONObj& jsobj,
                         string& errmsg,
@@ -213,7 +212,7 @@ namespace mongo {
             return IndexBuilder::killMatchingIndexBuilds(db->getCollection(ns), criteria);
         }
 
-        bool run(const string& dbname , BSONObj& jsobj, int, string& errmsg, BSONObjBuilder& result, bool /*fromRepl*/) {
+        bool run(OperationContext* txn, const string& dbname , BSONObj& jsobj, int, string& errmsg, BSONObjBuilder& result, bool /*fromRepl*/) {
             static DBDirectClient db;
 
             BSONElement e = jsobj.firstElement();
@@ -223,7 +222,6 @@ namespace mongo {
 
             Lock::DBWrite dbXLock(dbname);
             Client::Context ctx(toDeleteNs);
-            DurTransaction txn;
 
             Collection* collection = ctx.db()->getCollection( toDeleteNs );
 
@@ -255,7 +253,7 @@ namespace mongo {
             }
             result.appendNumber( "nIndexesWas", collection->getIndexCatalog()->numIndexesTotal() );
 
-            Status s = collection->getIndexCatalog()->dropAllIndexes(&txn, true);
+            Status s = collection->getIndexCatalog()->dropAllIndexes(txn, true);
             if ( !s.isOK() ) {
                 errmsg = "dropIndexes failed";
                 return appendCommandStatus( result, s );
@@ -264,7 +262,7 @@ namespace mongo {
             for ( list<BSONObj>::iterator i=all.begin(); i!=all.end(); i++ ) {
                 BSONObj o = *i;
                 LOG(1) << "reIndex ns: " << toDeleteNs << " index: " << o << endl;
-                Status s = collection->getIndexCatalog()->createIndex(&txn, o, false);
+                Status s = collection->getIndexCatalog()->createIndex(txn, o, false);
                 if ( !s.isOK() )
                     return appendCommandStatus( result, s );
             }

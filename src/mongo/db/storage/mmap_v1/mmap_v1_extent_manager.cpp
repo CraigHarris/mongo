@@ -40,7 +40,7 @@
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
 #include "mongo/db/storage/record.h"
-#include "mongo/db/storage/transaction.h"
+#include "mongo/db/operation_context.h"
 
 namespace mongo {
 
@@ -74,7 +74,7 @@ namespace mongo {
     }
 
 
-    Status MmapV1ExtentManager::init(TransactionExperiment* txn) {
+    Status MmapV1ExtentManager::init(OperationContext* txn) {
         verify( _files.size() == 0 );
 
         for ( int n = 0; n < DiskLoc::MaxFiles; n++ ) {
@@ -113,7 +113,7 @@ namespace mongo {
 
 
     // todo: this is called a lot. streamline the common case
-    DataFile* MmapV1ExtentManager::getFile( TransactionExperiment* txn,
+    DataFile* MmapV1ExtentManager::getFile( OperationContext* txn,
                                       int n,
                                       int sizeNeeded ,
                                       bool preallocateOnly) {
@@ -174,7 +174,7 @@ namespace mongo {
         return preallocateOnly ? 0 : p;
     }
 
-    DataFile* MmapV1ExtentManager::_addAFile( TransactionExperiment* txn,
+    DataFile* MmapV1ExtentManager::_addAFile( OperationContext* txn,
                                         int sizeNeeded,
                                         bool preallocateNextFile ) {
         DEV Lock::assertWriteLocked( _dbname );
@@ -243,7 +243,7 @@ namespace mongo {
         return DataFile::maxSize() - DataFileHeader::HeaderSize - 16;
     }
 
-    DiskLoc MmapV1ExtentManager::_createExtentInFile( TransactionExperiment* txn,
+    DiskLoc MmapV1ExtentManager::_createExtentInFile( OperationContext* txn,
                                                 int fileNo,
                                                 DataFile* f,
                                                 int size,
@@ -268,15 +268,15 @@ namespace mongo {
         Extent *e = getExtent( loc, false );
         verify( e );
 
-        *txn->writing(&e->magic) = Extent::extentSignature;
-        *txn->writing(&e->myLoc) = loc;
-        *txn->writing(&e->length) = size;
+        *txn->recoveryUnit()->writing(&e->magic) = Extent::extentSignature;
+        *txn->recoveryUnit()->writing(&e->myLoc) = loc;
+        *txn->recoveryUnit()->writing(&e->length) = size;
 
         return loc;
     }
 
 
-    DiskLoc MmapV1ExtentManager::_createExtent( TransactionExperiment* txn,
+    DiskLoc MmapV1ExtentManager::_createExtent( OperationContext* txn,
                                           int size,
                                           int maxFileNoForQuota ) {
         size = quantizeExtentSize( size );
@@ -315,7 +315,7 @@ namespace mongo {
         msgasserted(14810, "couldn't allocate space for a new extent" );
     }
 
-    DiskLoc MmapV1ExtentManager::_allocFromFreeList( TransactionExperiment* txn,
+    DiskLoc MmapV1ExtentManager::_allocFromFreeList( OperationContext* txn,
                                                int approxSize,
                                                bool capped ) {
         // setup extent constraints
@@ -389,9 +389,9 @@ namespace mongo {
 
         // remove from the free list
         if ( !best->xprev.isNull() )
-            *txn->writing(&getExtent( best->xprev )->xnext) = best->xnext;
+            *txn->recoveryUnit()->writing(&getExtent( best->xprev )->xnext) = best->xnext;
         if ( !best->xnext.isNull() )
-            *txn->writing(&getExtent( best->xnext )->xprev) = best->xprev;
+            *txn->recoveryUnit()->writing(&getExtent( best->xnext )->xprev) = best->xprev;
         if ( _getFreeListStart() == best->myLoc )
             _setFreeListStart( txn, best->xnext );
         if ( _getFreeListEnd() == best->myLoc )
@@ -400,7 +400,7 @@ namespace mongo {
         return best->myLoc;
     }
 
-    DiskLoc MmapV1ExtentManager::allocateExtent( TransactionExperiment* txn,
+    DiskLoc MmapV1ExtentManager::allocateExtent( OperationContext* txn,
                                            bool capped,
                                            int size,
                                            int quotaMax ) {
@@ -423,12 +423,12 @@ namespace mongo {
         return eloc;
     }
 
-    void MmapV1ExtentManager::freeExtent(TransactionExperiment* txn, DiskLoc firstExt ) {
+    void MmapV1ExtentManager::freeExtent(OperationContext* txn, DiskLoc firstExt ) {
         Extent* e = getExtent( firstExt );
-        txn->writing( &e->xnext )->Null();
-        txn->writing( &e->xprev )->Null();
-        txn->writing( &e->firstRecord )->Null();
-        txn->writing( &e->lastRecord )->Null();
+        txn->recoveryUnit()->writing( &e->xnext )->Null();
+        txn->recoveryUnit()->writing( &e->xprev )->Null();
+        txn->recoveryUnit()->writing( &e->firstRecord )->Null();
+        txn->recoveryUnit()->writing( &e->lastRecord )->Null();
 
 
         if( _getFreeListStart().isNull() ) {
@@ -438,14 +438,14 @@ namespace mongo {
         else {
             DiskLoc a = _getFreeListStart();
             invariant( getExtent( a )->xprev.isNull() );
-            *txn->writing( &getExtent( a )->xprev ) = firstExt;
-            *txn->writing( &getExtent( firstExt )->xnext ) = a;
+            *txn->recoveryUnit()->writing( &getExtent( a )->xprev ) = firstExt;
+            *txn->recoveryUnit()->writing( &getExtent( firstExt )->xnext ) = a;
             _setFreeListStart( txn, firstExt );
         }
 
     }
 
-    void MmapV1ExtentManager::freeExtents(TransactionExperiment* txn, DiskLoc firstExt, DiskLoc lastExt) {
+    void MmapV1ExtentManager::freeExtents(OperationContext* txn, DiskLoc firstExt, DiskLoc lastExt) {
 
         if ( firstExt.isNull() && lastExt.isNull() )
             return;
@@ -467,8 +467,8 @@ namespace mongo {
         else {
             DiskLoc a = _getFreeListStart();
             invariant( getExtent( a )->xprev.isNull() );
-            *txn->writing( &getExtent( a )->xprev ) = lastExt;
-            *txn->writing( &getExtent( lastExt )->xnext ) = a;
+            *txn->recoveryUnit()->writing( &getExtent( a )->xprev ) = lastExt;
+            *txn->recoveryUnit()->writing( &getExtent( lastExt )->xnext ) = a;
             _setFreeListStart( txn, firstExt );
         }
 
@@ -488,16 +488,16 @@ namespace mongo {
         return file->header()->freeListEnd;
     }
 
-    void MmapV1ExtentManager::_setFreeListStart( TransactionExperiment* txn, DiskLoc loc ) {
+    void MmapV1ExtentManager::_setFreeListStart( OperationContext* txn, DiskLoc loc ) {
         invariant( !_files.empty() );
         DataFile* file = _files[0];
-        *txn->writing( &file->header()->freeListStart ) = loc;
+        *txn->recoveryUnit()->writing( &file->header()->freeListStart ) = loc;
     }
 
-    void MmapV1ExtentManager::_setFreeListEnd( TransactionExperiment* txn, DiskLoc loc ) {
+    void MmapV1ExtentManager::_setFreeListEnd( OperationContext* txn, DiskLoc loc ) {
         invariant( !_files.empty() );
         DataFile* file = _files[0];
-        *txn->writing( &file->header()->freeListEnd ) = loc;
+        *txn->recoveryUnit()->writing( &file->header()->freeListEnd ) = loc;
     }
 
     void MmapV1ExtentManager::freeListStats( int* numExtents, int64_t* totalFreeSize ) const {

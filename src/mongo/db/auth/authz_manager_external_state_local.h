@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <boost/function.hpp>
 #include <boost/thread/mutex.hpp>
 #include <string>
 
@@ -38,6 +37,7 @@
 #include "mongo/db/auth/role_graph.h"
 #include "mongo/db/auth/role_name.h"
 #include "mongo/db/auth/user_name.h"
+#include "mongo/stdx/functional.h"
 
 namespace mongo {
 
@@ -61,7 +61,7 @@ namespace mongo {
         virtual Status getRoleDescriptionsForDB(const std::string dbname,
                                                 bool showPrivileges,
                                                 bool showBuiltinRoles,
-                                                vector<BSONObj>* result);
+                                                std::vector<BSONObj>* result);
 
         virtual void logOp(
                 const char* op,

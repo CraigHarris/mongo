@@ -29,11 +29,12 @@
 #pragma once
 
 namespace mongo {
-
     class BSONObj;
     class Database;
-    class TransactionExperiment;
+    class OperationContext;
     class OpTime;
+
+namespace replset {
 
     // These functions redefine the function for logOp(),
     // for either master/slave or replica sets.
@@ -68,7 +69,7 @@ namespace mongo {
 
        See _logOp() in oplog.cpp for more details.
     */
-    void logOp( TransactionExperiment* txn,
+    void logOp( OperationContext* txn,
                 const char *opstr,
                 const char *ns,
                 const BSONObj& obj,
@@ -96,7 +97,7 @@ namespace mongo {
      * @param convertUpdateToUpsert convert some updates to upserts for idempotency reasons
      * Returns if the op was an update that could not be applied (true on failure)
      */
-    bool applyOperation_inlock(TransactionExperiment* txn,
+    bool applyOperation_inlock(OperationContext* txn,
                                Database* db,
                                const BSONObj& op,
                                bool fromRepl = true,
@@ -112,4 +113,5 @@ namespace mongo {
      * Initializes the global OpTime with the value from the timestamp of the last oplog entry.
      */
     void initOpTimeFromOplog(const std::string& oplogNS);
-}
+} // namespace replset
+} // namespace mongo

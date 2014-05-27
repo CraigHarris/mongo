@@ -51,11 +51,12 @@
 #include "mongo/db/repl/sync_tail.h"
 #include "mongo/db/server_parameters.h"
 #include "mongo/db/stats/timer_stats.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/db/storage_options.h"
 #include "mongo/util/fail_point_service.h"
 
 namespace mongo {
+namespace replset {
 
     using namespace bson;
 
@@ -189,6 +190,10 @@ namespace mongo {
         for (Member *m = _members.head(); m; m = m->next()) {
             if (m->syncable() &&
                 targetOpTime.getSecs()+maxSyncSourceLagSecs < m->hbinfo().opTime.getSecs()) {
+                log() << "changing sync target because current sync target's most recent OpTime is "
+                      << targetOpTime.toStringPretty() << " which is more than "
+                      << maxSyncSourceLagSecs << " seconds behind member " << m->fullName()
+                      << " whose most recent OpTime is " << m->hbinfo().opTime.getSecs();
                 return true;
             }
         }
@@ -230,7 +235,7 @@ namespace mongo {
         changeState(MemberState::RS_RECOVERING);
 
         Client::Context ctx("local");
-        DurTransaction txn;
+        OperationContextImpl txn;
         ctx.db()->dropCollection(&txn, "local.oplog.rs");
         {
             boost::unique_lock<boost::mutex> lock(theReplSet->initialSyncMutex);
@@ -296,4 +301,5 @@ namespace mongo {
             changeState(MemberState::RS_RECOVERING);
         }
     }
-}
+} // namespace replset
+} // namespace mongo

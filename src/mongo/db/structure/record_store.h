@@ -31,11 +31,13 @@
 #pragma once
 
 #include "mongo/base/owned_pointer_vector.h"
+#include "mongo/bson/mutable/damage_vector.h"
 #include "mongo/db/diskloc.h"
 #include "mongo/db/exec/collection_scan_common.h"
 
 namespace mongo {
 
+    class CappedDocumentDeleteCallback;
     class Collection;
     struct CompactOptions;
     struct CompactStats;
@@ -45,7 +47,7 @@ namespace mongo {
     class MAdvise;
     class NamespaceDetails;
     class Record;
-    class TransactionExperiment;
+    class OperationContext;
 
     class RecordStoreCompactAdaptor;
     class RecordStore;
@@ -62,6 +64,18 @@ namespace mongo {
         virtual void writeDocument( char* buf ) const = 0;
         virtual size_t documentSize() const = 0;
         virtual bool addPadding() const { return true; }
+    };
+
+    /**
+     * @see RecordStore::updateRecord
+     */
+    class UpdateMoveNotifier {
+    public:
+        virtual ~UpdateMoveNotifier(){}
+        virtual Status recordStoreGoingToMove( OperationContext* txn,
+                                               const DiskLoc& oldLocation,
+                                               const char* oldBuffer,
+                                               size_t oldSize ) = 0;
     };
 
     /**
@@ -113,6 +127,10 @@ namespace mongo {
 
         virtual long long numRecords() const = 0;
 
+        virtual bool isCapped() const = 0;
+
+        virtual void setCappedDeleteCallback(CappedDocumentDeleteCallback*) {invariant( false );}
+
         /**
          * @param extraInfo - optional more debug info
          * @param level - optional, level of debug info to put in (higher is more)
@@ -123,17 +141,34 @@ namespace mongo {
 
         virtual Record* recordFor( const DiskLoc& loc ) const = 0;
 
-        virtual void deleteRecord( TransactionExperiment* txn, const DiskLoc& dl ) = 0;
+        virtual void deleteRecord( OperationContext* txn, const DiskLoc& dl ) = 0;
 
-        virtual StatusWith<DiskLoc> insertRecord( TransactionExperiment* txn,
+        virtual StatusWith<DiskLoc> insertRecord( OperationContext* txn,
                                                   const char* data,
                                                   int len,
                                                   int quotaMax ) = 0;
 
-        virtual StatusWith<DiskLoc> insertRecord( TransactionExperiment* txn,
+        virtual StatusWith<DiskLoc> insertRecord( OperationContext* txn,
                                                   const DocWriter* doc,
                                                   int quotaMax ) = 0;
 
+        /**
+         * @param notifier - this is called if the document is moved
+         *                   it is to be called after the document has been written to new
+         *                   location, before deleted from old.
+         * @return Status or DiskLoc, DiskLoc might be different
+         */
+        virtual StatusWith<DiskLoc> updateRecord( OperationContext* txn,
+                                                  const DiskLoc& oldLocation,
+                                                  const char* data,
+                                                  int len,
+                                                  int quotaMax,
+                                                  UpdateMoveNotifier* notifier ) = 0;
+
+        virtual Status updateWithDamages( OperationContext* txn,
+                                          const DiskLoc& loc,
+                                          const char* damangeSource,
+                                          const mutablebson::DamageVector& damages ) = 0;
         /**
          * returned iterator owned by caller
          * canonical to get all would be
@@ -161,11 +196,11 @@ namespace mongo {
         /**
          * removes all Records
          */
-        virtual Status truncate( TransactionExperiment* txn ) = 0;
+        virtual Status truncate( OperationContext* txn ) = 0;
 
         // does this RecordStore support the compact operation
         virtual bool compactSupported() const = 0;
-        virtual Status compact( TransactionExperiment* txn,
+        virtual Status compact( OperationContext* txn,
                                 RecordStoreCompactAdaptor* adaptor,
                                 const CompactOptions* options,
                                 CompactStats* stats ) = 0;
@@ -177,22 +212,32 @@ namespace mongo {
          *         OK will be returned even if corruption is found
          *         deatils will be in result
          */
-        virtual Status validate( TransactionExperiment* txn,
+        virtual Status validate( OperationContext* txn,
                                  bool full, bool scanData,
                                  ValidateAdaptor* adaptor,
                                  ValidateResults* results, BSONObjBuilder* output ) const = 0;
+
+        /**
+         * @param scaleSize - amount by which to scale size metrics
+         * appends any custom stats from the RecordStore or other unique stats
+         */
+        virtual void appendCustomStats( BSONObjBuilder* result, double scale ) const = 0;
 
         /**
          * Load all data into cache.
          * What cache depends on implementation.
          * @param output (optional) - where to put detailed stats
          */
-        virtual Status touch( TransactionExperiment* txn, BSONObjBuilder* output ) const = 0;
+        virtual Status touch( OperationContext* txn, BSONObjBuilder* output ) const = 0;
 
-        // TODO: this makes me sad, it shouldn't be in the interface
-        // do not use this anymore
-        virtual void increaseStorageSize( TransactionExperiment* txn,  int size, int quotaMax ) = 0;
-
+        /**
+         * @return Status::OK() if option hanlded
+         *         InvalidOptions is option not supported
+         *         other errors indicate option supported, but error setting
+         */
+        virtual Status setCustomOption( OperationContext* txn,
+                                        const BSONElement& option,
+                                        BSONObjBuilder* info = NULL ) = 0;
     protected:
         std::string _ns;
     };

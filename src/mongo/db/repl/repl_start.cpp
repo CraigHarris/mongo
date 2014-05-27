@@ -28,7 +28,6 @@
 
 #include "mongo/db/repl/repl_start.h"
 
-#include <boost/bind.hpp>
 #include <boost/thread.hpp>
 #include <iostream>
 
@@ -36,9 +35,11 @@
 #include "mongo/db/repl/oplog.h"
 #include "mongo/db/repl/repl_settings.h"
 #include "mongo/db/repl/rs.h"
+#include "mongo/stdx/functional.h"
 #include "mongo/util/log.h"
 
 namespace mongo {
+namespace replset {
 
     /** @param cfgString <setname>/<seedhost1>,<seedhost2> */
     void parseReplsetCmdLine(const std::string& cfgString,
@@ -100,7 +101,7 @@ namespace mongo {
 
             replSet = true;
             ReplSetCmdline *replSetCmdline = new ReplSetCmdline(replSettings.replSet);
-            boost::thread t( boost::bind( &startReplSets, replSetCmdline) );
+            boost::thread t( stdx::bind( &startReplSets, replSetCmdline) );
 
             return;
         }
@@ -108,4 +109,5 @@ namespace mongo {
         startMasterSlave();
     }
 
+} // namespace replset
 } // namespace mongo

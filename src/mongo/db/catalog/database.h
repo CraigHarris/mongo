@@ -30,65 +30,26 @@
 
 #pragma once
 
+#include "mongo/bson/bsonobj.h"
+#include "mongo/db/catalog/collection_options.h"
 #include "mongo/db/namespace_string.h"
-#include "mongo/db/structure/catalog/namespace_index.h"
 #include "mongo/db/storage_options.h"
+#include "mongo/util/concurrency/mutex.h"
+#include "mongo/util/mongoutils/str.h"
 #include "mongo/util/string_map.h"
 
 namespace mongo {
 
     class Collection;
+    class DatabaseCatalogEntry;
     class DataFile;
     class ExtentManager;
     class IndexCatalog;
+    class MMAP1DatabaseCatalogEntry;
     class MmapV1ExtentManager;
     class NamespaceDetails;
-    class TransactionExperiment;
-
-    struct CollectionOptions {
-        CollectionOptions() {
-            reset();
-        }
-
-        void reset() {
-            capped = false;
-            cappedSize = 0;
-            cappedMaxDocs = 0;
-            initialNumExtents = 0;
-            initialExtentSizes.clear();
-            autoIndexId = DEFAULT;
-            flags = 0;
-            flagsSet = false;
-            temp = false;
-        }
-
-        Status parse( const BSONObj& obj );
-        BSONObj toBSON() const;
-
-        // ----
-
-        bool capped;
-        long long cappedSize;
-        long long cappedMaxDocs;
-
-        // following 2 are mutually exclusive, can only have one set
-        long long initialNumExtents;
-        vector<long long> initialExtentSizes;
-
-        // behavior of _id index creation when collection created
-        void setNoIdIndex() { autoIndexId = NO; }
-        enum {
-            DEFAULT, // currently yes for most collections, NO for some system ones
-            YES, // create _id index
-            NO // do not create _id index
-        } autoIndexId;
-
-        // user flags
-        int flags;
-        bool flagsSet;
-
-        bool temp;
-    };
+    class NamespaceIndex;
+    class OperationContext;
 
     /**
      * Database represents a database database
@@ -98,27 +59,22 @@ namespace mongo {
     class Database {
     public:
         // you probably need to be in dbHolderMutex when constructing this
-        Database(TransactionExperiment* txn,
+        Database(OperationContext* txn,
                  const char *nm,
                  /*out*/ bool& newDb,
-                 const string& path = storageGlobalParams.dbpath);
+                 const std::string& path = storageGlobalParams.dbpath);
 
         /* you must use this to close - there is essential code in this method that is not in the ~Database destructor.
            thus the destructor is private.  this could be cleaned up one day...
         */
-        static void closeDatabase( const string& db, const string& path );
+        static void closeDatabase( const std::string& db, const std::string& path );
 
-        const string& name() const { return _name; }
-        const string& path() const { return _path; }
+        const std::string& name() const { return _name; }
+        const std::string& path() const { return _path; }
 
-        void clearTmpCollections(TransactionExperiment* txn);
+        void clearTmpCollections(OperationContext* txn);
 
-        /**
-         * tries to make sure that this hasn't been deleted
-         */
-        bool isOk() const { return _magic == 781231; }
-
-        bool isEmpty() { return ! _namespaceIndex.allocated(); }
+        bool isEmpty() const;
 
         /**
          * total file size of Database in bytes
@@ -132,7 +88,7 @@ namespace mongo {
         /**
          * @return true if success.  false if bad level or error creating profile ns
          */
-        bool setProfilingLevel( TransactionExperiment* txn, int newLevel , string& errmsg );
+        bool setProfilingLevel( OperationContext* txn, int newLevel , std::string& errmsg );
 
         void flushFiles( bool sync );
 
@@ -140,8 +96,8 @@ namespace mongo {
          * @return true if ns is part of the database
          *         ns=foo.bar, db=foo returns true
          */
-        bool ownsNS( const string& ns ) const {
-            if ( ! startsWith( ns , _name ) )
+        bool ownsNS( const std::string& ns ) const {
+            if ( ! mongoutils::str::startsWith( ns , _name ) )
                 return false;
             return ns[_name.size()] == '.';
         }
@@ -149,16 +105,21 @@ namespace mongo {
         int getProfilingLevel() const { return _profile; }
         const char* getProfilingNS() const { return _profileName.c_str(); }
 
-        const NamespaceIndex& namespaceIndex() const { return _namespaceIndex; }
-        NamespaceIndex& namespaceIndex() { return _namespaceIndex; }
+        void getStats( BSONObjBuilder* output, double scale = 1 );
+
+        long long getIndexSizeForCollection( Collection* collections,
+                                             BSONObjBuilder* details = NULL,
+                                             int scale = 1 );
+
+        const DatabaseCatalogEntry* getDatabaseCatalogEntry() const;
 
         // TODO: do not think this method should exist, so should try and encapsulate better
-        MmapV1ExtentManager* getExtentManager() { return _extentManager.get(); }
-        const MmapV1ExtentManager* getExtentManager() const { return _extentManager.get(); }
+        MmapV1ExtentManager* getExtentManager();
+        const MmapV1ExtentManager* getExtentManager() const;
 
-        Status dropCollection( TransactionExperiment* txn, const StringData& fullns );
+        Status dropCollection( OperationContext* txn, const StringData& fullns );
 
-        Collection* createCollection( TransactionExperiment* txn,
+        Collection* createCollection( OperationContext* txn,
                                       const StringData& ns,
                                       const CollectionOptions& options = CollectionOptions(),
                                       bool allocateSpace = true,
@@ -173,30 +134,34 @@ namespace mongo {
 
         Collection* getCollection( const NamespaceString& ns ) { return getCollection( ns.ns() ); }
 
-        Collection* getCollection( TransactionExperiment* txn, const StringData& ns );
+        Collection* getCollection( OperationContext* txn, const StringData& ns );
 
-        Collection* getCollection( TransactionExperiment* txn, const NamespaceString& ns ) {
+        Collection* getCollection( OperationContext* txn, const NamespaceString& ns ) {
             return getCollection( txn, ns.ns() );
         }
 
         Collection* getOrCreateCollection( const StringData& ns );
-        Collection* getOrCreateCollection( TransactionExperiment* txn, const StringData& ns );
+        Collection* getOrCreateCollection( OperationContext* txn, const StringData& ns );
 
-        Status renameCollection( TransactionExperiment* txn,
+        Status renameCollection( OperationContext* txn,
                                  const StringData& fromNS,
                                  const StringData& toNS,
                                  bool stayTemp );
 
         /**
          * @return name of an existing database with same text name but different
-         * casing, if one exists.  Otherwise the empty string is returned.  If
+         * casing, if one exists.  Otherwise the empty std::string is returned.  If
          * 'duplicates' is specified, it is filled with all duplicate names.
+         // TODO move???
          */
-        static string duplicateUncasedName( bool inholderlockalready, const string &name, const string &path, set< string > *duplicates = 0 );
+        static string duplicateUncasedName( bool inholderlockalready,
+                                            const std::string &name,
+                                            const std::string &path,
+                                            std::set< std::string > *duplicates = 0 );
 
         static Status validateDBName( const StringData& dbname );
 
-        const string& getSystemIndexesName() const { return _indexesName; }
+        const std::string& getSystemIndexesName() const { return _indexesName; }
     private:
 
         void _clearCollectionCache( const StringData& fullns );
@@ -205,7 +170,7 @@ namespace mongo {
 
         ~Database(); // closes files and other cleanup see below.
 
-        void _addNamespaceToCatalog( TransactionExperiment* txn,
+        void _addNamespaceToCatalog( OperationContext* txn,
                                      const StringData& ns,
                                      const BSONObj* options );
 
@@ -216,41 +181,30 @@ namespace mongo {
          * removes from NamespaceIndex
          * NOT RIGHT NOW, removes cache entry in Database TODO?
          */
-        Status _dropNS( TransactionExperiment* txn, const StringData& ns );
+        Status _dropNS( OperationContext* txn, const StringData& ns );
 
-        /**
-         * @throws DatabaseDifferCaseCode if the name is a duplicate based on
-         * case insensitive matching.
-         */
-        void checkDuplicateUncasedNames(bool inholderlockalready) const;
-
-        void openAllFiles(TransactionExperiment* txn);
-
-        Status _renameSingleNamespace( TransactionExperiment* txn,
+        Status _renameSingleNamespace( OperationContext* txn,
                                        const StringData& fromNS,
                                        const StringData& toNS,
                                        bool stayTemp );
 
-        const string _name; // "alleyinsider"
-        const string _path; // "/data/db"
+        const std::string _name; // "alleyinsider"
+        const std::string _path; // "/data/db"
 
-        NamespaceIndex _namespaceIndex;
-        boost::scoped_ptr<MmapV1ExtentManager> _extentManager;
+        boost::scoped_ptr<MMAP1DatabaseCatalogEntry> _dbEntry;
 
-        const string _profileName; // "alleyinsider.system.profile"
-        const string _namespacesName; // "alleyinsider.system.namespaces"
-        const string _indexesName; // "alleyinsider.system.indexes"
+        const std::string _profileName; // "alleyinsider.system.profile"
+        const std::string _namespacesName; // "alleyinsider.system.namespaces"
+        const std::string _indexesName; // "alleyinsider.system.indexes"
 
         int _profile; // 0=off.
-
-        int _magic; // used for making sure the object is still loaded in memory
 
         // TODO: make sure deletes go through
         // this in some ways is a dupe of _namespaceIndex
         // but it points to a much more useful data structure
         typedef StringMap< Collection* > CollectionMap;
         CollectionMap _collections;
-        mutex _collectionLock;
+        mongo::mutex _collectionLock;
 
         friend class Collection;
         friend class NamespaceDetails;

@@ -2,17 +2,29 @@
 
 /*    Copyright 2009 10gen Inc.
  *
- *    Licensed under the Apache License, Version 2.0 (the "License");
- *    you may not use this file except in compliance with the License.
- *    You may obtain a copy of the License at
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU Affero General Public License for more details.
  *
- *    Unless required by applicable law or agreed to in writing, software
- *    distributed under the License is distributed on an "AS IS" BASIS,
- *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *    See the License for the specific language governing permissions and
- *    limitations under the License.
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects
+ *    for all of the code used other than as permitted herein. If you modify
+ *    file(s) with this exception, you may extend this exception to your
+ *    version of the file(s), but you are not obligated to do so. If you do not
+ *    wish to do so, delete this exception statement from your version. If you
+ *    delete this exception statement from all source files in the program,
+ *    then also delete it in the license file.
  */
 
 /**
@@ -36,7 +48,7 @@ namespace mongo {
      */
     class MONGO_CLIENT_API ServerAndQuery {
     public:
-        ServerAndQuery( const string& server , BSONObj extra = BSONObj() , BSONObj orderObject = BSONObj() ) :
+        ServerAndQuery( const std::string& server , BSONObj extra = BSONObj() , BSONObj orderObject = BSONObj() ) :
             _server( server ) , _extra( extra.getOwned() ) , _orderObject( orderObject.getOwned() ) {
         }
 
@@ -51,17 +63,17 @@ namespace mongo {
             return _extra.woCompare( other._extra ) < 0;
         }
 
-        string toString() const {
+        std::string toString() const {
             StringBuilder ss;
             ss << "server:" << _server << " _extra:" << _extra.toString() << " _orderObject:" << _orderObject.toString();
             return ss.str();
         }
 
-        operator string() const {
+        operator std::string() const {
             return toString();
         }
 
-        string _server;
+        std::string _server;
         BSONObj _extra;
         BSONObj _orderObject;
     };
@@ -71,17 +83,17 @@ namespace mongo {
 
     class MONGO_CLIENT_API CommandInfo {
     public:
-        string versionedNS;
+        std::string versionedNS;
         BSONObj cmdFilter;
 
         CommandInfo() {}
-        CommandInfo( const string& vns, const BSONObj& filter ) : versionedNS( vns ), cmdFilter( filter ) {}
+        CommandInfo( const std::string& vns, const BSONObj& filter ) : versionedNS( vns ), cmdFilter( filter ) {}
 
         bool isEmpty(){
             return versionedNS.size() == 0;
         }
 
-        string toString() const {
+        std::string toString() const {
             return str::stream() << "CInfo " << BSON( "v_ns" << versionedNS << "filter" << cmdFilter );
         }
     };
@@ -110,7 +122,7 @@ namespace mongo {
 
         BSONObj toBSON() const;
 
-        string toString() const {
+        std::string toString() const {
             return str::stream() << "PCState : " << toBSON();
         }
     };
@@ -142,7 +154,7 @@ namespace mongo {
 
         BSONObj toBSON() const;
 
-        string toString() const {
+        std::string toString() const {
             return str::stream() << "PCMData : " << toBSON();
         }
     };
@@ -168,7 +180,7 @@ namespace mongo {
         ParallelSortClusteredCursor( const QuerySpec& qSpec, const CommandInfo& cInfo = CommandInfo() );
 
         // DEPRECATED legacy constructor for pure mergesort functionality - do not use
-        ParallelSortClusteredCursor( const set<ServerAndQuery>& servers , const string& ns ,
+        ParallelSortClusteredCursor( const std::set<ServerAndQuery>& servers , const std::string& ns ,
                                      const Query& q , int options=0, const BSONObj& fields=BSONObj() );
 
         ~ParallelSortClusteredCursor();
@@ -180,7 +192,7 @@ namespace mongo {
 
         bool more();
         BSONObj next();
-        string type() const { return "ParallelSort"; }
+        std::string type() const { return "ParallelSort"; }
 
         void fullInit();
         void startInit();
@@ -192,19 +204,19 @@ namespace mongo {
 
         bool isSharded();
         ShardPtr getPrimary();
-        void getQueryShards( set<Shard>& shards );
+        void getQueryShards( std::set<Shard>& shards );
         ChunkManagerPtr getChunkManager( const Shard& shard );
         DBClientCursorPtr getShardCursor( const Shard& shard );
 
         BSONObj toBSON() const;
-        string toString() const;
+        std::string toString() const;
 
         void explain(BSONObjBuilder& b);
 
     private:
         void _finishCons();
 
-        void _explain( map< string,list<BSONObj> >& out );
+        void _explain( std::map< std::string,std::list<BSONObj> >& out );
 
         void _markStaleNS( const NamespaceString& staleNS, const StaleConfigException& e, bool& forceReload, bool& fullReload );
         void _handleStaleNS( const NamespaceString& staleNS, bool forceReload, bool fullReload );
@@ -212,20 +224,20 @@ namespace mongo {
         bool _didInit;
         bool _done;
 
-        set<Shard> _qShards;
+        std::set<Shard> _qShards;
         QuerySpec _qSpec;
         CommandInfo _cInfo;
 
         // Count round-trips req'd for namespaces and total
-        map<string,int> _staleNSMap;
+        std::map<std::string,int> _staleNSMap;
         int _totalTries;
 
-        map<Shard,PCMData> _cursorMap;
+        std::map<Shard,PCMData> _cursorMap;
 
         // LEGACY BELOW
         int _numServers;
         int _lastFrom;
-        set<ServerAndQuery> _servers;
+        std::set<ServerAndQuery> _servers;
         BSONObj _sortKey;
 
         FilteringClientCursor * _cursors;
@@ -247,7 +259,7 @@ namespace mongo {
         void _oldInit();
 
         // LEGACY - Needed ONLY for _oldInit
-        string _ns;
+        std::string _ns;
         BSONObj _query;
         int _options;
         BSONObj _fields;
@@ -261,7 +273,7 @@ namespace mongo {
         FilteringClientCursor();
         ~FilteringClientCursor();
 
-        void reset( auto_ptr<DBClientCursor> cursor );
+        void reset( std::auto_ptr<DBClientCursor> cursor );
         void reset( DBClientCursor* cursor, ParallelConnectionMetadata* _pcmData = NULL );
 
         bool more();
@@ -281,7 +293,7 @@ namespace mongo {
     private:
         void _advance();
 
-        auto_ptr<DBClientCursor> _cursor;
+        std::auto_ptr<DBClientCursor> _cursor;
         ParallelConnectionMetadata* _pcmData;
 
         BSONObj _next;
@@ -301,7 +313,7 @@ namespace mongo {
         class CommandResult {
         public:
 
-            string getServer() const { return _server; }
+            std::string getServer() const { return _server; }
 
             bool isDone() const { return _done; }
 
@@ -323,16 +335,16 @@ namespace mongo {
 
         private:
 
-            CommandResult( const string& server,
-                           const string& db,
+            CommandResult( const std::string& server,
+                           const std::string& db,
                            const BSONObj& cmd,
                            int options,
                            DBClientBase * conn,
                            bool useShardedConn );
             void init();
 
-            string _server;
-            string _db;
+            std::string _server;
+            std::string _db;
             int _options;
             BSONObj _cmd;
             DBClientBase * _conn;
@@ -356,8 +368,8 @@ namespace mongo {
          * @param conn optional connection to use.  will use standard pooled if non-specified
          * @param useShardConn use ShardConnection
          */
-        static shared_ptr<CommandResult> spawnCommand( const string& server,
-                                                       const string& db,
+        static shared_ptr<CommandResult> spawnCommand( const std::string& server,
+                                                       const std::string& db,
                                                        const BSONObj& cmd,
                                                        int options,
                                                        DBClientBase * conn = 0,

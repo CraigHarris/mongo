@@ -35,20 +35,18 @@
 #include "mongo/db/auth/action_type.h"
 #include "mongo/db/auth/privilege.h"
 #include "mongo/db/background.h"
-#include "mongo/db/commands.h"
+#include "mongo/db/catalog/collection.h"
 #include "mongo/db/catalog/database.h"
+#include "mongo/db/commands.h"
+#include "mongo/db/curop.h"
 #include "mongo/db/d_concurrency.h"
-#include "mongo/db/curop-inl.h"
 #include "mongo/db/index_builder.h"
 #include "mongo/db/jsobj.h"
 #include "mongo/db/kill_current_op.h"
-#include "mongo/db/catalog/collection.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
+#include "mongo/db/repl/rs.h"
 
 namespace mongo {
-
-    // from repl/rs.cpp
-    bool isCurrentlyAReplSetPrimary();
 
     class CompactCmd : public Command {
     public:
@@ -83,14 +81,14 @@ namespace mongo {
             return IndexBuilder::killMatchingIndexBuilds(db->getCollection(ns), criteria);
         }
 
-        virtual bool run(const string& db, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
+        virtual bool run(OperationContext* txn, const string& db, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             string coll = cmdObj.firstElement().valuestr();
             if( coll.empty() || db.empty() ) {
                 errmsg = "no collection name specified";
                 return false;
             }
 
-            if( isCurrentlyAReplSetPrimary() && !cmdObj["force"].trueValue() ) {
+            if (replset::isCurrentlyAReplSetPrimary() && !cmdObj["force"].trueValue()) {
                 errmsg = "will not run compact on an active replica set primary as this is a slow blocking operation. use force:true to force";
                 return false;
             }
@@ -145,7 +143,6 @@ namespace mongo {
             Lock::DBWrite lk(ns.ns());
             BackgroundOperation::assertNoBgOpInProgForNs(ns.ns());
             Client::Context ctx(ns);
-            DurTransaction txn;
 
             Collection* collection = ctx.db()->getCollection(ns.ns());
             if( ! collection ) {
@@ -162,7 +159,7 @@ namespace mongo {
 
             std::vector<BSONObj> indexesInProg = stopIndexBuilds(ctx.db(), cmdObj);
 
-            StatusWith<CompactStats> status = collection->compact( &txn, &compactOptions );
+            StatusWith<CompactStats> status = collection->compact( txn, &compactOptions );
             if ( !status.isOK() )
                 return appendCommandStatus( result, status.getStatus() );
 

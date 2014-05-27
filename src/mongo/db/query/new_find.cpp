@@ -109,7 +109,8 @@ namespace {
 namespace mongo {
 
     // TODO: Move this and the other command stuff in newRunQuery outta here and up a level.
-    static bool runCommands(const char *ns,
+    static bool runCommands(OperationContext* txn,
+                            const char *ns,
                             BSONObj& jsobj,
                             CurOp& curop,
                             BufBuilder &b,
@@ -117,7 +118,7 @@ namespace mongo {
                             bool fromRepl,
                             int queryOptions) {
         try {
-            return _runCommands(ns, jsobj, b, anObjBuilder, fromRepl, queryOptions);
+            return _runCommands(txn, ns, jsobj, b, anObjBuilder, fromRepl, queryOptions);
         }
         catch( SendStaleConfigException& ){
             throw;
@@ -140,8 +141,14 @@ namespace mongo {
      *        when this method returns an empty result, incrementing pass on each call.  
      *        Thus, pass == 0 indicates this is the first "attempt" before any 'awaiting'.
      */
-    QueryResult* newGetMore(const char* ns, int ntoreturn, long long cursorid, CurOp& curop,
-                            int pass, bool& exhaust, bool* isCursorAuthorized) {
+    QueryResult* newGetMore(OperationContext* txn,
+                            const char* ns,
+                            int ntoreturn,
+                            long long cursorid,
+                            CurOp& curop,
+                            int pass,
+                            bool& exhaust,
+                            bool* isCursorAuthorized) {
         exhaust = false;
 
         // This is a read lock.
@@ -155,7 +162,7 @@ namespace mongo {
         // passing in a query object (necessary to check SlaveOK query option), the only state where
         // reads are allowed is PRIMARY (or master in master/slave).  This function uasserts if
         // reads are not okay.
-        replVerifyReadsOk(ns, NULL);
+        replset::replVerifyReadsOk(ns, NULL);
 
         // A pin performs a CC lookup and if there is a CC, increments the CC's pin value so it
         // doesn't time out.  Also informs ClientCursor that there is somebody actively holding the
@@ -191,7 +198,7 @@ namespace mongo {
             // If the operation that spawned this cursor had a time limit set, apply leftover
             // time to this getmore.
             curop.setMaxTimeMicros(cc->getLeftoverMaxTimeMicros());
-            killCurrentOp.checkForInterrupt(); // May trigger maxTimeAlwaysTimeOut fail point.
+            txn->checkForInterrupt(); // May trigger maxTimeAlwaysTimeOut fail point.
 
             if (0 == pass) { 
                 cc->updateSlaveLocation(curop); 
@@ -215,7 +222,7 @@ namespace mongo {
             const int queryOptions = cc->queryOptions();
 
             // Get results out of the runner.
-            runner->restoreState();
+            runner->restoreState(txn);
 
             BSONObj obj;
             Runner::RunnerState state;
@@ -397,7 +404,11 @@ namespace mongo {
         return Status::OK();
     }
 
-    std::string newRunQuery(Message& m, QueryMessage& q, CurOp& curop, Message &result) {
+    std::string newRunQuery(OperationContext* txn,
+                            Message& m,
+                            QueryMessage& q,
+                            CurOp& curop,
+                            Message &result) {
         // Validate the namespace.
         const char *ns = q.ns;
         uassert(16332, "can't have an empty ns", ns[0]);
@@ -424,7 +435,7 @@ namespace mongo {
             bb.skip(sizeof(QueryResult));
 
             BSONObjBuilder cmdResBuf;
-            if (!runCommands(ns, q.query, curop, bb, cmdResBuf, false, q.queryOptions)) {
+            if (!runCommands(txn, ns, q.query, curop, bb, cmdResBuf, false, q.queryOptions)) {
                 uasserted(13530, "bad or malformed command request?");
             }
 
@@ -511,10 +522,10 @@ namespace mongo {
 
         // Handle query option $maxTimeMS (not used with commands).
         curop.setMaxTimeMicros(static_cast<unsigned long long>(pq.getMaxTimeMS()) * 1000);
-        killCurrentOp.checkForInterrupt(); // May trigger maxTimeAlwaysTimeOut fail point.
+        txn->checkForInterrupt(); // May trigger maxTimeAlwaysTimeOut fail point.
 
         // uassert if we are not on a primary, and not a secondary with SlaveOk query parameter set.
-        replVerifyReadsOk(cq->ns(), &pq);
+        replset::replVerifyReadsOk(cq->ns(), &pq);
 
         // If this exists, the collection is sharded.
         // If it doesn't exist, we can assume we're not sharded.

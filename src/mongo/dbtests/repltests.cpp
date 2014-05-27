@@ -42,7 +42,7 @@
 #include "mongo/db/repl/rs.h"
 #include "mongo/db/ops/update.h"
 #include "mongo/db/catalog/collection.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 
 #include "mongo/dbtests/dbtests.h"
 
@@ -55,14 +55,14 @@ namespace ReplTests {
     class Base {
         Lock::GlobalWrite lk;
         Client::Context _context;
-        mutable DurTransaction _txn;
+        mutable OperationContextImpl _txn;
     public:
         Base() : _context( ns() ) {
-            oldRepl();
-            replSettings.replSet = "";
-            replSettings.oplogSize = 5 * 1024 * 1024;
-            replSettings.master = true;
-            createOplog();
+            mongo::replset::oldRepl();
+            mongo::replset::replSettings.replSet = "";
+            mongo::replset::replSettings.oplogSize = 5 * 1024 * 1024;
+            mongo::replset::replSettings.master = true;
+            mongo::replset::createOplog();
 
             Collection* c = _context.db()->getCollection( ns() );
             if ( ! c ) {
@@ -72,7 +72,7 @@ namespace ReplTests {
         }
         ~Base() {
             try {
-                replSettings.master = false;
+                mongo::replset::replSettings.master = false;
                 deleteAll( ns() );
                 deleteAll( cllNS() );
             }
@@ -132,7 +132,7 @@ namespace ReplTests {
         static int opCount() {
             Lock::GlobalWrite lk;
             Client::Context ctx( cllNS() );
-            DurTransaction txn;
+            OperationContextImpl txn;
             Database* db = ctx.db();
             Collection* coll = db->getCollection( cllNS() );
             if ( !coll ) {
@@ -150,7 +150,7 @@ namespace ReplTests {
         }
         static void applyAllOperations() {
             Lock::GlobalWrite lk;
-            DurTransaction txn;
+            OperationContextImpl txn;
             vector< BSONObj > ops;
             {
                 Client::Context ctx( cllNS() );
@@ -170,7 +170,7 @@ namespace ReplTests {
                 BSONObjBuilder b;
                 b.append("host", "localhost");
                 b.appendTimestamp("syncedTo", 0);
-                ReplSource a(b.obj());
+                mongo::replset::ReplSource a(b.obj());
                 for( vector< BSONObj >::iterator i = ops.begin(); i != ops.end(); ++i ) {
                     if ( 0 ) {
                         mongo::unittest::log() << "op: " << *i << endl;
@@ -182,7 +182,7 @@ namespace ReplTests {
         static void printAll( const char *ns ) {
             Lock::GlobalWrite lk;
             Client::Context ctx( ns );
-            DurTransaction txn;
+            OperationContextImpl txn;
             Database* db = ctx.db();
             Collection* coll = db->getCollection( ns );
             if ( !coll ) {
@@ -202,7 +202,7 @@ namespace ReplTests {
         static void deleteAll( const char *ns ) {
             Lock::GlobalWrite lk;
             Client::Context ctx( ns );
-            DurTransaction txn;
+            OperationContextImpl txn;
             Database* db = ctx.db();
             Collection* coll = db->getCollection( ns );
             if ( !coll ) {
@@ -223,7 +223,7 @@ namespace ReplTests {
         static void insert( const BSONObj &o ) {
             Lock::GlobalWrite lk;
             Client::Context ctx( ns() );
-            DurTransaction txn;
+            OperationContextImpl txn;
             Database* db = ctx.db();
             Collection* coll = db->getCollection( ns() );
             if ( !coll ) {
@@ -1336,7 +1336,7 @@ namespace ReplTests {
     class DatabaseIgnorerBasic {
     public:
         void run() {
-            DatabaseIgnorer d;
+            mongo::replset::DatabaseIgnorer d;
             ASSERT( !d.ignoreAt( "a", OpTime( 4, 0 ) ) );
             d.doIgnoreUntilAfter( "a", OpTime( 5, 0 ) );
             ASSERT( d.ignoreAt( "a", OpTime( 4, 0 ) ) );
@@ -1352,7 +1352,7 @@ namespace ReplTests {
     class DatabaseIgnorerUpdate {
     public:
         void run() {
-            DatabaseIgnorer d;
+            mongo::replset::DatabaseIgnorer d;
             d.doIgnoreUntilAfter( "a", OpTime( 5, 0 ) );
             d.doIgnoreUntilAfter( "a", OpTime( 6, 0 ) );
             ASSERT( d.ignoreAt( "a", OpTime( 5, 5 ) ) );
@@ -1373,7 +1373,7 @@ namespace ReplTests {
     class ReplSetMemberCfgEquality : public Base {
     public:
         void run() {
-            ReplSetConfig::MemberCfg m1, m2;
+            mongo::replset::ReplSetConfig::MemberCfg m1, m2;
             verify(m1 == m2);
             m1.tags["x"] = "foo";
             verify(m1 != m2);
@@ -1388,10 +1388,10 @@ namespace ReplTests {
         }
     };
 
-    class SyncTest : public Sync {
+    class SyncTest : public mongo::replset::Sync {
     public:
         bool returnEmpty;
-        SyncTest() : Sync(""), returnEmpty(false) {}
+        SyncTest() : mongo::replset::Sync(""), returnEmpty(false) {}
         virtual ~SyncTest() {}
         virtual BSONObj getMissingDoc(Database* db, const BSONObj& o) {
             if (returnEmpty) {
@@ -1410,7 +1410,7 @@ namespace ReplTests {
 
             // this should fail because we can't connect
             try {
-                Sync badSource("localhost:123");
+                mongo::replset::Sync badSource("localhost:123");
                 badSource.getMissingDoc(db(), o);
             }
             catch (DBException&) {

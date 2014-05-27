@@ -81,7 +81,7 @@ namespace mongo {
         Lock::DBRead lk(_ns);
         Client::Context ctx(_ns, storageGlobalParams.dbpath, /*doVersion=*/false);
 
-        _runner->restoreState();
+        _runner->restoreState(pExpCtx->opCtx);
 
         int memUsageBytes = 0;
         BSONObj obj;
@@ -204,7 +204,7 @@ namespace {
             massert(17392, "No _runner. Were we disposed before explained?",
                     _runner);
 
-            _runner->restoreState();
+            _runner->restoreState(pExpCtx->opCtx);
 
             TypeExplain* explainRaw;
             explainStatus = _runner->getInfo(&explainRaw, NULL);

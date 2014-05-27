@@ -853,7 +853,7 @@ namespace mongo {
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
 
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             ShardedConnectionInfo::reset();
             return true;
         }
@@ -938,7 +938,7 @@ namespace mongo {
             return true;
         }
 
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
 
             // Steps
             // 1. check basic config
@@ -982,7 +982,7 @@ namespace mongo {
             }
 
             // we can run on a slave up to here
-            if (!_isMaster()) {
+            if (!replset::_isMaster()) {
                 result.append( "errmsg" , "not master" );
                 result.append( "note" , "from post init in setShardVersion" );
                 return false;
@@ -1197,7 +1197,7 @@ namespace mongo {
             return parseNsFullyQualified(dbname, cmdObj);
         }
 
-        bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             string ns = cmdObj["getShardVersion"].valuestrsafe();
             if ( ns.size() == 0 ) {
                 errmsg = "need to specify full namespace";
@@ -1240,7 +1240,7 @@ namespace mongo {
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
 
-        bool run(const string& dbname, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
+        bool run(OperationContext* txn, const string& dbname, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool) {
             Lock::DBWrite dbXLock(dbname);
             Client::Context ctx(dbname);
 
@@ -1259,7 +1259,7 @@ namespace mongo {
         if ( ! shardingState.enabled() )
             return true;
 
-        if ( ! isMasterNs( ns.c_str() ) )  {
+        if (!replset::isMasterNs(ns.c_str()))  {
             // right now connections to secondaries aren't versioned at all
             return true;
         }

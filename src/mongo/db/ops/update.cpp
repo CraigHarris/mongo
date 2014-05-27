@@ -49,7 +49,7 @@
 #include "mongo/db/query/query_planner_common.h"
 #include "mongo/db/repl/is_master.h"
 #include "mongo/db/repl/oplog.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/db/catalog/collection.h"
 #include "mongo/platform/unordered_set.h"
 
@@ -416,7 +416,7 @@ namespace mongo {
         }
     } // namespace
 
-    UpdateResult update(TransactionExperiment* txn,
+    UpdateResult update(OperationContext* txn,
                         Database* db,
                         const UpdateRequest& request,
                         OpDebug* opDebug) {
@@ -426,7 +426,7 @@ namespace mongo {
     }
 
     UpdateResult update(
-            TransactionExperiment* txn,
+            OperationContext* txn,
             Database* db,
             const UpdateRequest& request,
             OpDebug* opDebug,
@@ -511,7 +511,7 @@ namespace mongo {
 
         uassert(ErrorCodes::NotMaster,
                 mongoutils::str::stream() << "Not primary while updating " << nsString.ns(),
-                !request.shouldCallLogOp() || isMasterNs(nsString.ns().c_str()));
+                !request.shouldCallLogOp() || replset::isMasterNs(nsString.ns().c_str()));
 
         while (true) {
             // Get next doc, and location
@@ -663,12 +663,12 @@ namespace mongo {
             // Restore state after modification
             uassert(17278,
                     "Update could not restore runner state after updating a document.",
-                    runner->restoreState());
+                    runner->restoreState(txn));
 
             // Call logOp if requested.
             if (request.shouldCallLogOp() && !logObj.isEmpty()) {
                 BSONObj idQuery = driver->makeOplogEntryQuery(newObj, request.isMulti());
-                logOp(txn, "u", nsString.ns().c_str(), logObj , &idQuery,
+                replset::logOp(txn, "u", nsString.ns().c_str(), logObj , &idQuery,
                       NULL, request.isFromMigration());
             }
 
@@ -681,7 +681,7 @@ namespace mongo {
             }
 
             // Opportunity for journaling to write during the update.
-            txn->commitIfNeeded();
+            txn->recoveryUnit()->commitIfNeeded();
         }
 
         // TODO: Can this be simplified?
@@ -782,8 +782,8 @@ namespace mongo {
                                                                 !request.isGod() /*enforceQuota*/);
         uassertStatusOK(newLoc.getStatus());
         if (request.shouldCallLogOp()) {
-            logOp(txn, "i", nsString.ns().c_str(), newObj,
-                   NULL, NULL, request.isFromMigration());
+            replset::logOp(txn, "i", nsString.ns().c_str(), newObj,
+                           NULL, NULL, request.isFromMigration());
         }
 
         opDebug->nMatched = 1;

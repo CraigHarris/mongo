@@ -32,11 +32,12 @@
 #include "mongo/db/auth/user_name.h"
 #include "mongo/db/catalog/collection.h"
 #include "mongo/db/catalog/database.h"
+#include "mongo/db/catalog/database_catalog_entry.h"
 #include "mongo/db/client.h"
 #include "mongo/db/instance.h"
 #include "mongo/db/pdfile.h"
 #include "mongo/db/repl/rs.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/util/scopeguard.h"
 
 namespace mongo {
@@ -64,16 +65,16 @@ namespace mongo {
                  dbName++) {
                 Client::ReadContext ctx(*dbName);
                 Database* db = ctx.ctx().db();
-                db->namespaceIndex().getNamespaces(collNames, /* onlyCollections */ true);
+                db->getDatabaseCatalogEntry()->getCollectionNamespaces(&collNames);
             }
             checkNS(collNames);
         }
         catch (const DBException& e) {
             warning() << "Index rebuilding did not complete: " << e.what() << endl;
         }
-        boost::unique_lock<boost::mutex> lk(ReplSet::rss.mtx);
-        ReplSet::rss.indexRebuildDone = true;
-        ReplSet::rss.cond.notify_all();
+        boost::unique_lock<boost::mutex> lk(replset::ReplSet::rss.mtx);
+        replset::ReplSet::rss.indexRebuildDone = true;
+        replset::ReplSet::rss.cond.notify_all();
         LOG(1) << "checking complete" << endl;
     }
 
@@ -90,7 +91,7 @@ namespace mongo {
             // This write lock is held throughout the index building process
             // for this namespace.
             Client::WriteContext ctx(ns);
-            DurTransaction txn;  // XXX???
+            OperationContextImpl txn;  // XXX???
 
             Collection* collection = ctx.ctx().db()->getCollection( ns );
             if ( collection == NULL )

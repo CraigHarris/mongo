@@ -26,7 +26,6 @@
  *    it in the license file.
  */
 
-#include <boost/bind.hpp>
 #include <boost/thread.hpp>
 #include <string>
 
@@ -34,11 +33,11 @@
 #include "mongo/db/range_deleter.h"
 #include "mongo/db/range_deleter_mock_env.h"
 #include "mongo/db/range_deleter_stats.h"
+#include "mongo/stdx/functional.h"
 #include "mongo/unittest/unittest.h"
 
 namespace {
 
-    using boost::bind;
     using std::string;
 
     using mongo::BSONObj;
@@ -49,6 +48,9 @@ namespace {
     using mongo::RangeDeleter;
     using mongo::RangeDeleterMockEnv;
     using mongo::RangeDeleterStats;
+    using mongo::OperationContext;
+
+    OperationContext* const noTxn = NULL; // MockEnv doesn't need txn XXX SERVER-13931
 
     // Capped sleep interval is 640 mSec, Nyquist frequency is 1280 mSec => round up to 2 sec.
     const int MAX_IMMEDIATE_DELETE_WAIT_SECS = 2;
@@ -62,7 +64,8 @@ namespace {
         deleter.stopWorkers();
 
         string errMsg;
-        ASSERT_FALSE(deleter.queueDelete("test.user",
+        ASSERT_FALSE(deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                                         "test.user",
                                          BSON("x" << 120),
                                          BSON("x" << 200),
                                          BSON("x" << 1),
@@ -84,7 +87,8 @@ namespace {
         env->addCursorId(ns, 345);
 
         Notification notifyDone;
-        ASSERT_TRUE(deleter.queueDelete(ns, BSON("x" << 0), BSON("x" << 10), BSON("x" << 1),
+        ASSERT_TRUE(deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                                        ns, BSON("x" << 0), BSON("x" << 10), BSON("x" << 1),
                                         true, &notifyDone, NULL /* errMsg not needed */));
 
         env->waitForNthGetCursor(1u);
@@ -122,7 +126,8 @@ namespace {
         env->addCursorId(ns, 345);
 
         Notification notifyDone;
-        ASSERT_TRUE(deleter.queueDelete(ns, BSON("x" << 0), BSON("x" << 10),  BSON("x" << 1),
+        ASSERT_TRUE(deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                                        ns, BSON("x" << 0), BSON("x" << 10),  BSON("x" << 1),
                                         true, &notifyDone, NULL /* errMsg not needed */));
 
 
@@ -130,6 +135,17 @@ namespace {
 
         deleter.stopWorkers();
         ASSERT_FALSE(env->deleteOccured());
+    }
+
+    static void rangeDeleterDeleteNow(RangeDeleter* deleter,
+                                      OperationContext* txn,
+                                      const std::string& ns,
+                                      const BSONObj& min,
+                                      const BSONObj& max,
+                                      const BSONObj& shardKeyPattern,
+                                      bool secondaryThrottle,
+                                      std::string* errMsg) {
+        deleter->deleteNow(txn, ns, min, max, shardKeyPattern, secondaryThrottle, errMsg);
     }
 
     // Should not start delete if the set of cursors that were open when the
@@ -143,14 +159,16 @@ namespace {
         env->addCursorId(ns, 345);
 
         string errMsg;
-        boost::thread deleterThread = boost::thread(boost::bind(&RangeDeleter::deleteNow,
-                                                                &deleter,
-                                                                ns,
-                                                                BSON("x" << 0),
-                                                                BSON("x" << 10),
-                                                                BSON("x" << 1),
-                                                                true,
-                                                                &errMsg));
+        boost::thread deleterThread = boost::thread(mongo::stdx::bind(
+                                                            rangeDeleterDeleteNow,
+                                                            &deleter,
+                                                            noTxn,
+                                                            ns,
+                                                            BSON("x" << 0),
+                                                            BSON("x" << 10),
+                                                            BSON("x" << 1),
+                                                            true,
+                                                            &errMsg));
 
         env->waitForNthGetCursor(1u);
 
@@ -192,14 +210,16 @@ namespace {
         env->addCursorId(ns, 345);
 
         string errMsg;
-        boost::thread deleterThread = boost::thread(boost::bind(&RangeDeleter::deleteNow,
-                                                                &deleter,
-                                                                ns,
-                                                                BSON("x" << 0),
-                                                                BSON("x" << 10),
-                                                                BSON("x" << 1),
-                                                                true,
-                                                                &errMsg));
+        boost::thread deleterThread = boost::thread(mongo::stdx::bind(
+                                                            rangeDeleterDeleteNow,
+                                                            &deleter,
+                                                            noTxn,
+                                                            ns,
+                                                            BSON("x" << 0),
+                                                            BSON("x" << 10),
+                                                            BSON("x" << 1),
+                                                            true,
+                                                            &errMsg));
 
         env->waitForNthGetCursor(1u);
 
@@ -238,7 +258,8 @@ namespace {
         env->pauseDeletes();
 
         Notification notifyDone1;
-        ASSERT_TRUE(deleter.queueDelete(ns,
+        ASSERT_TRUE(deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                                        ns,
                                         BSON("x" << 10),
                                         BSON("x" << 20),
                                         BSON("x" << 1),
@@ -256,7 +277,8 @@ namespace {
         ASSERT_EQUALS(1, inProgressCount);
 
         Notification notifyDone2;
-        ASSERT_TRUE(deleter.queueDelete(blockedNS,
+        ASSERT_TRUE(deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                                        blockedNS,
                                         BSON("x" << 20),
                                         BSON("x" << 30),
                                         BSON("x" << 1),
@@ -265,7 +287,8 @@ namespace {
                                         NULL /* don't care errMsg */));
 
         Notification notifyDone3;
-        ASSERT_TRUE(deleter.queueDelete(ns,
+        ASSERT_TRUE(deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                                        ns,
                                         BSON("x" << 30),
                                         BSON("x" << 40),
                                         BSON("x" << 1),
@@ -352,12 +375,13 @@ namespace {
         ASSERT_TRUE(errMsg.empty());
 
         errMsg.clear();
-        ASSERT_FALSE(deleter.queueDelete(ns, BSON("x" << 120), BSON("x" << 140),  BSON("x" << 1),
+        ASSERT_FALSE(deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                                         ns, BSON("x" << 120), BSON("x" << 140),  BSON("x" << 1),
                                          false, NULL /* notifier not needed */, &errMsg));
         ASSERT_FALSE(errMsg.empty());
 
         errMsg.clear();
-        ASSERT_FALSE(deleter.deleteNow(ns, BSON("x" << 120), BSON("x" << 140),
+        ASSERT_FALSE(deleter.deleteNow(noTxn, ns, BSON("x" << 120), BSON("x" << 140),
                                        BSON("x" << 1), false, &errMsg));
         ASSERT_FALSE(errMsg.empty());
 
@@ -400,7 +424,8 @@ namespace {
         env->addCursorId(ns, 58);
 
         Notification notifyDone;
-        deleter.queueDelete(ns, BSON("x" << 0), BSON("x" << 10), BSON("x" << 1),
+        deleter.queueDelete(OperationContext::factoryNULL, // XXX SERVER-13931
+                            ns, BSON("x" << 0), BSON("x" << 10), BSON("x" << 1),
                             false, &notifyDone, NULL /* errMsg not needed */);
 
         string errMsg;
@@ -428,14 +453,16 @@ namespace {
         env->pauseDeletes();
 
         string delErrMsg;
-        boost::thread deleterThread = boost::thread(boost::bind(&RangeDeleter::deleteNow,
-                                                                &deleter,
-                                                                ns,
-                                                                BSON("x" << 64),
-                                                                BSON("x" << 70),
-                                                                BSON("x" << 1),
-                                                                true,
-                                                                &delErrMsg));
+        boost::thread deleterThread = boost::thread(mongo::stdx::bind(
+                                                            rangeDeleterDeleteNow,
+                                                            &deleter,
+                                                            noTxn,
+                                                            ns,
+                                                            BSON("x" << 64),
+                                                            BSON("x" << 70),
+                                                            BSON("x" << 1),
+                                                            true,
+                                                            &delErrMsg));
 
         env->waitForNthPausedDelete(1u);
 
@@ -468,7 +495,7 @@ namespace {
         ASSERT_FALSE(deleter.removeFromBlackList(ns, BSON("x" << 1234), BSON("x" << 9000)));
 
         // Range should still be blacklisted
-        ASSERT_FALSE(deleter.deleteNow(ns, BSON("x" << 2000), BSON("x" << 4000), BSON("x" << 1),
+        ASSERT_FALSE(deleter.deleteNow(noTxn, ns, BSON("x" << 2000), BSON("x" << 4000), BSON("x" << 1),
                                        false, NULL /* errMsg not needed */));
 
         deleter.stopWorkers();
@@ -485,14 +512,14 @@ namespace {
         ASSERT_TRUE(errMsg.empty());
 
         errMsg.clear();
-        ASSERT_FALSE(deleter.deleteNow(ns, BSON("x" << 600), BSON("x" << 700),
+        ASSERT_FALSE(deleter.deleteNow(noTxn, ns, BSON("x" << 600), BSON("x" << 700),
                                        BSON("x" << 1), false, &errMsg));
         ASSERT_FALSE(errMsg.empty());
 
         ASSERT_TRUE(deleter.removeFromBlackList(ns, BSON("x" << 500), BSON("x" << 801)));
 
         errMsg.clear();
-        ASSERT_TRUE(deleter.deleteNow(ns, BSON("x" << 600), BSON("x" << 700),
+        ASSERT_TRUE(deleter.deleteNow(noTxn, ns, BSON("x" << 600), BSON("x" << 700),
                                       BSON("x" << 1), false, &errMsg));
         ASSERT_TRUE(errMsg.empty());
 
@@ -507,7 +534,7 @@ namespace {
         deleter.addToBlackList("foo.bar", BSON("x" << 100), BSON("x" << 200),
                                NULL /* errMsg not needed */);
 
-        ASSERT_TRUE(deleter.deleteNow("test.user", BSON("x" << 120), BSON("x" << 140),
+        ASSERT_TRUE(deleter.deleteNow(noTxn, "test.user", BSON("x" << 120), BSON("x" << 140),
                                       BSON("x" << 1), true, NULL /* errMsg not needed */));
 
         deleter.stopWorkers();

@@ -33,35 +33,9 @@
 #include <vector>
 
 #include "mongo/db/storage/extent_manager.h"
-#include "mongo/db/storage/transaction.h"
 #include "mongo/db/structure/record_store_v1_base.h"
 
 namespace mongo {
-
-    class DummyTransactionExperiment : public TransactionExperiment {
-    public:
-        virtual ~DummyTransactionExperiment(){}
-
-        virtual bool commitIfNeeded(bool force = false);
-
-        virtual bool isCommitNeeded() const;
-
-        virtual ProgressMeter* setMessage(const char* msg,
-                                          const std::string& name ,
-                                          unsigned long long progressMeterTotal,
-                                          int secondsBetween);
-
-        virtual void* writingPtr(void* data, size_t len);
-
-        virtual void createdFile(const std::string& filename, unsigned long long len);
-
-        virtual void syncDataAndTruncateJournal();
-
-        virtual void checkForInterrupt(bool heedMutex = true) const;
-
-        virtual Status checkForInterruptNoAssert() const;
-
-    };
 
     class DummyRecordStoreV1MetaData : public RecordStoreV1MetaData {
     public:
@@ -69,48 +43,51 @@ namespace mongo {
         virtual ~DummyRecordStoreV1MetaData(){}
 
         virtual const DiskLoc& capExtent() const;
-        virtual void setCapExtent( TransactionExperiment* txn, const DiskLoc& loc );
+        virtual void setCapExtent( OperationContext* txn, const DiskLoc& loc );
 
         virtual const DiskLoc& capFirstNewRecord() const;
-        virtual void setCapFirstNewRecord( TransactionExperiment* txn, const DiskLoc& loc );
-
-        virtual bool capLooped() const;
+        virtual void setCapFirstNewRecord( OperationContext* txn, const DiskLoc& loc );
 
         virtual long long dataSize() const;
         virtual long long numRecords() const;
 
-        virtual void incrementStats( TransactionExperiment* txn,
+        virtual void incrementStats( OperationContext* txn,
                                      long long dataSizeIncrement,
                                      long long numRecordsIncrement );
 
-        virtual void setStats( TransactionExperiment* txn,
+        virtual void setStats( OperationContext* txn,
                                long long dataSizeIncrement,
                                long long numRecordsIncrement );
 
         virtual const DiskLoc& deletedListEntry( int bucket ) const;
-        virtual void setDeletedListEntry( TransactionExperiment* txn,
+        virtual void setDeletedListEntry( OperationContext* txn,
                                           int bucket,
                                           const DiskLoc& loc );
-        virtual void orphanDeletedList(TransactionExperiment* txn);
+        virtual void orphanDeletedList(OperationContext* txn);
 
         virtual const DiskLoc& firstExtent() const;
-        virtual void setFirstExtent( TransactionExperiment* txn, const DiskLoc& loc );
+        virtual void setFirstExtent( OperationContext* txn, const DiskLoc& loc );
 
         virtual const DiskLoc& lastExtent() const;
-        virtual void setLastExtent( TransactionExperiment* txn, const DiskLoc& loc );
+        virtual void setLastExtent( OperationContext* txn, const DiskLoc& loc );
 
         virtual bool isCapped() const;
 
         virtual bool isUserFlagSet( int flag ) const;
+        virtual int userFlags() const { return _userFlags; }
+        virtual bool setUserFlag( OperationContext* txn, int flag );
+        virtual bool clearUserFlag( OperationContext* txn, int flag );
+        virtual bool replaceUserFlags( OperationContext* txn, int flags );
+
 
         virtual int lastExtentSize() const;
-        virtual void setLastExtentSize( TransactionExperiment* txn, int newMax );
+        virtual void setLastExtentSize( OperationContext* txn, int newMax );
 
         virtual long long maxCappedDocs() const;
 
         virtual double paddingFactor() const;
 
-        virtual void setPaddingFactor( TransactionExperiment* txn, double paddingFactor );
+        virtual void setPaddingFactor( OperationContext* txn, double paddingFactor );
 
     protected:
 
@@ -137,22 +114,22 @@ namespace mongo {
     public:
         virtual ~DummyExtentManager();
 
-        virtual Status init(TransactionExperiment* txn);
+        virtual Status init(OperationContext* txn);
 
         virtual size_t numFiles() const;
         virtual long long fileSize() const;
 
         virtual void flushFiles( bool sync );
 
-        virtual DiskLoc allocateExtent( TransactionExperiment* txn,
+        virtual DiskLoc allocateExtent( OperationContext* txn,
                                         bool capped,
                                         int size,
                                         int quotaMax );
 
-        virtual void freeExtents( TransactionExperiment* txn,
+        virtual void freeExtents( OperationContext* txn,
                                   DiskLoc firstExt, DiskLoc lastExt );
 
-        virtual void freeExtent( TransactionExperiment* txn, DiskLoc extent );
+        virtual void freeExtent( OperationContext* txn, DiskLoc extent );
 
         virtual void freeListStats( int* numExtents, int64_t* totalFreeSize ) const;
 
@@ -190,15 +167,18 @@ namespace mongo {
      *
      * records must be sorted by extent/file. offsets within an extent can be in any order.
      *
-     * drecs must be grouped into size-buckets, but the ordering within the size buckets is up to
-     * you.
+     * In a simple RS, drecs must be grouped into size-buckets, but the ordering within the size
+     * buckets is up to you.
      *
-     * You are responsible for ensuring the records and drecs don't overlap (unless you are testing
-     * a corrupt initial state).
+     * In a capped collection, all drecs form a single list and must be grouped by extent, with each
+     * extent having at least one drec. capFirstNewRecord() and capExtent() *must* be correctly set
+     * on md before calling.
+     *
+     * You are responsible for ensuring the records and drecs don't overlap.
      *
      * ExtentManager and MetaData must both be empty.
      */
-    void initializeV1RS(TransactionExperiment* txn,
+    void initializeV1RS(OperationContext* txn,
                         const LocAndSize* records,
                         const LocAndSize* drecs,
                         DummyExtentManager* em,
@@ -215,4 +195,5 @@ namespace mongo {
                          const LocAndSize* drecs,
                          const ExtentManager* em,
                          const DummyRecordStoreV1MetaData* md);
-}
+
+}  // namespace mongo

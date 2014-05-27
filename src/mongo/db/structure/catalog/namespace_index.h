@@ -33,6 +33,7 @@
 #include <list>
 #include <string>
 
+#include "mongo/base/disallow_copying.h"
 #include "mongo/db/diskloc.h"
 #include "mongo/db/structure/catalog/hashtab.h"
 #include "mongo/db/structure/catalog/namespace.h"
@@ -40,51 +41,52 @@
 namespace mongo {
 
     class NamespaceDetails;
-    class TransactionExperiment;
+    class OperationContext;
 
     /* NamespaceIndex is the ".ns" file you see in the data directory.  It is the "system catalog"
        if you will: at least the core parts.  (Additional info in system.* collections.)
     */
     class NamespaceIndex {
+        MONGO_DISALLOW_COPYING(NamespaceIndex);
     public:
         NamespaceIndex(const std::string &dir, const std::string &database) :
             _ht( 0 ), _dir( dir ), _database( database ) {}
 
-        /* returns true if new db will be created if we init lazily */
-        bool exists() const;
+        /* returns true if the file represented by this file exists on disk */
+        bool pathExists() const;
 
-        void init( TransactionExperiment* txn ) {
+        void init( OperationContext* txn ) {
             if ( !_ht.get() )
                 _init( txn );
         }
 
-        void add_ns( TransactionExperiment* txn,
+        void add_ns( OperationContext* txn,
                      const StringData& ns, const DiskLoc& loc, bool capped);
-        void add_ns( TransactionExperiment* txn,
+        void add_ns( OperationContext* txn,
                      const StringData& ns, const NamespaceDetails* details );
-        void add_ns( TransactionExperiment* txn,
+        void add_ns( OperationContext* txn,
                      const Namespace& ns, const NamespaceDetails* details );
 
         NamespaceDetails* details(const StringData& ns);
         NamespaceDetails* details(const Namespace& ns);
 
-        void kill_ns( TransactionExperiment* txn,
+        void kill_ns( OperationContext* txn,
                       const StringData& ns);
 
         bool allocated() const { return _ht.get() != 0; }
 
-        void getNamespaces( std::list<std::string>& tofill , bool onlyCollections = true ) const;
+        void getCollectionNamespaces( std::list<std::string>* tofill ) const;
 
         boost::filesystem::path path() const;
 
         unsigned long long fileLength() const { return _f.length(); }
 
     private:
-        void _init( TransactionExperiment* txn );
+        void _init( OperationContext* txn );
         void maybeMkdir() const;
 
         DurableMappedFile _f;
-        auto_ptr<HashTable<Namespace,NamespaceDetails> > _ht;
+        scoped_ptr<HashTable<Namespace,NamespaceDetails> > _ht;
         std::string _dir;
         std::string _database;
     };

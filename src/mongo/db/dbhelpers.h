@@ -28,11 +28,9 @@
 
 #pragma once
 
-// TODO: Remove
-#include "mongo/pch.h"
-
 #include "mongo/db/client.h"
 #include "mongo/db/db.h"
+#include "mongo/db/diskloc.h"
 #include "mongo/db/keypattern.h"
 #include "mongo/s/range_arithmetic.h"
 
@@ -42,7 +40,7 @@ namespace mongo {
 
     class Collection;
     class Cursor;
-    class TransactionExperiment;
+    class OperationContext;
 
     /**
      * db helpers are helper functions and classes that let us easily manipulate the local
@@ -64,7 +62,7 @@ namespace mongo {
 
            Note: does nothing if collection does not yet exist.
         */
-        static void ensureIndex(TransactionExperiment* txn,
+        static void ensureIndex(OperationContext* txn,
                                 Collection* collection,
                                 BSONObj keyPattern,
                                 bool unique,
@@ -91,7 +89,7 @@ namespace mongo {
         /**
          * have to be locked already
          */
-        static vector<BSONObj> findAll( const string& ns , const BSONObj& query );
+        static std::vector<BSONObj> findAll( const std::string& ns , const BSONObj& query );
 
         /**
          * @param foundIndex if passed in will be set to 1 if ns and index found
@@ -113,8 +111,8 @@ namespace mongo {
             @return true if object exists.
         */
         static bool getSingleton(const char *ns, BSONObj& result);
-        static void putSingleton(TransactionExperiment* txn, const char *ns, BSONObj obj);
-        static void putSingletonGod(TransactionExperiment* txn, const char *ns, BSONObj obj, bool logTheOp);
+        static void putSingleton(OperationContext* txn, const char *ns, BSONObj obj);
+        static void putSingletonGod(OperationContext* txn, const char *ns, BSONObj obj, bool logTheOp);
         static bool getFirst(const char *ns, BSONObj& result) { return getSingleton(ns, result); }
         static bool getLast(const char *ns, BSONObj& result); // get last object int he collection; e.g. {$natural : -1}
 
@@ -123,8 +121,8 @@ namespace mongo {
          * you do not have to have Context set
          * o has to have an _id field or will assert
          */
-        static void upsert( TransactionExperiment* txn,
-                            const string& ns,
+        static void upsert( OperationContext* txn,
+                            const std::string& ns,
                             const BSONObj& o,
                             bool fromMigrate = false );
 
@@ -162,7 +160,8 @@ namespace mongo {
          * Does oplog the individual document deletions.
          * // TODO: Refactor this mechanism, it is growing too large
          */
-        static long long removeRange( const KeyRange& range,
+        static long long removeRange( OperationContext* txn,
+                                      const KeyRange& range,
                                       bool maxInclusive = false,
                                       bool secondaryThrottle = false,
                                       RemoveSaver* callback = NULL,
@@ -191,7 +190,7 @@ namespace mongo {
          */
         static Status getLocsInRange( const KeyRange& range,
                                       long long maxChunkSizeBytes,
-                                      set<DiskLoc>* locs,
+                                      std::set<DiskLoc>* locs,
                                       long long* numDocs,
                                       long long* estChunkSizeBytes );
 
@@ -200,14 +199,14 @@ namespace mongo {
          * You do not need to set the database before calling.
          * Does not oplog the operation.
          */
-        static void emptyCollection(TransactionExperiment* txn, const char *ns);
+        static void emptyCollection(OperationContext* txn, const char *ns);
 
         /**
          * for saving deleted bson objects to a flat file
          */
         class RemoveSaver : public boost::noncopyable {
         public:
-            RemoveSaver(const string& type, const string& ns, const string& why);
+            RemoveSaver(const std::string& type, const std::string& ns, const std::string& why);
             ~RemoveSaver();
 
             void goingToDelete( const BSONObj& o );
@@ -215,7 +214,7 @@ namespace mongo {
         private:
             boost::filesystem::path _root;
             boost::filesystem::path _file;
-            ofstream* _out;
+            std::ofstream* _out;
         };
 
     };

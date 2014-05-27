@@ -29,8 +29,11 @@
 #pragma once
 
 #include "mongo/db/repl/health.h"
+#include "mongo/util/concurrency/mutex.h"
+#include "mongo/util/log.h"
 
 namespace mongo {
+namespace replset {
 
     /**
      * most operations on a ReplSet object should be done while locked. that
@@ -54,7 +57,7 @@ namespace mongo {
     public:
         class lock {
             RSBase& rsbase;
-            auto_ptr<scoped_lock> sl;
+            std::auto_ptr<scoped_lock> sl;
         public:
             lock(RSBase* b) : rsbase(*b) {
                 if( rsbase._lockedByMe.get() )
@@ -86,4 +89,5 @@ namespace mongo {
         bool lockedByMe() { return _lockedByMe.get(); }
     };
 
+} // namespace replset
 } // namespace mongo

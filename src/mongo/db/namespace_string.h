@@ -95,6 +95,7 @@ namespace mongo {
         bool isValid() const { return validDBName( db() ) && !coll().empty(); }
 
         bool operator==( const std::string& nsIn ) const { return nsIn == _ns; }
+        bool operator==( const StringData& nsIn ) const { return nsIn == _ns; }
         bool operator==( const NamespaceString& nsIn ) const { return nsIn._ns == _ns; }
 
         bool operator!=( const std::string& nsIn ) const { return nsIn != _ns; }
@@ -207,7 +208,7 @@ namespace mongo {
 
     /**
      * NamespaceDBHash and NamespaceDBEquals allow you to do something like
-     * unordered_map<string,int,NamespaceDBHash,NamespaceDBEquals>
+     * unordered_map<std::string,int,NamespaceDBHash,NamespaceDBEquals>
      * and use the full namespace for the string
      * but comparisons are done only on the db piece
      */

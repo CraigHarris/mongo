@@ -236,18 +236,18 @@ namespace mongo {
             _authzManager->_isFetchPhaseBusy = true;
         }
 
-        uint64_t _startGeneration;
+        OID _startGeneration;
         bool _isThisGuardInFetchPhase;
         AuthorizationManager* _authzManager;
         boost::unique_lock<boost::mutex> _lock;
     };
 
     AuthorizationManager::AuthorizationManager(AuthzManagerExternalState* externalState) :
-        _authEnabled(false),
-        _externalState(externalState),
-        _version(schemaVersionInvalid),
-        _cacheGeneration(0),
-        _isFetchPhaseBusy(false) {
+            _authEnabled(false),
+            _externalState(externalState),
+            _version(schemaVersionInvalid),
+            _isFetchPhaseBusy(false) {
+        _updateCacheGeneration_inlock();
     }
 
     AuthorizationManager::~AuthorizationManager() {
@@ -280,6 +280,11 @@ namespace mongo {
         }
         *version = newVersion;
         return Status::OK();
+    }
+
+    OID AuthorizationManager::getCacheGeneration() {
+        CacheGuard guard(this, CacheGuard::fetchSynchronizationManual);
+        return _cacheGeneration;
     }
 
     void AuthorizationManager::setAuthEnabled(bool enabled) {
@@ -388,7 +393,7 @@ namespace mongo {
             const NamespaceString& collectionName,
             const BSONObj& query,
             const BSONObj& projection,
-            const boost::function<void(const BSONObj&)>& resultProcessor) {
+            const stdx::function<void(const BSONObj&)>& resultProcessor) {
         return _externalState->query(collectionName, query, projection, resultProcessor);
     }
 
@@ -830,7 +835,7 @@ namespace mongo {
 
     void AuthorizationManager::invalidateUserByName(const UserName& userName) {
         CacheGuard guard(this, CacheGuard::fetchSynchronizationManual);
-        ++_cacheGeneration;
+        _updateCacheGeneration_inlock();
         unordered_map<UserName, User*>::iterator it = _userCache.find(userName);
         if (it == _userCache.end()) {
             return;
@@ -843,7 +848,7 @@ namespace mongo {
 
     void AuthorizationManager::invalidateUsersFromDB(const std::string& dbname) {
         CacheGuard guard(this, CacheGuard::fetchSynchronizationManual);
-        ++_cacheGeneration;
+        _updateCacheGeneration_inlock();
         unordered_map<UserName, User*>::iterator it = _userCache.begin();
         while (it != _userCache.end()) {
             User* user = it->second;
@@ -862,7 +867,7 @@ namespace mongo {
     }
 
     void AuthorizationManager::_invalidateUserCache_inlock() {
-        ++_cacheGeneration;
+        _updateCacheGeneration_inlock();
         for (unordered_map<UserName, User*>::iterator it = _userCache.begin();
                 it != _userCache.end(); ++it) {
             fassert(17266, it->second != internalSecurity.user);
@@ -1046,7 +1051,7 @@ namespace {
                 NamespaceString(db, "system.users"),
                 BSONObj(),
                 BSONObj(),
-                boost::bind(upgradeProcessUser, externalState, db, _1, writeConcern));
+                stdx::bind(upgradeProcessUser, externalState, db, stdx::placeholders::_1, writeConcern));
     }
 
     /**
@@ -1073,10 +1078,10 @@ namespace {
                 sourceCollection,
                 BSONObj(),
                 BSONObj(),
-                boost::bind(uassertInsertIntoCollection,
+                stdx::bind(uassertInsertIntoCollection,
                             externalState,
                             targetCollection,
-                            _1,
+                            stdx::placeholders::_1,
                             writeConcern));
     }
 
@@ -1405,6 +1410,10 @@ namespace {
     }
 
 }  // namespace
+
+    void AuthorizationManager::_updateCacheGeneration_inlock() {
+        _cacheGeneration = OID::gen();
+    }
 
     void AuthorizationManager::_invalidateRelevantCacheData(const char* op,
                                                             const char* ns,

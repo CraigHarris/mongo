@@ -39,15 +39,27 @@
 
 namespace mongo {
 
+    class OperationContext;
+
     /**
      * Called from the getMore entry point in ops/query.cpp.
      */
-    QueryResult* newGetMore(const char* ns, int ntoreturn, long long cursorid, CurOp& curop,
-                            int pass, bool& exhaust, bool* isCursorAuthorized);
+    QueryResult* newGetMore(OperationContext* txn,
+                            const char* ns,
+                            int ntoreturn,
+                            long long cursorid,
+                            CurOp& curop,
+                            int pass,
+                            bool& exhaust,
+                            bool* isCursorAuthorized);
 
     /**
      * Run the query 'q' and place the result in 'result'.
      */
-    std::string newRunQuery(Message& m, QueryMessage& q, CurOp& curop, Message &result);
+    std::string newRunQuery(OperationContext* txn,
+                            Message& m,
+                            QueryMessage& q,
+                            CurOp& curop,
+                            Message &result);
 
 }  // namespace mongo

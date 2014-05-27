@@ -70,7 +70,7 @@ namespace mongo {
         return reinterpret_cast<Record*>(it->second.get());
     }
 
-    void HeapRecordStore::deleteRecord(TransactionExperiment* txn, const DiskLoc& loc) {
+    void HeapRecordStore::deleteRecord(OperationContext* txn, const DiskLoc& loc) {
         Record* rec = recordFor(loc);
         _dataSize -= rec->netLength();
         invariant(_records.erase(loc) == 1);
@@ -89,7 +89,7 @@ namespace mongo {
         return false;
     }
 
-    void HeapRecordStore::cappedDeleteAsNeeded(TransactionExperiment* txn) {
+    void HeapRecordStore::cappedDeleteAsNeeded(OperationContext* txn) {
         while (cappedAndNeedDelete()) {
             invariant(!_records.empty());
 
@@ -102,7 +102,7 @@ namespace mongo {
         }
     }
 
-    StatusWith<DiskLoc> HeapRecordStore::insertRecord(TransactionExperiment* txn,
+    StatusWith<DiskLoc> HeapRecordStore::insertRecord(OperationContext* txn,
                                                       const char* data,
                                                       int len,
                                                       int quotaMax) {
@@ -129,7 +129,7 @@ namespace mongo {
         return StatusWith<DiskLoc>(loc);
     }
 
-    StatusWith<DiskLoc> HeapRecordStore::insertRecord(TransactionExperiment* txn,
+    StatusWith<DiskLoc> HeapRecordStore::insertRecord(OperationContext* txn,
                                                       const DocWriter* doc,
                                                       int quotaMax) {
         const int len = doc->documentSize();
@@ -154,6 +154,22 @@ namespace mongo {
         cappedDeleteAsNeeded(txn);
 
         return StatusWith<DiskLoc>(loc);
+    }
+    
+    StatusWith<DiskLoc> HeapRecordStore::updateRecord(OperationContext* txn,
+                                                      const DiskLoc& oldLocation,
+                                                      const char* data,
+                                                      int len,
+                                                      int quotaMax,
+                                                      UpdateMoveNotifier* notifier ) {
+        invariant(!"updateRecord not yet implemented");
+    }
+    
+    Status HeapRecordStore::updateWithDamages( OperationContext* txn,
+                                               const DiskLoc& loc,
+                                               const char* damangeSource,
+                                               const mutablebson::DamageVector& damages ) {
+        invariant(!"updateRecord not yet implemented");
     }
 
     RecordIterator* HeapRecordStore::getIterator(const DiskLoc& start,
@@ -182,7 +198,7 @@ namespace mongo {
         return out;
     }
 
-    Status HeapRecordStore::truncate(TransactionExperiment* txn) {
+    Status HeapRecordStore::truncate(OperationContext* txn) {
         _records.clear();
         _dataSize = 0;
         return Status::OK();
@@ -191,7 +207,7 @@ namespace mongo {
     bool HeapRecordStore::compactSupported() const {
         return false;
     }
-    Status HeapRecordStore::compact(TransactionExperiment* txn,
+    Status HeapRecordStore::compact(OperationContext* txn,
                                     RecordStoreCompactAdaptor* adaptor,
                                     const CompactOptions* options,
                                     CompactStats* stats) {
@@ -199,7 +215,7 @@ namespace mongo {
         invariant(!"compact not yet implemented");
     }
 
-    Status HeapRecordStore::validate(TransactionExperiment* txn,
+    Status HeapRecordStore::validate(OperationContext* txn,
                                      bool full,
                                      bool scanData,
                                      ValidateAdaptor* adaptor,
@@ -224,16 +240,25 @@ namespace mongo {
         return Status::OK();
 
     }
+    
+    void HeapRecordStore::appendCustomStats( BSONObjBuilder* result, double scale ) const {
+        invariant(!"appendCustomStats not yet implemented");
+    }
 
-    Status HeapRecordStore::touch(TransactionExperiment* txn, BSONObjBuilder* output) const {
+    Status HeapRecordStore::touch(OperationContext* txn, BSONObjBuilder* output) const {
         if (output) {
             output->append("numRanges", 1);
             output->append("millis", 0);
         }
         return Status::OK();
     }
+    
+    Status HeapRecordStore::setCustomOption(
+                OperationContext* txn, const BSONElement& option, BSONObjBuilder* info) {
+        invariant(!"setCustomOption not yet implemented");
+    }
 
-    void HeapRecordStore::increaseStorageSize(TransactionExperiment* txn,  int size, int quotaMax) {
+    void HeapRecordStore::increaseStorageSize(OperationContext* txn,  int size, int quotaMax) {
         // unclear what this would mean for this class. For now, just error if called.
         invariant(!"increaseStorageSize not yet implemented");
     }

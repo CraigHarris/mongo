@@ -42,7 +42,7 @@
 #include "mongo/db/query/plan_executor.h"
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/db/storage/mmap_v1/mmap_v1_extent_manager.h"
 #include "mongo/db/structure/catalog/namespace_details.h"
 #include "mongo/db/structure/record_store.h"
@@ -50,7 +50,7 @@
 #include "mongo/util/fail_point_service.h"
 
 namespace QueryStageCollectionScan {
-
+#if 0 // SERVER-13640
     //
     // Test some nitty-gritty capped collection details.  Ported and polished from pdfiletests.cpp.
     //
@@ -133,7 +133,7 @@ namespace QueryStageCollectionScan {
             BSONObj o = b.done();
             int len = o.objsize();
             Extent *e = extentManager()->getExtent(ext);
-            e = getDur().writing(e);
+            e = _txn.recoveryUnit()->writing(e);
             int ofs;
             if ( e->lastRecord.isNull() ) {
                 ofs = ext.getOfs() + ( e->_extentData - (char *)e );
@@ -144,7 +144,7 @@ namespace QueryStageCollectionScan {
             }
             DiskLoc dl( ext.a(), ofs );
             Record *r = recordStore()->recordFor(dl);
-            r = (Record*) getDur().writingPtr(r, Record::HeaderSize + len);
+            r = (Record*) _txn.recoveryUnit()->writingPtr(r, Record::HeaderSize + len);
             r->lengthWithHeaders() = Record::HeaderSize + len;
             r->extentOfs() = e->myLoc.getOfs();
             r->nextOfs() = DiskLoc::NullOfs;
@@ -153,7 +153,7 @@ namespace QueryStageCollectionScan {
             if ( e->firstRecord.isNull() )
                 e->firstRecord = dl;
             else
-                getDur().writingInt(recordStore()->recordFor(e->lastRecord)->nextOfs()) = ofs;
+                _txn.recoveryUnit()->writingInt(recordStore()->recordFor(e->lastRecord)->nextOfs()) = ofs;
             e->lastRecord = dl;
             return dl;
         }
@@ -175,7 +175,7 @@ namespace QueryStageCollectionScan {
 
         Lock::GlobalWrite lk_;
         Client::Context _context;
-        DurTransaction _txn;
+        OperationContextImpl _txn;
     };
 
     class QueryStageCollscanEmpty : public QueryStageCollectionScanCappedBase {
@@ -307,7 +307,7 @@ namespace QueryStageCollectionScan {
         virtual int expectedCount() const { return 4; }
         virtual int nExtents() const { return 3; }
     };
-
+#endif // SERVER-13640
     //
     // Stage-specific tests.
     //
@@ -623,6 +623,7 @@ namespace QueryStageCollectionScan {
 
         void setupTests() {
             // These tests are ported from pdfile.cpp
+            /* SERVER-13640
             add<QueryStageCollscanEmpty>();
             add<QueryStageCollscanEmptyLooped>();
             add<QueryStageCollscanEmptyMultiExtentLooped>();
@@ -636,6 +637,7 @@ namespace QueryStageCollectionScan {
             add<QueryStageCollscanAloneInExtent>();
             add<QueryStageCollscanFirstInExtent>();
             add<QueryStageCollscanLastInExtent>();
+            */
             // These are not.  Stage-specific tests below.
             add<QueryStageCollscanBasicForward>();
             add<QueryStageCollscanBasicBackward>();

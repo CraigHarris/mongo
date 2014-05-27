@@ -4,17 +4,29 @@
 
 /*    Copyright 2009 10gen Inc.
  *
- *    Licensed under the Apache License, Version 2.0 (the "License");
- *    you may not use this file except in compliance with the License.
- *    You may obtain a copy of the License at
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU Affero General Public License for more details.
  *
- *    Unless required by applicable law or agreed to in writing, software
- *    distributed under the License is distributed on an "AS IS" BASIS,
- *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *    See the License for the specific language governing permissions and
- *    limitations under the License.
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects
+ *    for all of the code used other than as permitted herein. If you modify
+ *    file(s) with this exception, you may extend this exception to your
+ *    version of the file(s), but you are not obligated to do so. If you do not
+ *    wish to do so, delete this exception statement from your version. If you
+ *    delete this exception statement from all source files in the program,
+ *    then also delete it in the license file.
  */
 
 #include "mongo/pch.h"
@@ -211,11 +223,17 @@ namespace mongo {
             if (format == Strict) {
                 Date_t d = date();
                 s << "{ \"$date\" : ";
-                if (static_cast<long long>(d.millis) < 0) {
-                    s << "{ \"$numberLong\" : \"" << static_cast<long long>(d.millis) << "\" }";
+                // The two cases in which we cannot convert Date_t::millis to an ISO Date string are
+                // when the date is too large to format (SERVER-13760), and when the date is before
+                // the epoch (SERVER-11273).  Since Date_t internally stores millis as an unsigned
+                // long long, despite the fact that it is logically signed (SERVER-8573), this check
+                // handles both the case where Date_t::millis is too large, and the case where
+                // Date_t::millis is negative (before the epoch).
+                if (d.isFormatable()) {
+                    s << "\"" << dateToISOStringLocal(date()) << "\"";
                 }
                 else {
-                    s << "\"" << dateToISOStringLocal(date()) << "\"";
+                    s << "{ \"$numberLong\" : \"" << static_cast<long long>(d.millis) << "\" }";
                 }
                 s << " }";
             }
@@ -223,13 +241,19 @@ namespace mongo {
                 s << "Date( ";
                 if (pretty) {
                     Date_t d = date();
-                    if (static_cast<long long>(d.millis) < 0) {
+                    // The two cases in which we cannot convert Date_t::millis to an ISO Date string
+                    // are when the date is too large to format (SERVER-13760), and when the date is
+                    // before the epoch (SERVER-11273).  Since Date_t internally stores millis as an
+                    // unsigned long long, despite the fact that it is logically signed
+                    // (SERVER-8573), this check handles both the case where Date_t::millis is too
+                    // large, and the case where Date_t::millis is negative (before the epoch).
+                    if (d.isFormatable()) {
+                        s << "\"" << dateToISOStringLocal(date()) << "\"";
+                    }
+                    else {
                         // FIXME: This is not parseable by the shell, since it may not fit in a
                         // float
                         s << d.millis;
-                    }
-                    else {
-                        s << "\"" << dateToISOStringLocal(date()) << "\"";
                     }
                 }
                 else {

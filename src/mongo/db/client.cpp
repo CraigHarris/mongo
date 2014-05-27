@@ -49,7 +49,7 @@
 #include "mongo/db/auth/privilege.h"
 #include "mongo/db/db.h"
 #include "mongo/db/commands.h"
-#include "mongo/db/curop-inl.h"
+#include "mongo/db/curop.h"
 #include "mongo/db/kill_current_op.h"
 #include "mongo/db/dbwebserver.h"
 #include "mongo/db/instance.h"
@@ -102,7 +102,6 @@ namespace mongo {
         _god(0),
         _lastOp(0)
     {
-        _hasWrittenThisOperation = false;
         _hasWrittenSinceCheckpoint = false;
         _connectionId = p ? p->connectionId() : 0;
         _curOp = new CurOp( this );
@@ -174,7 +173,6 @@ namespace mongo {
         _ns( ns ), 
         _db(db)
     {
-        verify( db == 0 || db->isOk() );
         _client->_context = this;
     }
 
@@ -292,7 +290,6 @@ namespace mongo {
     Client::Context::~Context() {
         DEV verify( _client == currentClient.get() );
         _client->_curOp->recordGlobalTime( _timer.micros() );
-        _client->_curOp->leave( this );
         _client->_context = _oldContext; // note: _oldContext may be null
     }
 
@@ -312,7 +309,7 @@ namespace mongo {
 
     void Client::appendLastOp( BSONObjBuilder& b ) const {
         // _lastOp is never set if replication is off
-        if( theReplSet || ! _lastOp.isNull() ) {
+        if (replset::theReplSet || !_lastOp.isNull()) {
             b.appendTimestamp( "lastOp" , _lastOp.asDate() );
         }
     }
@@ -354,11 +351,11 @@ namespace mongo {
 
         _handshake = b.obj();
 
-        if (!theReplSet || !o.hasField("member")) {
+        if (!replset::theReplSet || !o.hasField("member")) {
             return false;
         }
 
-        return theReplSet->registerSlave(_remoteId, o["member"].Int());
+        return replset::theReplSet->registerSlave(_remoteId, o["member"].Int());
     }
 
     bool ClientBasic::hasCurrent() {
@@ -383,7 +380,7 @@ namespace mongo {
             actions.addAction(ActionType::internal);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        virtual bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
+        virtual bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             Client& c = cc();
             c.gotHandshake( cmdObj );
             return 1;
@@ -420,12 +417,6 @@ namespace mongo {
         time += w; // writers are greedy, so we can be mean tot hem
 
         time = min( time , 1000000 );
-
-        // if there has been a kill request for this op - we should yield to allow the op to stop
-        // This function returns empty string if we aren't interrupted
-        if ( *killCurrentOp.checkForInterruptNoAssert() ) {
-            return 100;
-        }
 
         return time;
     }

@@ -30,9 +30,10 @@
 #include "mongo/db/repl/master_slave.h"  // replSettings
 #include "mongo/db/repl/repl_settings.h"  // replSettings
 #include "mongo/db/repl/rs.h" // replLocalAuth()
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 
 namespace mongo {
+namespace replset {
 
     // operator requested resynchronization of replication (on a slave or secondary). {resync: 1}
     class CmdResync : public Command {
@@ -57,7 +58,8 @@ namespace mongo {
         }
 
         CmdResync() : Command("resync") { }
-        virtual bool run(const string& dbname,
+        virtual bool run(OperationContext* txn,
+                         const string& dbname,
                          BSONObj& cmdObj,
                          int,
                          string& errmsg,
@@ -67,9 +69,11 @@ namespace mongo {
             const std::string ns = parseNs(dbname, cmdObj);
             Lock::GlobalWrite globalWriteLock;
             Client::Context ctx(ns);
-            DurTransaction txn;
-
             if (replSettings.usingReplSets()) {
+                if (!theReplSet) {
+                    errmsg = "no replication yet active";
+                    return false;
+                }
                 if (theReplSet->isPrimary()) {
                     errmsg = "primaries cannot resync";
                     return false;
@@ -90,7 +94,7 @@ namespace mongo {
             if ( !waitForSyncToFinish( errmsg ) )
                 return false;
 
-            ReplSource::forceResyncDead( &txn, "client" );
+            ReplSource::forceResyncDead( txn, "client" );
             result.append( "info", "triggered resync for all sources" );
             return true;
         }
@@ -114,4 +118,5 @@ namespace mongo {
             return true;
         }
     } cmdResync;
-}
+} // namespace replset
+} // namespace mongo

@@ -44,17 +44,17 @@ namespace mongo {
             return true;
         }
         virtual bool isWriteCommandForConfigServer() const { return false; }
-        virtual void help(stringstream& ss) const { ss << "internal"; }
+        virtual void help(std::stringstream& ss) const { ss << "internal"; }
         virtual void addRequiredPrivileges(const std::string& dbname,
                                            const BSONObj& cmdObj,
                                            std::vector<Privilege>* out) {} // No auth required
         virtual void redactForLogging(mutablebson::Document* cmdObj);
 
         CmdAuthenticate() : Command("authenticate") {}
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const std::string& dbname,
                  BSONObj& cmdObj,
                  int options,
-                 string& errmsg,
+                 std::string& errmsg,
                  BSONObjBuilder& result,
                  bool fromRepl);
 
@@ -76,6 +76,7 @@ namespace mongo {
                              const BSONObj& cmdObj);
         Status _authenticateCR(const UserName& user, const BSONObj& cmdObj);
         Status _authenticateX509(const UserName& user, const BSONObj& cmdObj);
+        bool _clusterIdMatch(const std::string& subjectName, const std::string& srvSubjectName);
     };
 
     extern CmdAuthenticate cmdAuthenticate;

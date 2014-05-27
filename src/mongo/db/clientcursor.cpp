@@ -164,7 +164,7 @@ namespace mongo {
     void ClientCursor::updateSlaveLocation( CurOp& curop ) {
         if ( _slaveReadTill.isNull() )
             return;
-        mongo::updateSlaveLocation( curop , _ns.c_str() , _slaveReadTill );
+        mongo::replset::updateSlaveLocation(curop, _ns.c_str(), _slaveReadTill);
     }
 
     //
@@ -257,7 +257,7 @@ namespace mongo {
             actions.addAction(ActionType::cursorInfo);
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
-        bool run(const string& dbname, BSONObj& jsobj, int, string& errmsg, BSONObjBuilder& result,
+        bool run(OperationContext* txn, const string& dbname, BSONObj& jsobj, int, string& errmsg, BSONObjBuilder& result,
                  bool fromRepl ) {
             _appendCursorStats( result );
             return true;

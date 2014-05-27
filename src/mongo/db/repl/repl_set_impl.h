@@ -28,18 +28,26 @@
 
 #pragma once
 
+#include "mongo/db/repl/consensus.h"
+#include "mongo/db/repl/heartbeat_info.h"
+#include "mongo/db/repl/manager.h"
+#include "mongo/db/repl/member.h"
 #include "mongo/db/repl/rs_base.h"
-#include "mongo/db/repl/repl_set_health_poll_task.h"
+#include "mongo/db/repl/rs_config.h"
 #include "mongo/db/repl/state_box.h"
 #include "mongo/db/repl/sync_source_feedback.h"
 #include "mongo/db/repl/sync_tail.h"
 #include "mongo/util/concurrency/thread_pool.h"
+#include "mongo/util/concurrency/value.h"
 
 namespace mongo {
-
     class Cloner;
-    struct HowToFixUp;
+
+namespace replset {
+
+    struct FixUpInfo;
     class ReplSetCmdline;
+    class ReplSetHealthPollTask;
 
     class ReplicationStartSynchronizer {
     public:
@@ -268,7 +276,6 @@ namespace mongo {
         friend class CmdReplSetElect;
         friend class Member;
         friend class Manager;
-        friend class GhostSync;
         friend class Consensus;
 
     private:
@@ -282,7 +289,7 @@ namespace mongo {
         void _syncThread();
         void syncTail();
         unsigned _syncRollback(OplogReader& r);
-        void syncFixUp(HowToFixUp& h, OplogReader& r);
+        void syncFixUp(FixUpInfo& h, OplogReader& r);
 
         // keep a list of hosts that we've tried recently that didn't work
         map<string,time_t> _veto;
@@ -345,4 +352,5 @@ namespace mongo {
         static const char* _initialSyncFlagString;
         static const BSONObj _initialSyncFlag;
     };
+} // namespace replset
 } // namespace mongo

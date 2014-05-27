@@ -43,7 +43,7 @@
 #include "mongo/db/ops/delete.h"
 #include "mongo/db/repl/is_master.h"
 #include "mongo/db/server_parameters.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/util/background.h"
 
 namespace mongo {
@@ -67,7 +67,7 @@ namespace mongo {
         
         void doTTLForDB( const string& dbName ) {
 
-            if ( !isMasterNs( dbName.c_str() ) )
+            if (!replset::isMasterNs(dbName.c_str()))
                 return;
 
             vector<BSONObj> indexes;
@@ -115,14 +115,14 @@ namespace mongo {
                 {
                     string ns = idx["ns"].String();
                     Client::WriteContext ctx( ns );
-                    DurTransaction txn;
+                    OperationContextImpl txn;
                     Collection* collection = ctx.ctx().db()->getCollection( ns );
                     if ( !collection ) {
                         // collection was dropped
                         continue;
                     }
 
-                    if ( !isMasterNs( dbName.c_str() ) ) {
+                    if (!replset::isMasterNs(dbName.c_str())) {
                         // we've stepped down since we started this function,
                         // so we should stop working as we only do deletes on the primary
                         break;
@@ -166,7 +166,7 @@ namespace mongo {
                 }
 
                 // if part of replSet but not in a readable state (e.g. during initial sync), skip.
-                if ( theReplSet && !theReplSet->state().readable() )
+                if (replset::theReplSet && !replset::theReplSet->state().readable())
                     continue;
 
                 set<string> dbs;

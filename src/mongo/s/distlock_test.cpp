@@ -2,17 +2,29 @@
 
 /*    Copyright 2009 10gen Inc.
  *
- *    Licensed under the Apache License, Version 2.0 (the "License");
- *    you may not use this file except in compliance with the License.
- *    You may obtain a copy of the License at
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU Affero General Public License for more details.
  *
- *    Unless required by applicable law or agreed to in writing, software
- *    distributed under the License is distributed on an "AS IS" BASIS,
- *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *    See the License for the specific language governing permissions and
- *    limitations under the License.
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects
+ *    for all of the code used other than as permitted herein. If you modify
+ *    file(s) with this exception, you may extend this exception to your
+ *    version of the file(s), but you are not obligated to do so. If you do not
+ *    wish to do so, delete this exception statement from your version. If you
+ *    delete this exception statement from all source files in the program,
+ *    then also delete it in the license file.
  */
 
 #include "mongo/pch.h"
@@ -24,6 +36,7 @@
 #include <vector>
 
 #include "mongo/base/init.h"
+#include "mongo/bson/util/atomic_int.h"
 #include "mongo/db/auth/action_set.h"
 #include "mongo/db/auth/action_type.h"
 #include "mongo/db/auth/privilege.h"
@@ -103,7 +116,7 @@ namespace mongo {
             }
         }
 
-        bool run(const string&, BSONObj& cmdObj, int, string& errmsg,
+        bool run(OperationContext* txn, const string&, BSONObj& cmdObj, int, string& errmsg,
                  BSONObjBuilder& result, bool) {
             Timer t;
             DistributedLock lk(ConnectionString(cmdObj["host"].String(),
@@ -321,7 +334,7 @@ namespace mongo {
             return;
         }
 
-        bool run(const string&, BSONObj& cmdObj, int, string& errmsg,
+        bool run(OperationContext* txn, const string&, BSONObj& cmdObj, int, string& errmsg,
                  BSONObjBuilder& result, bool) {
 
             Timer t;
@@ -355,7 +368,7 @@ namespace mongo {
             for (int i = 0; i < numThreads; i++) {
                 results.push_back(shared_ptr<BSONObjBuilder> (new BSONObjBuilder()));
                 threads.push_back(shared_ptr<boost::thread> (new boost::thread(
-                                      boost::bind(&TestDistLockWithSkew::runThread, this,
+                                      stdx::bind(&TestDistLockWithSkew::runThread, this,
                                                   hostConn, (unsigned) i, seed + i, boost::ref(cmdObj),
                                                   boost::ref(*(results[i].get()))))));
             }
@@ -461,7 +474,7 @@ namespace mongo {
                                            const BSONObj& cmdObj,
                                            std::vector<Privilege>* out) {}
 
-        bool run(const string&, BSONObj& cmdObj, int, string& errmsg,
+        bool run(OperationContext* txn, const string&, BSONObj& cmdObj, int, string& errmsg,
                  BSONObjBuilder& result, bool) {
 
             long long skew = (long long) number_field(cmdObj, "skew", 0);

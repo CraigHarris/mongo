@@ -38,10 +38,10 @@
 #include "mongo/db/catalog/database_holder.h"
 #include "mongo/db/catalog/index_create.h"
 #include "mongo/db/client.h"
-#include "mongo/db/cloner.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/util/file.h"
 #include "mongo/util/file_allocator.h"
+#include "mongo/util/mmap.h"
 
 namespace mongo {
 
@@ -226,7 +226,7 @@ namespace mongo {
 
     class RepairFileDeleter {
     public:
-        RepairFileDeleter( TransactionExperiment* txn,
+        RepairFileDeleter( OperationContext* txn,
                            const string& dbName,
                            const string& pathString,
                            const Path& path )
@@ -245,7 +245,7 @@ namespace mongo {
                   << "db: " << _dbName << " path: " << _pathString;
 
             try {
-                _txn->syncDataAndTruncateJournal();
+                _txn->recoveryUnit()->syncDataAndTruncateJournal();
                 MongoFile::flushAll(true); // need both in case journaling is disabled
                 {
                     Client::Context tempContext( _dbName, _pathString );
@@ -265,14 +265,14 @@ namespace mongo {
         }
 
     private:
-        TransactionExperiment* _txn;
+        OperationContext* _txn;
         string _dbName;
         string _pathString;
         Path _path;
         bool _success;
     };
 
-    Status repairDatabase( TransactionExperiment* txn,
+    Status repairDatabase( OperationContext* txn,
                            string dbName,
                            bool preserveClonedFilesOnFailure,
                            bool backupOriginalFiles ) {
@@ -284,7 +284,7 @@ namespace mongo {
 
         BackgroundOperation::assertNoBgOpInProgForDb(dbName);
 
-        txn->syncDataAndTruncateJournal(); // Must be done before and after repair
+        txn->recoveryUnit()->syncDataAndTruncateJournal(); // Must be done before and after repair
 
         intmax_t totalSize = dbSize( dbName );
         intmax_t freeSize = File::freeSpace(storageGlobalParams.repairpath);
@@ -408,7 +408,7 @@ namespace mongo {
                     if ( !result.isOK() )
                         return result.getStatus();
 
-                    txn->commitIfNeeded();
+                    txn->recoveryUnit()->commitIfNeeded();
                     txn->checkForInterrupt(false);
                 }
 
@@ -421,7 +421,7 @@ namespace mongo {
 
             }
 
-            txn->syncDataAndTruncateJournal();
+            txn->recoveryUnit()->syncDataAndTruncateJournal();
             MongoFile::flushAll(true); // need both in case journaling is disabled
 
             txn->checkForInterrupt(false);

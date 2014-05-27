@@ -90,7 +90,7 @@ namespace mongo {
                     _iterators[i]->prepareToYield();
                 }
             }
-            virtual bool restoreState() {
+            virtual bool restoreState(OperationContext* opCtx) {
                 for (size_t i = 0; i < _iterators.size(); i++) {
                     if (!_iterators[i]->recoverFromYield()) {
                         kill();
@@ -159,7 +159,7 @@ namespace mongo {
             return Status(ErrorCodes::Unauthorized, "Unauthorized");
         }
 
-        virtual bool run( const string& dbname, BSONObj& cmdObj, int options,
+        virtual bool run(OperationContext* txn, const string& dbname, BSONObj& cmdObj, int options,
                           string& errmsg, BSONObjBuilder& result,
                           bool fromRepl = false ) {
 

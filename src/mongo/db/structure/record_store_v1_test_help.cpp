@@ -40,40 +40,6 @@
 #include "mongo/unittest/unittest.h"
 
 namespace mongo {
-    bool DummyTransactionExperiment::commitIfNeeded( bool force ) {
-        return false;
-    }
-
-    bool DummyTransactionExperiment::isCommitNeeded() const {
-        return false;
-    }
-
-    ProgressMeter* DummyTransactionExperiment::setMessage(const char* msg,
-                                                          const std::string& name ,
-                                                          unsigned long long progressMeterTotal,
-                                                          int secondsBetween) {
-        invariant( false );
-    }
-
-    void* DummyTransactionExperiment::writingPtr(void* data, size_t len) {
-        return data;
-    }
-
-    void DummyTransactionExperiment::createdFile(const std::string& filename,
-                                                 unsigned long long len) {
-    }
-
-    void DummyTransactionExperiment::syncDataAndTruncateJournal() {
-    }
-
-    void DummyTransactionExperiment::checkForInterrupt(bool heedMutex ) const {
-    }
-
-    Status DummyTransactionExperiment::checkForInterruptNoAssert() const {
-        return Status::OK();
-    }
-
-    // -----------------------------------------
 
     DummyRecordStoreV1MetaData::DummyRecordStoreV1MetaData( bool capped, int userFlags ) {
         _dataSize = 0;
@@ -94,7 +60,7 @@ namespace mongo {
         return _capExtent;
     }
 
-    void DummyRecordStoreV1MetaData::setCapExtent( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::setCapExtent( OperationContext* txn,
                                                    const DiskLoc& loc ) {
         _capExtent = loc;
     }
@@ -103,13 +69,9 @@ namespace mongo {
         return _capFirstNewRecord;
     }
 
-    void DummyRecordStoreV1MetaData::setCapFirstNewRecord( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::setCapFirstNewRecord( OperationContext* txn,
                                                            const DiskLoc& loc ) {
         _capFirstNewRecord = loc;
-    }
-
-    bool DummyRecordStoreV1MetaData::capLooped() const {
-        invariant( false );
     }
 
     long long DummyRecordStoreV1MetaData::dataSize() const {
@@ -120,14 +82,14 @@ namespace mongo {
         return _numRecords;
     }
 
-    void DummyRecordStoreV1MetaData::incrementStats( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::incrementStats( OperationContext* txn,
                                                      long long dataSizeIncrement,
                                                      long long numRecordsIncrement ) {
         _dataSize += dataSizeIncrement;
         _numRecords += numRecordsIncrement;
     }
 
-    void DummyRecordStoreV1MetaData::setStats( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::setStats( OperationContext* txn,
                                                long long dataSizeIncrement,
                                                long long numRecordsIncrement ) {
         _dataSize = dataSizeIncrement;
@@ -145,7 +107,7 @@ namespace mongo {
         return _deletedLists[bucket];
     }
 
-    void DummyRecordStoreV1MetaData::setDeletedListEntry( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::setDeletedListEntry( OperationContext* txn,
                                                           int bucket,
                                                           const DiskLoc& loc ) {
         invariant( bucket >= 0 );
@@ -155,7 +117,7 @@ namespace mongo {
         _deletedLists[bucket] = loc;
     }
 
-    void DummyRecordStoreV1MetaData::orphanDeletedList(TransactionExperiment* txn) {
+    void DummyRecordStoreV1MetaData::orphanDeletedList(OperationContext* txn) {
         invariant( false );
     }
 
@@ -163,7 +125,7 @@ namespace mongo {
         return _firstExtent;
     }
 
-    void DummyRecordStoreV1MetaData::setFirstExtent( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::setFirstExtent( OperationContext* txn,
                                                      const DiskLoc& loc ) {
         _firstExtent = loc;
     }
@@ -172,7 +134,7 @@ namespace mongo {
         return _lastExtent;
     }
 
-    void DummyRecordStoreV1MetaData::setLastExtent( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::setLastExtent( OperationContext* txn,
                                                     const DiskLoc& loc ) {
         _lastExtent = loc;
     }
@@ -185,11 +147,35 @@ namespace mongo {
         return _userFlags & flag;
     }
 
+    bool DummyRecordStoreV1MetaData::setUserFlag( OperationContext* txn, int flag ) {
+        if ( ( _userFlags & flag ) == flag )
+            return false;
+
+        _userFlags |= flag;
+        return true;
+
+    }
+    bool DummyRecordStoreV1MetaData::clearUserFlag( OperationContext* txn, int flag ) {
+        if ( ( _userFlags & flag ) == 0 )
+            return false;
+
+        _userFlags &= ~flag;
+        return true;
+
+    }
+    bool DummyRecordStoreV1MetaData::replaceUserFlags( OperationContext* txn, int flags ) {
+        if ( _userFlags == flags )
+            return false;
+        _userFlags = flags;
+        return true;
+    }
+
+
     int DummyRecordStoreV1MetaData::lastExtentSize() const {
         return _lastExtentSize;
     }
 
-    void DummyRecordStoreV1MetaData::setLastExtentSize( TransactionExperiment* txn, int newMax ) {
+    void DummyRecordStoreV1MetaData::setLastExtentSize( OperationContext* txn, int newMax ) {
         _lastExtentSize = newMax;
     }
 
@@ -201,7 +187,7 @@ namespace mongo {
         return _paddingFactor;
     }
 
-    void DummyRecordStoreV1MetaData::setPaddingFactor( TransactionExperiment* txn,
+    void DummyRecordStoreV1MetaData::setPaddingFactor( OperationContext* txn,
                                                        double paddingFactor ) {
         _paddingFactor = paddingFactor;
     }
@@ -215,7 +201,7 @@ namespace mongo {
         }
     }
 
-    Status DummyExtentManager::init(TransactionExperiment* txn) {
+    Status DummyExtentManager::init(OperationContext* txn) {
         return Status::OK();
     }
 
@@ -231,7 +217,7 @@ namespace mongo {
     void DummyExtentManager::flushFiles( bool sync ) {
     }
 
-    DiskLoc DummyExtentManager::allocateExtent( TransactionExperiment* txn,
+    DiskLoc DummyExtentManager::allocateExtent( OperationContext* txn,
                                                 bool capped,
                                                 int size,
                                                 int quotaMax ) {
@@ -257,12 +243,12 @@ namespace mongo {
 
     }
 
-    void DummyExtentManager::freeExtents( TransactionExperiment* txn,
+    void DummyExtentManager::freeExtents( OperationContext* txn,
                                           DiskLoc firstExt, DiskLoc lastExt ) {
         // XXX
     }
 
-    void DummyExtentManager::freeExtent( TransactionExperiment* txn, DiskLoc extent ) {
+    void DummyExtentManager::freeExtent( OperationContext* txn, DiskLoc extent ) {
         // XXX
     }
     void DummyExtentManager::freeListStats( int* numExtents, int64_t* totalFreeSize ) const {
@@ -331,7 +317,12 @@ namespace {
                 const int actualSize = actualRec->lengthWithHeaders();
 
                 log() << "loc: " << actualLoc // <--hex
-                      << " (" << actualLoc.getOfs() << ") size: " << actualSize;
+                      << " (" << actualLoc.getOfs() << ")"
+                      << " size: " << actualSize
+                      << " prev: " << actualRec->prevOfs()
+                      << " next: " << actualRec->nextOfs()
+                      << (actualLoc == md->capFirstNewRecord() ? " (CAP_FIRST_NEW)" : "")
+                      ;
 
                 const bool foundCycle = !seenLocs.insert(actualLoc).second;
                 invariant(!foundCycle);
@@ -354,26 +345,34 @@ namespace {
                 const DeletedRecord* actualDrec = &em->recordForV1(actualLoc)->asDeleted();
                 const int actualSize = actualDrec->lengthWithHeaders();
 
-
                 log() << "loc: " << actualLoc // <--hex
-                      << " (" << actualLoc.getOfs() << ") size: " << actualSize;
+                      << " (" << actualLoc.getOfs() << ")"
+                      << " size: " << actualSize
+                      << " bucket: " << bucketIdx
+                      << " next: " << actualDrec->nextDeleted();
 
                 const bool foundCycle = !seenLocs.insert(actualLoc).second;
                 invariant(!foundCycle);
 
                 actualLoc = actualDrec->nextDeleted();
             }
+
+            // Only print bucket 0 in capped collections since it contains all deleted records
+            if (md->isCapped())
+                break;
         }
         log() << " *** END ACTUAL DELETED RECORD LIST *** ";
     }
 }
 
-    void initializeV1RS(TransactionExperiment* txn,
+    void initializeV1RS(OperationContext* txn,
                         const LocAndSize* records,
                         const LocAndSize* drecs,
                         DummyExtentManager* em,
                         DummyRecordStoreV1MetaData* md) {
         invariant(records || drecs); // if both are NULL nothing is being created...
+        
+        // Need to start with a blank slate
         invariant(em->numFiles() == 0);
         invariant(md->firstExtent().isNull());
 
@@ -397,6 +396,7 @@ namespace {
 
             // link together extents that should be part of this RS
             md->setFirstExtent(txn, DiskLoc(extentSizes.begin()->first, 0));
+            md->setLastExtent(txn, DiskLoc(extentSizes.rbegin()->first, 0));
             for (ExtentSizes::iterator it = extentSizes.begin();
                     boost::next(it) != extentSizes.end(); /* ++it */ ) {
                 const int a = it->first;
@@ -405,14 +405,18 @@ namespace {
                 em->getExtent(DiskLoc(a, 0))->xnext = DiskLoc(b, 0);
                 em->getExtent(DiskLoc(b, 0))->xprev = DiskLoc(a, 0);
             }
+
+            // This signals "done allocating new extents".
+            if (md->isCapped())
+                md->setDeletedListEntry(txn, 1, DiskLoc());
         }
 
         if (records && !records[0].loc.isNull()) {
-            // TODO figure out how to handle capExtent specially in cappedCollections
             int recIdx = 0;
             DiskLoc extLoc = md->firstExtent();
             while (!extLoc.isNull()) {
                 Extent* ext = em->getExtent(extLoc);
+                int prevOfs = DiskLoc::NullOfs;
                 while (extLoc.a() == records[recIdx].loc.a()) { // for all records in this extent
                     const DiskLoc loc = records[recIdx].loc;
                     const int size = records[recIdx].size;;
@@ -427,16 +431,19 @@ namespace {
                     rec->lengthWithHeaders() = size;
                     rec->extentOfs() = 0;
 
-                    const DiskLoc nextLoc = records[++recIdx].loc;
-                    if (nextLoc.a() == loc.a()) {
-                        Record* nextRec = em->recordForV1(loc);
+                    rec->prevOfs() = prevOfs;
+                    prevOfs = loc.getOfs();
+
+                    const DiskLoc nextLoc = records[recIdx + 1].loc;
+                    if (nextLoc.a() == loc.a()) { // if next is in same extent
                         rec->nextOfs() = nextLoc.getOfs();
-                        nextRec->prevOfs() = loc.getOfs();
                     }
                     else {
                         rec->nextOfs() = DiskLoc::NullOfs;
                         ext->lastRecord = loc;
                     }
+
+                    recIdx++;
                 }
                 extLoc = ext->xnext;
             }
@@ -453,7 +460,22 @@ namespace {
                 invariant(size >= Record::HeaderSize);
                 const int bucket = RecordStoreV1Base::bucket(size);
 
-                if (bucket != lastBucket) {
+                if (md->isCapped()) {
+                    // All drecs form a single list in bucket 0
+                    if (prevNextPtr == NULL) {
+                        md->setDeletedListEntry(txn, 0, loc);
+                    }
+                    else {
+                        *prevNextPtr = loc;
+                    }
+
+                    if (loc.a() < md->capExtent().a()
+                            && drecs[drecIdx + 1].loc.a() == md->capExtent().a()) {
+                        // Bucket 1 is known as cappedLastDelRecLastExtent
+                        md->setDeletedListEntry(txn, 1, loc);
+                    }
+                } 
+                else if (bucket != lastBucket) {
                     invariant(bucket > lastBucket); // if this fails, drecs weren't sorted by bucket
                     md->setDeletedListEntry(txn, bucket, loc);
                     lastBucket = bucket;
@@ -482,18 +504,19 @@ namespace {
                          const DummyRecordStoreV1MetaData* md) {
         invariant(records || drecs); // if both are NULL nothing is being asserted...
 
-        if (records) {
-            try {
+        try {
+            if (records) {
                 long long dataSize = 0;
                 long long numRecs = 0;
 
                 int recIdx = 0;
 
                 DiskLoc extLoc = md->firstExtent();
-                while (!extLoc.isNull()) {
+                while (!extLoc.isNull()) { // for each Extent
                     Extent* ext = em->getExtent(extLoc, true);
+                    int expectedPrevOfs = DiskLoc::NullOfs;
                     DiskLoc actualLoc = ext->firstRecord;
-                    while (!actualLoc.isNull()) {
+                    while (!actualLoc.isNull()) { // for each Record in this Extent
                         const Record* actualRec = em->recordForV1(actualLoc);
                         const int actualSize = actualRec->lengthWithHeaders();
 
@@ -504,12 +527,19 @@ namespace {
                         ASSERT_EQUALS(actualSize, records[recIdx].size);
 
                         ASSERT_EQUALS(actualRec->extentOfs(), extLoc.getOfs());
+                        ASSERT_EQUALS(actualRec->prevOfs(), expectedPrevOfs);
+                        expectedPrevOfs = actualLoc.getOfs();
 
                         recIdx++;
                         const int nextOfs = actualRec->nextOfs();
                         actualLoc = (nextOfs == DiskLoc::NullOfs ? DiskLoc()
                                                                  : DiskLoc(actualLoc.a(), nextOfs));
                     }
+
+                    if (ext->xnext.isNull()) {
+                        ASSERT_EQUALS(md->lastExtent(), extLoc);
+                    }
+
                     extLoc = ext->xnext;
                 }
 
@@ -519,17 +549,32 @@ namespace {
                 ASSERT_EQUALS(dataSize, md->dataSize());
                 ASSERT_EQUALS(numRecs, md->numRecords());
             }
-            catch (...) {
-                printRecList(em, md);
-                throw;
-            }
-        }
 
-        if (drecs) {
-            try {
+            if (drecs) {
                 int drecIdx = 0;
                 for (int bucketIdx = 0; bucketIdx < RecordStoreV1Base::Buckets; bucketIdx++) {
                     DiskLoc actualLoc = md->deletedListEntry(bucketIdx);
+
+                    if (md->isCapped() && bucketIdx == 1) {
+                        // In capped collections, the 2nd bucket (index 1) points to the drec before
+                        // the first drec in the capExtent. If the capExtent is the first Extent,
+                        // it should be Null.
+
+                        if (md->capExtent() == md->firstExtent()) {
+                            ASSERT_EQUALS(actualLoc, DiskLoc());
+                        }
+                        else {
+                            ASSERT_NOT_EQUALS(actualLoc.a(), md->capExtent().a());
+                            const DeletedRecord* actualDrec =
+                                &em->recordForV1(actualLoc)->asDeleted();
+                            ASSERT_EQUALS(actualDrec->nextDeleted().a(), md->capExtent().a());
+                        }
+
+                        // Don't do normal checking of bucket 1 in capped collections. Checking
+                        // other buckets to verify that they are Null.
+                        continue;
+                    }
+
                     while (!actualLoc.isNull()) {
                         const DeletedRecord* actualDrec = &em->recordForV1(actualLoc)->asDeleted();
                         const int actualSize = actualDrec->lengthWithHeaders();
@@ -539,7 +584,11 @@ namespace {
 
                         // Make sure the drec is correct
                         ASSERT_EQUALS(actualDrec->extentOfs(), 0);
-                        ASSERT_EQUALS(bucketIdx, RecordStoreV1Base::bucket(actualSize));
+
+                        // in capped collections all drecs are linked into a single list in bucket 0
+                        ASSERT_EQUALS(bucketIdx, md->isCapped()
+                                                   ? 0
+                                                   : RecordStoreV1Base::bucket(actualSize));
 
                         drecIdx++;
                         actualLoc = actualDrec->nextDeleted();
@@ -548,10 +597,12 @@ namespace {
                 // both the expected and actual deleted lists must be done at this point
                 ASSERT_EQUALS(drecs[drecIdx].loc, DiskLoc());
             }
-            catch (...) {
-                printDRecList(em, md);
-                throw;
-            }
+        }
+        catch (...) {
+            // If a test fails, provide extra info to make debugging easier
+            printRecList(em, md);
+            printDRecList(em, md);
+            throw;
         }
     }
 }

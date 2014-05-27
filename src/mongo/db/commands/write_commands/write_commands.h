@@ -72,10 +72,12 @@ namespace mongo {
         virtual bool shouldAffectCommandCounter() const;
 
         // Write command entry point.
-        virtual bool run(const string& dbname,
+        virtual bool run(
+                 OperationContext* txn,
+                 const std::string& dbname,
                  BSONObj& cmdObj,
                  int options,
-                 string& errmsg,
+                 std::string& errmsg,
                  BSONObjBuilder& result,
                  bool fromRepl);
 
@@ -90,7 +92,7 @@ namespace mongo {
         void redactForLogging(mutablebson::Document* cmdObj);
 
     private:
-        virtual void help(stringstream& help) const;
+        virtual void help(std::stringstream& help) const;
     };
 
     class CmdUpdate : public WriteCmd {
@@ -100,7 +102,7 @@ namespace mongo {
         void redactForLogging(mutablebson::Document* cmdObj);
 
     private:
-        virtual void help(stringstream& help) const;
+        virtual void help(std::stringstream& help) const;
     };
 
     class CmdDelete : public WriteCmd {
@@ -110,7 +112,7 @@ namespace mongo {
         void redactForLogging(mutablebson::Document* cmdObj);
 
     private:
-        virtual void help(stringstream& help) const;
+        virtual void help(std::stringstream& help) const;
     };
 
 } // namespace mongo

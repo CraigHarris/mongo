@@ -30,8 +30,6 @@
 
 #include "mongo/db/commands/user_management_commands.h"
 
-#include <boost/bind.hpp>
-#include <boost/function.hpp>
 #include <string>
 #include <vector>
 
@@ -56,6 +54,7 @@
 #include "mongo/db/commands.h"
 #include "mongo/db/jsobj.h"
 #include "mongo/platform/unordered_set.h"
+#include "mongo/stdx/functional.h"
 #include "mongo/util/mongoutils/str.h"
 #include "mongo/util/net/ssl_manager.h"
 #include "mongo/util/sequence_util.h"
@@ -123,6 +122,7 @@ namespace mongo {
                                       const UserName& userName,
                                       unordered_set<RoleName>* roles) {
         User* user;
+        authzManager->invalidateUserByName(userName); // Need to make sure cache entry is up to date
         Status status = authzManager->acquireUser(userName, &user);
         if (!status.isOK()) {
             return status;
@@ -301,6 +301,10 @@ namespace mongo {
         return Status::OK();
     }
 
+    static void appendBSONObjToBSONArrayBuilder(BSONArrayBuilder* array, const BSONObj& obj) {
+        array->append(obj);
+    }
+
     class CmdCreateUser : public Command {
     public:
 
@@ -340,7 +344,7 @@ namespace mongo {
             return checkAuthorizedToGrantRoles(authzSession, args.roles);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -526,7 +530,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -650,7 +654,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -736,7 +740,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -818,7 +822,7 @@ namespace mongo {
             return checkAuthorizedToGrantRoles(authzSession, roles);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -916,7 +920,7 @@ namespace mongo {
             return checkAuthorizedToRevokeRoles(authzSession, roles);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1032,7 +1036,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1115,10 +1119,10 @@ namespace mongo {
                 if (!args.showCredentials) {
                     projection.append("credentials", 0);
                 }
-                BSONArrayBuilder& (BSONArrayBuilder::* appendBSONObj) (const BSONObj&) =
-                        &BSONArrayBuilder::append<BSONObj>;
-                const boost::function<void(const BSONObj&)> function =
-                        boost::bind(appendBSONObj, &usersArrayBuilder, _1);
+                const stdx::function<void(const BSONObj&)> function = stdx::bind(
+                        appendBSONObjToBSONArrayBuilder,
+                        &usersArrayBuilder,
+                        stdx::placeholders::_1);
                 authzManager->queryAuthzDocument(usersNamespace,
                                                  queryBuilder.done(),
                                                  projection.done(),
@@ -1174,7 +1178,7 @@ namespace mongo {
             return checkAuthorizedToGrantPrivileges(authzSession, args.privileges);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1320,7 +1324,7 @@ namespace mongo {
             return checkAuthorizedToGrantPrivileges(authzSession, args.privileges);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1441,7 +1445,7 @@ namespace mongo {
             return checkAuthorizedToGrantPrivileges(authzSession, privileges);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1577,7 +1581,7 @@ namespace mongo {
             return checkAuthorizedToRevokePrivileges(authzSession, privileges);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1714,7 +1718,7 @@ namespace mongo {
             return checkAuthorizedToGrantRoles(authzSession, roles);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1833,7 +1837,7 @@ namespace mongo {
             return checkAuthorizedToRevokeRoles(authzSession, roles);
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -1952,7 +1956,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -2120,7 +2124,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -2275,7 +2279,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -2332,6 +2336,10 @@ namespace mongo {
             return true;
         }
 
+        virtual bool adminOnly() const {
+            return true;
+        }
+
         virtual bool isWriteCommandForConfigServer() const { return false; }
 
         CmdInvalidateUserCache() : Command("invalidateUserCache") {}
@@ -2351,7 +2359,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -2364,6 +2372,51 @@ namespace mongo {
         }
 
     } cmdInvalidateUserCache;
+
+    class CmdGetCacheGeneration: public Command {
+    public:
+
+        virtual bool slaveOk() const {
+            return true;
+        }
+
+        virtual bool adminOnly() const {
+            return true;
+        }
+
+        virtual bool isWriteCommandForConfigServer() const { return false; }
+
+        CmdGetCacheGeneration() : Command("_getUserCacheGeneration") {}
+
+        virtual void help(stringstream& ss) const {
+            ss << "internal" << endl;
+        }
+
+        virtual Status checkAuthForCommand(ClientBasic* client,
+                                           const std::string& dbname,
+                                           const BSONObj& cmdObj) {
+            AuthorizationSession* authzSession = client->getAuthorizationSession();
+            if (!authzSession->isAuthorizedForActionsOnResource(
+                    ResourcePattern::forClusterResource(), ActionType::internal)) {
+                return Status(ErrorCodes::Unauthorized, "Not authorized to get cache generation");
+            }
+            return Status::OK();
+        }
+
+        bool run(OperationContext* txn,
+                 const string& dbname,
+                 BSONObj& cmdObj,
+                 int options,
+                 string& errmsg,
+                 BSONObjBuilder& result,
+                 bool fromRepl) {
+
+            AuthorizationManager* authzManager = getGlobalAuthorizationManager();
+            result.append("cacheGeneration", authzManager->getCacheGeneration());
+            return true;
+        }
+
+    } CmdGetCacheGeneration;
 
     /**
      * This command is used only by mongorestore to handle restoring users/roles.  We do this so
@@ -2454,7 +2507,7 @@ namespace mongo {
 
         /**
          * Extracts the UserName from the user document and adds it to set of existing users.
-         * This function is written so it can used with boost::bind over the result set of a query
+         * This function is written so it can used with stdx::bind over the result set of a query
          * on admin.system.users to add the user names of all existing users to the "usersToDrop"
          * set used in the command body.
          */
@@ -2481,7 +2534,7 @@ namespace mongo {
 
         /**
          * Extracts the RoleName from the role document and adds it to set of existing roles.
-         * This function is written so it can used with boost::bind over the result set of a query
+         * This function is written so it can used with stdx::bind over the result set of a query
          * on admin.system.roles to add the role names of all existing roles to the "rolesToDrop"
          * set used in the command body.
          */
@@ -2541,7 +2594,7 @@ namespace mongo {
         }
 
         /**
-         * Designed to be used with boost::bind to be called on every user object in the result
+         * Designed to be used with stdx::bind to be called on every user object in the result
          * set of a query over the tempUsersCollection provided to the command.  For each user
          * in the temp collection, adds that user to the actual admin.system.users collection.
          * Also removes any users it encounters from the usersToDrop set.
@@ -2578,7 +2631,7 @@ namespace mongo {
         }
 
         /**
-         * Designed to be used with boost::bind to be called on every role object in the result
+         * Designed to be used with stdx::bind to be called on every role object in the result
          * set of a query over the tempRolesCollection provided to the command.  For each role
          * in the temp collection, adds that role to the actual admin.system.roles collection.
          * Also removes any roles it encounters from the rolesToDrop set.
@@ -2640,9 +2693,9 @@ namespace mongo {
                         AuthorizationManager::usersCollectionNamespace,
                         BSONObj(),
                         fields,
-                        boost::bind(&CmdMergeAuthzCollections::extractAndInsertUserName,
+                        stdx::bind(&CmdMergeAuthzCollections::extractAndInsertUserName,
                                     &usersToDrop,
-                                    _1));
+                                    stdx::placeholders::_1));
                 if (!status.isOK()) {
                     return status;
                 }
@@ -2652,12 +2705,12 @@ namespace mongo {
                     NamespaceString(usersCollName),
                     BSONObj(),
                     BSONObj(),
-                    boost::bind(&CmdMergeAuthzCollections::addUser,
+                    stdx::bind(&CmdMergeAuthzCollections::addUser,
                                 authzManager,
                                 drop,
                                 writeConcern,
                                 &usersToDrop,
-                                _1));
+                                stdx::placeholders::_1));
             if (!status.isOK()) {
                 return status;
             }
@@ -2713,9 +2766,9 @@ namespace mongo {
                         AuthorizationManager::rolesCollectionNamespace,
                         BSONObj(),
                         fields,
-                        boost::bind(&CmdMergeAuthzCollections::extractAndInsertRoleName,
+                        stdx::bind(&CmdMergeAuthzCollections::extractAndInsertRoleName,
                                     &rolesToDrop,
-                                    _1));
+                                    stdx::placeholders::_1));
                 if (!status.isOK()) {
                     return status;
                 }
@@ -2725,12 +2778,12 @@ namespace mongo {
                     NamespaceString(rolesCollName),
                     BSONObj(),
                     BSONObj(),
-                    boost::bind(&CmdMergeAuthzCollections::addRole,
+                    stdx::bind(&CmdMergeAuthzCollections::addRole,
                                 authzManager,
                                 drop,
                                 writeConcern,
                                 &rolesToDrop,
-                                _1));
+                                stdx::placeholders::_1));
             if (!status.isOK()) {
                 return status;
             }
@@ -2759,7 +2812,7 @@ namespace mongo {
             return Status::OK();
         }
 
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,

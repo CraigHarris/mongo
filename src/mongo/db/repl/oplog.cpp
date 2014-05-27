@@ -55,7 +55,7 @@
 #include "mongo/db/repl/rs.h"
 #include "mongo/db/repl/write_concern.h"
 #include "mongo/db/stats/counters.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/db/storage_options.h"
 #include "mongo/db/catalog/collection.h"
 #include "mongo/s/d_logic.h"
@@ -65,6 +65,7 @@
 #include "mongo/util/startup_test.h"
 
 namespace mongo {
+namespace replset {
 
     // cached copies of these...so don't rename them, drop them, etc.!!!
     static Database* localDB = NULL;
@@ -97,7 +98,7 @@ namespace mongo {
                  result.isOK() );
     }
 
-    static void _logOpUninitialized(TransactionExperiment* txn,
+    static void _logOpUninitialized(OperationContext* txn,
                                     const char *opstr,
                                     const char *ns,
                                     const char *logNS,
@@ -113,7 +114,7 @@ namespace mongo {
         */
     void _logOpObjRS(const BSONObj& op) {
         Lock::DBWrite lk("local");
-        DurTransaction txn;
+        OperationContextImpl txn;
 
         const OpTime ts = op["ts"]._opTime();
         long long h = op["h"].numberLong();
@@ -222,7 +223,7 @@ namespace mongo {
     // on every logop call.
     static BufBuilder logopbufbuilder(8*1024);
     static const int OPLOG_VERSION = 2;
-    static void _logOpRS(TransactionExperiment* txn,
+    static void _logOpRS(OperationContext* txn,
                          const char *opstr,
                          const char *ns,
                          const char *logNS,
@@ -312,7 +313,7 @@ namespace mongo {
 
     }
 
-    static void _logOpOld(TransactionExperiment* txn,
+    static void _logOpOld(OperationContext* txn,
                           const char *opstr,
                           const char *ns,
                           const char *logNS,
@@ -373,7 +374,7 @@ namespace mongo {
         context.getClient()->setLastOp( ts );
     }
 
-    static void (*_logOp)(TransactionExperiment* txn,
+    static void (*_logOp)(OperationContext* txn,
                           const char *opstr,
                           const char *ns,
                           const char *logNS,
@@ -392,14 +393,14 @@ namespace mongo {
     void oldRepl() { _logOp = _logOpOld; }
 
     void logKeepalive() {
-        DurTransaction txn;
+        OperationContextImpl txn;
         _logOp(&txn, "n", "", 0, BSONObj(), 0, 0, false);
     }
     void logOpComment(const BSONObj& obj) {
-        DurTransaction txn;
+        OperationContextImpl txn;
         _logOp(&txn, "n", "", 0, obj, 0, 0, false);
     }
-    void logOpInitiate(TransactionExperiment* txn, const BSONObj& obj) {
+    void logOpInitiate(OperationContext* txn, const BSONObj& obj) {
         _logOpRS(txn, "n", "", 0, obj, 0, 0, false);
     }
 
@@ -410,7 +411,7 @@ namespace mongo {
           d delete / remove
           u update
     */
-    void logOp(TransactionExperiment* txn,
+    void logOp(OperationContext* txn,
                const char* opstr,
                const char* ns,
                const BSONObj& obj,
@@ -441,7 +442,7 @@ namespace mongo {
             ns = rsoplog;
 
         Client::Context ctx(ns);
-        DurTransaction txn;
+        OperationContextImpl txn;
         Collection* collection = ctx.db()->getCollection( &txn, ns );
 
         if ( collection ) {
@@ -512,7 +513,7 @@ namespace mongo {
     /** @param fromRepl false if from ApplyOpsCmd
         @return true if was and update should have happened and the document DNE.  see replset initial sync code.
      */
-    bool applyOperation_inlock(TransactionExperiment* txn,
+    bool applyOperation_inlock(OperationContext* txn,
                                Database* db,
                                const BSONObj& op,
                                bool fromRepl,
@@ -705,7 +706,7 @@ namespace mongo {
             while (!done) {
                 BufBuilder bb;
                 BSONObjBuilder ob;
-                _runCommands(ns, o, bb, ob, true, 0);
+                _runCommands(txn, ns, o, bb, ob, true, 0);
                 // _runCommands takes care of adjusting opcounters for command counting.
                 Status status = Command::getStatusFromCommandResult(ob.done());
                 switch (status.code()) {
@@ -772,4 +773,5 @@ namespace mongo {
             setNewOptime(lastOp[ "ts" ].date());
         }
     }
-}
+} // namespace replset
+} // namespace mongo

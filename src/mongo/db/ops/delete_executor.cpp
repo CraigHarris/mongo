@@ -79,7 +79,7 @@ namespace mongo {
         return status;
     }
 
-    long long DeleteExecutor::execute(TransactionExperiment* txn, Database* db) {
+    long long DeleteExecutor::execute(OperationContext* txn, Database* db) {
         uassertStatusOK(prepare());
         uassert(17417,
                 mongoutils::str::stream() <<
@@ -110,7 +110,7 @@ namespace mongo {
 
         uassert(ErrorCodes::NotMaster,
                 str::stream() << "Not primary while removing from " << ns.ns(),
-                !logop || isMasterNs(ns.ns().c_str()));
+                !logop || replset::isMasterNs(ns.ns().c_str()));
 
         long long nDeleted = 0;
 
@@ -138,7 +138,7 @@ namespace mongo {
             if (oldYieldCount != curOp->numYields()) {
                 uassert(ErrorCodes::NotMaster,
                         str::stream() << "No longer primary while removing from " << ns.ns(),
-                        !logop || isMasterNs(ns.ns().c_str()));
+                        !logop || replset::isMasterNs(ns.ns().c_str()));
                 oldYieldCount = curOp->numYields();
             }
             BSONObj toDelete;
@@ -147,7 +147,7 @@ namespace mongo {
             // saving/restoring state repeatedly?
             runner->saveState();
             collection->deleteDocument(txn, rloc, false, false, logop ? &toDelete : NULL );
-            runner->restoreState();
+            runner->restoreState(txn);
 
             nDeleted++;
 
@@ -158,7 +158,7 @@ namespace mongo {
                 }
                 else {
                     bool replJustOne = true;
-                    logOp(txn, "d", ns.ns().c_str(), toDelete, 0, &replJustOne);
+                    replset::logOp(txn, "d", ns.ns().c_str(), toDelete, 0, &replJustOne);
                 }
             }
 
@@ -167,7 +167,7 @@ namespace mongo {
             }
 
             if (!_request->isGod()) {
-                txn->commitIfNeeded();
+                txn->recoveryUnit()->commitIfNeeded();
             }
 
             if (debug && _request->isGod() && nDeleted == 100) {

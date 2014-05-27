@@ -35,6 +35,7 @@
 #include "mongo/util/background.h"
 
 namespace mongo {
+namespace replset {
 
     class Member;
 
@@ -107,8 +108,8 @@ namespace mongo {
         // protects cond and maps and the indicator bools
         boost::mutex _mtx;
         // contains the most recent optime of each member syncing to us
-        map<mongo::OID, OpTime> _slaveMap;
-        typedef map<mongo::OID, Member*> OIDMemberMap;
+        std::map<mongo::OID, OpTime> _slaveMap;
+        typedef std::map<mongo::OID, Member*> OIDMemberMap;
         // contains a pointer to each member, which we can look up by oid
         OIDMemberMap _members;
         // used to alert our thread of changes which need to be passed up the chain
@@ -118,4 +119,5 @@ namespace mongo {
         // used to indicate a connection change which has not yet been shook on
         bool _handshakeNeeded;
     };
-}
+} // namespace replset
+} // namespace mongo

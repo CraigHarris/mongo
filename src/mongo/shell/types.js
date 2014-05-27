@@ -61,7 +61,7 @@ ISODate = function(isoDateStr){
     var res = isoDateRegex.exec(isoDateStr);
 
     if (!res)
-        throw "invalid ISO date";
+        throw Error("invalid ISO date");
 
     var year = parseInt(res[1],10) || 1970; // this should always be present
     var month = (parseInt(res[2],10) || 1) - 1;
@@ -455,7 +455,7 @@ Map.hash = function(val){
         return s;
     }
 
-    throw "can't hash : " + typeof(val);
+    throw Error( "can't hash : " + typeof(val) );
 }
 
 Map.prototype.put = function(key, value){
@@ -570,7 +570,7 @@ tojson = function(x, indent, nolint){
     case "function":
         return x.toString();
     default:
-        throw "tojson can't handle type " + (typeof x);
+        throw Error( "tojson can't handle type " + (typeof x) );
     }
 
 }
@@ -612,16 +612,10 @@ tojsonObject = function(x, indent, nolint){
     // push one level of indent
     indent += tabSpace;
 
-    var total = 0;
-    for (var k in x) total++;
-    if (total == 0) {
-        s += indent + lineEnding;
-    }
-
     var keys = x;
     if (typeof(x._simpleKeys) == "function")
         keys = x._simpleKeys();
-    var num = 1;
+    var fieldStrings = [];
     for (var k in keys){
         var val = x[k];
 
@@ -631,13 +625,16 @@ tojsonObject = function(x, indent, nolint){
         if (typeof DBCollection != 'undefined' && val == DBCollection.prototype)
             continue;
 
-        s += indent + "\"" + k + "\" : " + tojson(val, indent, nolint);
-        if (num != total) {
-            s += ",";
-            num++;
-        }
-        s += lineEnding;
+        fieldStrings.push(indent + "\"" + k + "\" : " + tojson(val, indent, nolint));
     }
+
+    if (fieldStrings.length > 0) {
+        s += fieldStrings.join("," + lineEnding);
+    }
+    else {
+        s += indent;
+    }
+    s += lineEnding;
 
     // pop one level of indent
     indent = indent.substring(1);

@@ -28,6 +28,7 @@
 
 #include "mongo/db/commands/authentication_commands.h"
 
+#include <boost/algorithm/string.hpp>
 #include <boost/scoped_ptr.hpp>
 #include <string>
 #include <vector>
@@ -52,6 +53,7 @@
 #include "mongo/util/concurrency/mutex.h"
 #include "mongo/util/md5.hpp"
 #include "mongo/util/net/ssl_manager.h"
+#include "mongo/util/text.h"
 
 namespace mongo {
 
@@ -99,7 +101,7 @@ namespace mongo {
         virtual void addRequiredPrivileges(const std::string& dbname,
                                            const BSONObj& cmdObj,
                                            std::vector<Privilege>* out) {} // No auth required
-        bool run(const string&, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
+        bool run(OperationContext* txn, const string&, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             nonce64 n = getNextNonce();
             stringstream ss;
             ss << hex << n;
@@ -133,7 +135,7 @@ namespace mongo {
         }
     }
 
-    bool CmdAuthenticate::run(const string& dbname,
+    bool CmdAuthenticate::run(OperationContext* txn, const string& dbname,
                               BSONObj& cmdObj,
                               int,
                               string& errmsg,
@@ -282,6 +284,39 @@ namespace mongo {
     }
 
 #ifdef MONGO_SSL
+    void canonicalizeClusterDN(std::vector<std::string>* dn) {
+        // remove all RDNs we don't care about
+        for (std::vector<string>::iterator it=dn->begin(); it != dn->end(); it++) {
+            boost::algorithm::trim(*it);
+            if (!mongoutils::str::startsWith(it->c_str(), "DC=") &&
+                !mongoutils::str::startsWith(it->c_str(), "O=") && 
+                !mongoutils::str::startsWith(it->c_str(), "OU=")) { 
+                dn->erase(it--);
+            }
+        }
+        std::stable_sort(dn->begin(), dn->end());
+    }
+
+    bool CmdAuthenticate::_clusterIdMatch(const std::string& subjectName, 
+                                          const std::string& srvSubjectName) {
+        std::vector<string> clientRDN = StringSplitter::split(subjectName, ",");
+        std::vector<string> serverRDN = StringSplitter::split(srvSubjectName, ",");
+
+        canonicalizeClusterDN(&clientRDN);
+        canonicalizeClusterDN(&serverRDN);
+
+        if (clientRDN.size() == 0 || clientRDN.size() != serverRDN.size()) {
+            return false;
+        }
+
+        for (size_t i=0; i < serverRDN.size(); i++) {
+            if(clientRDN[i] != serverRDN[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+ 
     Status CmdAuthenticate::_authenticateX509(const UserName& user, const BSONObj& cmdObj) {
         if (!getSSLManager()) {
             return Status(ErrorCodes::ProtocolError,
@@ -302,18 +337,10 @@ namespace mongo {
         }
         else {
             std::string srvSubjectName = getSSLManager()->getServerSubjectName();
-            
-            size_t srvClusterIdPos = srvSubjectName.find(",OU=");
-            size_t peerClusterIdPos = subjectName.find(",OU=");
-
-            std::string srvClusterId = srvClusterIdPos != std::string::npos ? 
-                srvSubjectName.substr(srvClusterIdPos) : "";
-            std::string peerClusterId = peerClusterIdPos != std::string::npos ? 
-                subjectName.substr(peerClusterIdPos) : "";
-
+ 
             // Handle internal cluster member auth, only applies to server-server connections
-            int clusterAuthMode = serverGlobalParams.clusterAuthMode.load(); 
-            if (srvClusterId == peerClusterId && !srvClusterId.empty()) {
+            if (_clusterIdMatch(subjectName, srvSubjectName)) {
+                int clusterAuthMode = serverGlobalParams.clusterAuthMode.load(); 
                 if (clusterAuthMode == ServerGlobalParams::ClusterAuthMode_undefined ||
                     clusterAuthMode == ServerGlobalParams::ClusterAuthMode_keyFile) {
                     return Status(ErrorCodes::AuthenticationFailed, "The provided certificate " 
@@ -351,7 +378,7 @@ namespace mongo {
         void help(stringstream& h) const { h << "de-authenticate"; }
         virtual bool isWriteCommandForConfigServer() const { return false; }
         CmdLogout() : Command("logout") {}
-        bool run(const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                  BSONObj& cmdObj,
                  int options,
                  string& errmsg,
@@ -360,6 +387,14 @@ namespace mongo {
             AuthorizationSession* authSession =
                     ClientBasic::getCurrent()->getAuthorizationSession();
             authSession->logoutDatabase(dbname);
+            if (Command::testCommandsEnabled && dbname == "admin") {
+                // Allows logging out as the internal user against the admin database, however
+                // this actually logs out of the local database as well. This is to
+                // support the auth passthrough test framework on mongos (since you can't use the
+                // local database on a mongos, so you can't logout as the internal user
+                // without this).
+                authSession->logoutDatabase("local");
+            }
             return true;
         }
     } cmdLogout;

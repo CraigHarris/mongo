@@ -42,7 +42,7 @@
 #include "mongo/db/catalog/collection.h"
 #include "mongo/db/catalog/database.h"
 #include "mongo/db/commands.h"
-#include "mongo/db/curop-inl.h"
+#include "mongo/db/curop.h"
 #include "mongo/db/d_concurrency.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/jsobj.h"
@@ -50,7 +50,7 @@
 #include "mongo/db/pdfile.h"
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/util/timer.h"
 #include "mongo/util/touch_pages.h"
 
@@ -77,7 +77,8 @@ namespace mongo {
         }
         TouchCmd() : Command("touch") { }
 
-        virtual bool run(const string& dbname,
+        virtual bool run(OperationContext* txn,
+                         const string& dbname,
                          BSONObj& cmdObj,
                          int,
                          string& errmsg,
@@ -104,7 +105,6 @@ namespace mongo {
             }
 
             Client::ReadContext context( nss.ns() );
-            DurTransaction txn;
 
             Database* db = context.ctx().db();
             Collection* collection = db->getCollection( nss.ns() );
@@ -114,7 +114,7 @@ namespace mongo {
             }
 
             return appendCommandStatus( result,
-                                        collection->touch( &txn,
+                                        collection->touch( txn,
                                                            touch_data, touch_indexes,
                                                            &result ) );
         }

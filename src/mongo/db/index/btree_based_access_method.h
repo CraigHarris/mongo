@@ -41,6 +41,7 @@
 namespace mongo {
 
     class ExternalSortComparison;
+    class RecordStore;
 
     /**
      * Any access method that is Btree based subclasses from this.
@@ -56,17 +57,18 @@ namespace mongo {
     class BtreeBasedAccessMethod : public IndexAccessMethod {
         MONGO_DISALLOW_COPYING( BtreeBasedAccessMethod );
     public:
-        BtreeBasedAccessMethod( IndexCatalogEntry* btreeState );
+        BtreeBasedAccessMethod( IndexCatalogEntry* btreeState,
+                                RecordStore* recordStore );
 
         virtual ~BtreeBasedAccessMethod() { }
 
-        virtual Status insert(TransactionExperiment* txn,
+        virtual Status insert(OperationContext* txn,
                               const BSONObj& obj,
                               const DiskLoc& loc,
                               const InsertDeleteOptions& options,
                               int64_t* numInserted);
 
-        virtual Status remove(TransactionExperiment* txn,
+        virtual Status remove(OperationContext* txn,
                               const BSONObj& obj,
                               const DiskLoc& loc,
                               const InsertDeleteOptions& options,
@@ -78,15 +80,15 @@ namespace mongo {
                                       const InsertDeleteOptions& options,
                                       UpdateTicket* ticket);
 
-        virtual Status update(TransactionExperiment* txn,
+        virtual Status update(OperationContext* txn,
                               const UpdateTicket& ticket,
                               int64_t* numUpdated);
 
         virtual Status newCursor(IndexCursor **out) const;
 
-        virtual Status initializeAsEmpty(TransactionExperiment* txn);
+        virtual Status initializeAsEmpty(OperationContext* txn);
 
-        virtual IndexAccessMethod* initiateBulk(TransactionExperiment* txn) ;
+        virtual IndexAccessMethod* initiateBulk(OperationContext* txn);
 
         virtual Status commitBulk( IndexAccessMethod* bulk,
                                    bool mayInterrupt,
@@ -94,7 +96,7 @@ namespace mongo {
 
         virtual Status touch(const BSONObj& obj);
 
-        virtual Status touch(TransactionExperiment* txn) const;
+        virtual Status touch(OperationContext* txn) const;
 
         virtual Status validate(int64_t* numKeys);
 
@@ -111,17 +113,11 @@ namespace mongo {
         virtual void getKeys(const BSONObj &obj, BSONObjSet *keys) = 0;
 
         IndexCatalogEntry* _btreeState; // owned by IndexCatalogEntry
+        scoped_ptr<RecordStore> _recordStore; // owned by us
         const IndexDescriptor* _descriptor;
 
-        /**
-         * The collection is needed for resolving record locations to actual objects.
-         */
-        const Collection* collection() const {
-            return _btreeState->collection();
-        }
-
     private:
-        bool removeOneKey(TransactionExperiment* txn,
+        bool removeOneKey(OperationContext* txn,
                           const BSONObj& key,
                           const DiskLoc& loc);
 
@@ -139,7 +135,7 @@ namespace mongo {
         BSONObjSet oldKeys, newKeys;
 
         // These point into the sets oldKeys and newKeys.
-        vector<BSONObj*> removed, added;
+        std::vector<BSONObj*> removed, added;
 
         DiskLoc loc;
         bool dupsAllowed;

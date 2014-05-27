@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <boost/function.hpp>
 #include <string>
 #include <vector>
 
@@ -38,6 +37,7 @@
 #include "mongo/db/auth/user_name.h"
 #include "mongo/db/jsobj.h"
 #include "mongo/db/namespace_string.h"
+#include "mongo/stdx/functional.h"
 
 namespace mongo {
 
@@ -72,7 +72,7 @@ namespace mongo {
          * delegation information, a full list of the user's privileges, and a full list of the
          * user's roles, including those roles held implicitly through other roles (indirect roles).
          * In the event that some of this information is inconsistent, the document will contain a
-         * "warnings" array, with string messages describing inconsistencies.
+         * "warnings" array, with std::string messages describing inconsistencies.
          *
          * If the user does not exist, returns ErrorCodes::UserNotFound.
          */
@@ -85,7 +85,7 @@ namespace mongo {
          * implicitly through other roles (indirect roles). If "showPrivileges" is true, then the
          * description documents will also include a full list of the role's privileges.
          * In the event that some of this information is inconsistent, the document will contain a
-         * "warnings" array, with string messages describing inconsistencies.
+         * "warnings" array, with std::string messages describing inconsistencies.
          *
          * If the role does not exist, returns ErrorCodes::RoleNotFound.
          */
@@ -103,13 +103,13 @@ namespace mongo {
          * contain description documents for all the builtin roles for the given database, if it
          * is false the result will just include user defined roles.
          * In the event that some of the information in a given role description is inconsistent,
-         * the document will contain a "warnings" array, with string messages describing
+         * the document will contain a "warnings" array, with std::string messages describing
          * inconsistencies.
          */
         virtual Status getRoleDescriptionsForDB(const std::string dbname,
                                                 bool showPrivileges,
                                                 bool showBuiltinRoles,
-                                                vector<BSONObj>* result) = 0;
+                                                std::vector<BSONObj>* result) = 0;
 
         /**
          * Gets the privilege document for "userName" stored in the system.users collection of
@@ -175,7 +175,7 @@ namespace mongo {
         virtual Status query(const NamespaceString& collectionName,
                              const BSONObj& query,
                              const BSONObj& projection,
-                             const boost::function<void(const BSONObj&)>& resultProcessor) = 0;
+                             const stdx::function<void(const BSONObj&)>& resultProcessor) = 0;
 
         /**
          * Inserts "document" into "collectionName".

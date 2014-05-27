@@ -33,7 +33,7 @@
 #include <boost/filesystem/operations.hpp>
 
 #include "mongo/db/d_concurrency.h"
-#include "mongo/db/storage/transaction.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/db/structure/catalog/namespace_details.h"
 #include "mongo/util/exit.h"
 
@@ -50,19 +50,19 @@ namespace mongo {
         return _ht->get(ns);
     }
 
-    void NamespaceIndex::add_ns( TransactionExperiment* txn,
+    void NamespaceIndex::add_ns( OperationContext* txn,
                                  const StringData& ns, const DiskLoc& loc, bool capped) {
         NamespaceDetails details( loc, capped );
         add_ns( txn, ns, &details );
     }
 
-    void NamespaceIndex::add_ns( TransactionExperiment* txn,
+    void NamespaceIndex::add_ns( OperationContext* txn,
                                  const StringData& ns, const NamespaceDetails* details ) {
         Namespace n(ns);
         add_ns( txn, n, details );
     }
 
-    void NamespaceIndex::add_ns( TransactionExperiment* txn,
+    void NamespaceIndex::add_ns( OperationContext* txn,
                                  const Namespace& ns, const NamespaceDetails* details ) {
         string nsString = ns.toString();
         Lock::assertWriteLocked( nsString );
@@ -71,7 +71,7 @@ namespace mongo {
         uassert( 10081, "too many namespaces/collections", _ht->put(txn, ns, *details));
     }
 
-    void NamespaceIndex::kill_ns( TransactionExperiment* txn, const StringData& ns) {
+    void NamespaceIndex::kill_ns( OperationContext* txn, const StringData& ns) {
         Lock::assertWriteLocked(ns);
         if ( !_ht.get() )
             return;
@@ -94,8 +94,8 @@ namespace mongo {
         }
     }
 
-    bool NamespaceIndex::exists() const {
-        return !boost::filesystem::exists(path());
+    bool NamespaceIndex::pathExists() const {
+        return boost::filesystem::exists(path());
     }
 
     boost::filesystem::path NamespaceIndex::path() const {
@@ -115,12 +115,9 @@ namespace mongo {
         }
     }
 
-    void NamespaceIndex::getNamespaces( list<string>& tofill , bool onlyCollections ) const {
-        verify( onlyCollections ); // TODO: need to implement this
-        //                                  need boost::bind or something to make this less ugly
-
+    void NamespaceIndex::getCollectionNamespaces( list<string>* tofill ) const {
         if ( _ht.get() )
-            _ht->iterAll( namespaceGetNamespacesCallback , (void*)&tofill );
+            _ht->iterAll( namespaceGetNamespacesCallback , (void*)tofill );
     }
 
     void NamespaceIndex::maybeMkdir() const {
@@ -132,7 +129,7 @@ namespace mongo {
             MONGO_ASSERT_ON_EXCEPTION_WITH_MSG( boost::filesystem::create_directory( dir ), "create dir for db " );
     }
 
-    NOINLINE_DECL void NamespaceIndex::_init( TransactionExperiment* txn ) {
+    NOINLINE_DECL void NamespaceIndex::_init( OperationContext* txn ) {
         verify( !_ht.get() );
 
         Lock::assertWriteLocked(_database);
@@ -169,7 +166,7 @@ namespace mongo {
             maybeMkdir();
             unsigned long long l = storageGlobalParams.lenForNewNsFiles;
             if ( _f.create(pathString, l, true) ) {
-                txn->createdFile(pathString, l); // always a new file
+                txn->recoveryUnit()->createdFile(pathString, l); // always a new file
                 len = l;
                 verify(len == storageGlobalParams.lenForNewNsFiles);
                 p = _f.getView();
@@ -178,7 +175,7 @@ namespace mongo {
                     // we do this so the durability system isn't mad at us for
                     // only initiating file and not doing a write
                     // grep for 17388
-                    txn->writingPtr( p, 5 ); // throw away
+                    txn->recoveryUnit()->writingPtr( p, 5 ); // throw away
                 }
             }
         }

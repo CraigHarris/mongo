@@ -65,14 +65,14 @@ namespace mongo {
             _am = static_cast<TwoDAccessMethod*>( indexCatalog->getIndex( _descriptor ) );
             verify( _am );
 
-            if (NULL != _params.gq.getGeometry()._cap.get()) {
+            if (NULL != _params.gq.getGeometry().getCapGeometryHack()) {
                 _browse.reset(new twod_exec::GeoCircleBrowse(_params, _am));
             }
-            else if (NULL != _params.gq.getGeometry()._polygon.get()) {
+            else if (NULL != _params.gq.getGeometry().getPolygonGeometryHack()) {
                 _browse.reset(new twod_exec::GeoPolygonBrowse(_params, _am));
             }
             else {
-                verify(NULL != _params.gq.getGeometry()._box.get());
+                verify(NULL != _params.gq.getGeometry().getBoxGeometryHack());
                 _browse.reset(new twod_exec::GeoBoxBrowse(_params, _am));
             }
 
@@ -160,11 +160,11 @@ namespace twod_exec {
     //
 
     GeoCircleBrowse::GeoCircleBrowse(const TwoDParams& params, TwoDAccessMethod* accessMethod)
-        : GeoBrowse(accessMethod, "circle", params.filter) {
+        : GeoBrowse(params.collection, accessMethod, "circle", params.filter) {
 
         _converter = accessMethod->getParams().geoHashConverter;
 
-        const CapWithCRS& cap = *params.gq.getGeometry()._cap;
+        const CapWithCRS& cap = *params.gq.getGeometry().getCapGeometryHack();
 
         _startPt = cap.circle.center;
         _start = _converter->hash(_startPt);
@@ -231,11 +231,11 @@ namespace twod_exec {
     //
 
     GeoBoxBrowse::GeoBoxBrowse(const TwoDParams& params, TwoDAccessMethod* accessMethod)
-        : GeoBrowse(accessMethod, "box", params.filter) {
+        : GeoBrowse(params.collection, accessMethod, "box", params.filter) {
 
         _converter = accessMethod->getParams().geoHashConverter;
 
-        _want = params.gq.getGeometry()._box->box;
+        _want = params.gq.getGeometry().getBoxGeometryHack()->box;
         _wantRegion = _want;
         // Need to make sure we're checking regions within error bounds of where we want
         _wantRegion.fudge(_converter->getError());
@@ -273,12 +273,13 @@ namespace twod_exec {
     //
 
     GeoPolygonBrowse::GeoPolygonBrowse(const TwoDParams& params, TwoDAccessMethod* accessMethod)
-        : GeoBrowse(accessMethod, "polygon", params.filter) {
+        : GeoBrowse(params.collection, accessMethod, "polygon", params.filter) {
 
         _converter = accessMethod->getParams().geoHashConverter;
 
-        _poly = params.gq.getGeometry()._polygon->oldPolygon;
-        _bounds = _poly.bounds();
+        _poly.init(params.gq.getGeometry().getPolygonGeometryHack()->oldPolygon);
+        _bounds.init(_poly.bounds());
+
         // We need to check regions within the error bounds of these bounds
         _bounds.fudge(_converter->getError()); 
         // We don't need to look anywhere outside the space

@@ -36,10 +36,7 @@
 #include "mongo/util/mongoutils/str.h"
 
 namespace mongo {
-
-    extern void fillRsLog(std::stringstream&);
-
-namespace {
+namespace replset {
 
     using namespace bson;
     using namespace mongoutils;
@@ -53,7 +50,8 @@ namespace {
             return startsWith( url , "/_replSet" );
         }
 
-        virtual void handle( const char *rq, const std::string& url, BSONObj params,
+        virtual void handle( OperationContext* txn,
+                             const char *rq, const std::string& url, BSONObj params,
                              string& responseMsg, int& responseCode,
                              vector<string>& headers,  const SockAddr &from ) {
 
@@ -128,5 +126,5 @@ namespace {
 
     } replSetHandler;
 
-}  // namespace
-}  // namespace mongo
+} // namespace replset
+} // namespace mongo

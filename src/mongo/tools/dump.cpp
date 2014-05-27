@@ -38,6 +38,7 @@
 #include "mongo/client/auth_helpers.h"
 #include "mongo/client/dbclientcursor.h"
 #include "mongo/db/auth/authorization_manager.h"
+#include "mongo/db/catalog/database_catalog_entry.h"
 #include "mongo/db/db.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/catalog/collection.h"
@@ -91,7 +92,7 @@ public:
 
     void doCollection( const string coll , Query q, FILE* out , ProgressMeter *m ) {
         int queryOptions = QueryOption_SlaveOk | QueryOption_NoCursorTimeout;
-        if (startsWith(coll.c_str(), "local.oplog."))
+        if (startsWith(coll.c_str(), "local.oplog.") && q.obj.hasField("ts"))
             queryOptions |= QueryOption_OplogReplay;
         else if (mongoDumpGlobalParams.snapShotQuery) {
             q.snapshot();
@@ -103,7 +104,7 @@ public:
         // use low-latency "exhaust" mode if going over the network
         if (!_usingMongos && typeid(connBase) == typeid(DBClientConnection&)) {
             DBClientConnection& conn = static_cast<DBClientConnection&>(connBase);
-            boost::function<void(const BSONObj&)> castedWriter(writer); // needed for overload resolution
+            stdx::function<void(const BSONObj&)> castedWriter(writer); // needed for overload resolution
             conn.query( castedWriter, coll.c_str() , q , NULL, queryOptions | QueryOption_Exhaust);
         }
         else {
@@ -127,7 +128,9 @@ public:
 
         doCollection(coll, q, f, &m);
 
-        toolInfoLog() << "\t\t " << m.done() << " documents" << std::endl;
+        toolInfoLog() << "\t\t " << m.done()
+                      << ((m.done() == 1) ? " document" : " documents")
+                      << std::endl;
     }
 
     void writeMetadataFile( const string coll, boost::filesystem::path outputFile, 
@@ -322,7 +325,9 @@ public:
             toolError() << "Repair scan failed: " << e.toString() << std::endl;
         }
 
-        toolInfoLog() << "\t\t " << m.done() << " documents" << std::endl;
+        toolInfoLog() << "\t\t " << m.done()
+                      << ((m.done() == 1) ? " document" : " documents")
+                      << std::endl;
     }
     
     int _repair( string dbname ) {
@@ -330,7 +335,7 @@ public:
         Database * db = cx.ctx().db();
 
         list<string> namespaces;
-        db->namespaceIndex().getNamespaces( namespaces );
+        db->getDatabaseCatalogEntry()->getCollectionNamespaces( &namespaces );
 
         boost::filesystem::path root = mongoDumpGlobalParams.outputDirectory;
         root /= dbname;

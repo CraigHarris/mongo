@@ -74,30 +74,7 @@ namespace mongo {
         return _killImpl_inclientlock(i);
     }
 
-    void KillCurrentOp::blockingKill(AtomicUInt opId) {
-        bool killed = false;
-        LOG(1) << "KillCurrentOp: starting blockingkill" << endl;
-
-        boost::scoped_ptr<scoped_lock> clientLock( new scoped_lock( Client::clientsMutex ) );
-        boost::unique_lock<boost::mutex> lck(_mtx);
-
-        bool foundId = _killImpl_inclientlock(opId, &killed);
-        if (!foundId) {
-            // don't wait if not found
-            return;
-        }
-
-        clientLock.reset( NULL ); // unlock client since we don't need it anymore
-
-        // block until the killed operation stops
-        LOG(1) << "KillCurrentOp: waiting for confirmation of kill" << endl;
-        while (killed == false) {
-            _condvar.wait(lck);
-        }
-        LOG(1) << "KillCurrentOp: kill syncing complete" << endl;
-    }
-
-    bool KillCurrentOp::_killImpl_inclientlock(AtomicUInt i, bool* pNotifyFlag /* = NULL */) {
+    bool KillCurrentOp::_killImpl_inclientlock(AtomicUInt i) {
         bool found = false;
         {
             for( set< Client* >::const_iterator j = Client::clients.begin();
@@ -108,7 +85,7 @@ namespace mongo {
                     if ( k->opNum() != i )
                         continue;
 
-                    k->kill(pNotifyFlag);
+                    k->kill();
                     for( CurOp *l = ( *j )->curop(); l; l = l->parent() ) {
                         l->kill();
                     }
@@ -121,15 +98,6 @@ namespace mongo {
             interruptJs( &i );
         }
         return found;
-    }
-
-
-    void KillCurrentOp::notifyAllWaiters() {
-        boost::unique_lock<boost::mutex> lck(_mtx);
-        if (!haveClient()) 
-            return;
-        cc().curop()->setKillWaiterFlags();
-        _condvar.notify_all();
     }
 
 namespace {
@@ -174,9 +142,9 @@ namespace {
 
         if (c.curop()->maxTimeHasExpired()) {
             c.curop()->kill();
-            notifyAllWaiters();
             uasserted(ErrorCodes::ExceededTimeLimit, "operation exceeded time limit");
         }
+
         MONGO_FAIL_POINT_BLOCK(checkForInterruptFail, scopedFailPoint) {
             if (opShouldFail(c, scopedFailPoint.getData())) {
                 log() << "set pending kill on " << (c.curop()->parent() ? "nested" : "top-level")
@@ -184,8 +152,8 @@ namespace {
                 c.curop()->kill();
             }
         }
+
         if (c.curop()->killPending()) {
-            notifyAllWaiters();
             uasserted(11601, "operation was interrupted");
         }
     }

@@ -30,6 +30,7 @@
 
 #include "mongo/db/structure/record_store_v1_simple.h"
 
+#include "mongo/db/operation_context_noop.h"
 #include "mongo/db/storage/record.h"
 #include "mongo/db/structure/record_store_v1_test_help.h"
 #include "mongo/unittest/unittest.h"
@@ -38,6 +39,8 @@ using namespace mongo;
 
 namespace {
 
+    // Provides data to be inserted. Must be large enough for largest possible record.
+    // Should be in BSS so unused portions should be free.
     char zeros[20*1024*1024] = {};
 
     TEST( SimpleRecordStoreV1, quantizeAllocationSpaceSimple ) {
@@ -88,6 +91,32 @@ namespace {
     }
 
     /**
+     * For buckets up to 4MB powerOf2 allocation should round up to next power of 2. It should be
+     * return the input unmodified if it is already a power of 2.
+     */
+    TEST( SimpleRecordStoreV1, quantizePowerOf2Small ) {
+        // only tests buckets <= 4MB. Higher buckets quatize to 1MB even with powerOf2
+        for (int bucket = 0; bucket < RecordStoreV1Base::MaxBucket; bucket++) {
+            const int size = RecordStoreV1Base::bucketSizes[bucket];
+            const int nextSize = RecordStoreV1Base::bucketSizes[bucket + 1];
+
+            // size - 1 is quantized to size.
+            ASSERT_EQUALS( size,
+                           RecordStoreV1Base::quantizePowerOf2AllocationSpace( size - 1 ) );
+
+            // size is quantized to size.
+            ASSERT_EQUALS( size,
+                           RecordStoreV1Base::quantizePowerOf2AllocationSpace( size ) );
+
+            // size + 1 is quantized to nextSize (unless > 4MB which is covered by next test)
+            if (size < 4*1024*1024) {
+                ASSERT_EQUALS( nextSize,
+                               RecordStoreV1Base::quantizePowerOf2AllocationSpace( size + 1 ) );
+            }
+        }
+    }
+
+    /**
      * Within the largest bucket, quantizePowerOf2AllocationSpace quantizes to the nearest
      * megabyte boundary.
      */
@@ -102,10 +131,8 @@ namespace {
             ASSERT_EQUALS( iSize,
                            RecordStoreV1Base::quantizePowerOf2AllocationSpace( iSize - 1 ) );
 
-            // iSize is quantized to iSize + 1mb.
-            // Descriptive rather than normative test.
-            // SERVER-8311 A pre quantized size is rounded to the next quantum level.
-            ASSERT_EQUALS( iSize + 0x100000,
+            // iSize is quantized to iSize.
+            ASSERT_EQUALS( iSize,
                            RecordStoreV1Base::quantizePowerOf2AllocationSpace( iSize ) );
 
             // iSize + 1 is quantized to iSize + 1mb.
@@ -125,7 +152,7 @@ namespace {
 
     /** alloc() quantizes the requested size using quantizeAllocationSpace() rules. */
     TEST(SimpleRecordStoreV1, AllocQuantized) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
 
@@ -145,7 +172,7 @@ namespace {
      * rules.
      */
     TEST(SimpleRecordStoreV1, AllocIndexNamespaceNotQuantized) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
 
@@ -163,7 +190,7 @@ namespace {
 
     /** alloc() quantizes records in index collections to the nearest multiple of 4. */
     TEST(SimpleRecordStoreV1, AllocIndexNamespaceSlightlyQuantized) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
 
@@ -177,86 +204,66 @@ namespace {
         ASSERT_EQUALS( 300, rs.recordFor( result.getValue() )->lengthWithHeaders() );
     }
 
-    /**
-     * 'cook' the deletedList by shrinking the smallest deleted record to size
-     * 'newDeletedRecordSize'.
-     */
-    void cookDeletedList(TransactionExperiment* txn,
-                         RecordStoreV1Base* rs,
-                         RecordStoreV1MetaData* md,
-                         int newDeletedRecordSize) {
-
-        if (md->firstExtent().isNull())
-            rs->increaseStorageSize(txn, newDeletedRecordSize * 2, 0);
-
-        // Extract the first DeletedRecord from the deletedList.
-        DiskLoc deleted;
-        for( int i = 0; i < RecordStoreV1Base::Buckets; ++i ) {
-            if ( !md->deletedListEntry( i ).isNull() ) {
-                deleted = md->deletedListEntry( i );
-                md->setDeletedListEntry(txn, i, DiskLoc());
-                break;
-            }
-        }
-        ASSERT( !deleted.isNull() );
-
-        // Shrink the DeletedRecord's size to newDeletedRecordSize.
-        ASSERT_GREATER_THAN_OR_EQUALS( rs->deletedRecordFor( deleted )->lengthWithHeaders(),
-                                       newDeletedRecordSize );
-        DeletedRecord* dr = const_cast<DeletedRecord*>( rs->deletedRecordFor( deleted ) );
-        txn->writingInt( dr->lengthWithHeaders() ) = newDeletedRecordSize;
-
-        // Re-insert the DeletedRecord into the deletedList bucket appropriate for its
-        // new size.
-        md->setDeletedListEntry(txn, RecordStoreV1Base::bucket(newDeletedRecordSize), deleted);
-    }
-
-    /** Return the smallest DeletedRecord in deletedList, or DiskLoc() if none. */
-    DiskLoc smallestDeletedRecord(const RecordStoreV1MetaData* md) {
-        for( int i = 0; i < RecordStoreV1Base::Buckets; ++i ) {
-            if ( !md->deletedListEntry( i ).isNull() ) {
-                return md->deletedListEntry( i );
-            }
-        }
-        return DiskLoc();
-    }
-
     /** alloc() returns a non quantized record larger than the requested size. */
     TEST(SimpleRecordStoreV1, AllocUseNonQuantizedDeletedRecord) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
 
-        cookDeletedList( &txn, &rs, md, 310 );
+        {
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 1000), 310},
+                {}
+            };
+            initializeV1RS(&txn, NULL, drecs, &em, md);
+        }
+
         BSONObj obj = docForRecordSize( 300 );
         StatusWith<DiskLoc> actualLocation = rs.insertRecord(&txn, obj.objdata(), obj.objsize(), 0);
+        ASSERT_OK( actualLocation.getStatus() );
 
-        ASSERT( actualLocation.isOK() );
-        Record* rec = rs.recordFor( actualLocation.getValue() );
-        ASSERT_EQUALS( 310, rec->lengthWithHeaders() );
-
-        // No deleted records remain after alloc returns the non quantized record.
-        ASSERT_EQUALS( DiskLoc(), smallestDeletedRecord(md) );
+        {
+            LocAndSize recs[] = {
+                {DiskLoc(0, 1000), 310},
+                {}
+            };
+            LocAndSize drecs[] = {
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
     }
 
     /** alloc() returns a non quantized record equal to the requested size. */
     TEST(SimpleRecordStoreV1, AllocExactSizeNonQuantizedDeletedRecord) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
 
-        cookDeletedList( &txn, &rs, md, 300 );
+        {
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 1000), 300},
+                {}
+            };
+            initializeV1RS(&txn, NULL, drecs, &em, md);
+        }
+
         BSONObj obj = docForRecordSize( 300 );
         StatusWith<DiskLoc> actualLocation = rs.insertRecord(&txn, obj.objdata(), obj.objsize(), 0);
+        ASSERT_OK( actualLocation.getStatus() );
 
-        ASSERT( actualLocation.isOK() );
-        Record* rec = rs.recordFor( actualLocation.getValue() );
-        ASSERT_EQUALS( 300, rec->lengthWithHeaders() );
-
-        // No deleted records remain after alloc returns the non quantized record.
-        ASSERT_EQUALS( DiskLoc(), smallestDeletedRecord(md) );
+        {
+            LocAndSize recs[] = {
+                {DiskLoc(0, 1000), 300},
+                {}
+            };
+            LocAndSize drecs[] = {
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
     }
 
     /**
@@ -264,21 +271,33 @@ namespace {
      * too small to make a DeletedRecord.
      */
     TEST(SimpleRecordStoreV1, AllocQuantizedWithExtra) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
 
-        cookDeletedList( &txn, &rs, md, 343 );
+        {
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 1000), 343},
+                {}
+            };
+            initializeV1RS(&txn, NULL, drecs, &em, md);
+        }
+
         BSONObj obj = docForRecordSize( 300 );
         StatusWith<DiskLoc> actualLocation = rs.insertRecord(&txn, obj.objdata(), obj.objsize(), 0);
+        ASSERT_OK( actualLocation.getStatus() );
 
-        ASSERT( actualLocation.isOK() );
-        Record* rec = rs.recordFor( actualLocation.getValue() );
-        ASSERT_EQUALS( 343, rec->lengthWithHeaders() );
-
-        // No deleted records remain after alloc returns the non quantized record.
-        ASSERT_EQUALS( DiskLoc(), smallestDeletedRecord(md) );
+        {
+            LocAndSize recs[] = {
+                {DiskLoc(0, 1000), 343},
+                {}
+            };
+            LocAndSize drecs[] = {
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
     }
 
     /**
@@ -286,24 +305,37 @@ namespace {
      * is large enough to form a new deleted record.
      */
     TEST(SimpleRecordStoreV1, AllocQuantizedWithoutExtra) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
 
-        cookDeletedList( &txn, &rs, md, 344 );
+        {
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 1000), 344},
+                {}
+            };
+            initializeV1RS(&txn, NULL, drecs, &em, md);
+        }
+
+
         BSONObj obj = docForRecordSize( 300 );
-
-        // The returned record is quantized from 300 to 320.
         StatusWith<DiskLoc> actualLocation = rs.insertRecord(&txn, obj.objdata(), obj.objsize(), 0);
+        ASSERT_OK( actualLocation.getStatus() );
 
-        ASSERT( actualLocation.isOK() );
-        Record* rec = rs.recordFor( actualLocation.getValue() );
-        ASSERT_EQUALS( 320, rec->lengthWithHeaders() );
-
-        // A new 24 byte deleted record is split off.
-        ASSERT_EQUALS( 24,
-                       rs.deletedRecordFor(smallestDeletedRecord(md))->lengthWithHeaders() );
+        {
+            LocAndSize recs[] = {
+                // The returned record is quantized from 300 to 320.
+                {DiskLoc(0, 1000), 320},
+                {}
+            };
+            LocAndSize drecs[] = {
+                // A new 24 byte deleted record is split off.
+                {DiskLoc(0, 1320), 24},
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
     }
 
     /**
@@ -311,28 +343,42 @@ namespace {
      * if a quantized portion of the deleted record could be used instead.
      */
     TEST(SimpleRecordStoreV1, AllocNotQuantizedNearDeletedSize) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
 
-        cookDeletedList( &txn, &rs, md, 344 );
+        {
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 1000), 344},
+                {}
+            };
+            initializeV1RS(&txn, NULL, drecs, &em, md);
+        }
+
         BSONObj obj = docForRecordSize( 319 );
         StatusWith<DiskLoc> actualLocation = rs.insertRecord(&txn, obj.objdata(), obj.objsize(), 0);
-
-        ASSERT( actualLocation.isOK() );
-        Record* rec = rs.recordFor( actualLocation.getValue() );
+        ASSERT_OK( actualLocation.getStatus() );
 
         // Even though 319 would be quantized to 320 and 344 - 320 == 24 could become a new
         // deleted record, the entire deleted record is returned because
-        // ( 344 - 320 ) < ( 320 >> 3 ).
-        ASSERT_EQUALS( 344, rec->lengthWithHeaders() );
-        ASSERT_EQUALS( DiskLoc(), smallestDeletedRecord(md) );
+        // ( 344 - 320 ) < ( 320 / 8 ).
+
+        {
+            LocAndSize recs[] = {
+                {DiskLoc(0, 1000), 344},
+                {}
+            };
+            LocAndSize drecs[] = {
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
     }
 
     /** getRecordAllocationSize() returns its argument when the padding factor is 1.0. */
     TEST(SimpleRecordStoreV1, GetRecordAllocationSizeNoPadding) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
@@ -342,7 +388,7 @@ namespace {
 
     /** getRecordAllocationSize() multiplies by a padding factor > 1.0. */
     TEST(SimpleRecordStoreV1, GetRecordAllocationSizeWithPadding) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
@@ -357,7 +403,7 @@ namespace {
      * is set.
      */
     TEST(SimpleRecordStoreV1, GetRecordAllocationSizePowerOf2) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData(
                                                 false,
@@ -372,7 +418,7 @@ namespace {
      * is set, ignoring the padding factor.
      */
     TEST(SimpleRecordStoreV1, GetRecordAllocationSizePowerOf2PaddingIgnored) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData(
                                                 false,
@@ -388,7 +434,7 @@ namespace {
     // -----------------
 
     TEST( SimpleRecordStoreV1, FullSimple1 ) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn,
@@ -412,7 +458,7 @@ namespace {
      * Inserts take the first deleted record with the correct size.
      */
     TEST( SimpleRecordStoreV1, InsertTakesFirstDeletedWithExactSize ) {
-        DummyTransactionExperiment txn;
+        OperationContextNoop txn;
         DummyExtentManager em;
         DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
         SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
@@ -426,8 +472,8 @@ namespace {
                 {}
             };
             LocAndSize drecs[] = {
-                {DiskLoc(0, 1200), 100},
-                {DiskLoc(2, 1100), 100},
+                {DiskLoc(0, 1200), 100}, // this one will be used
+                {DiskLoc(2, 1000), 100},
                 {DiskLoc(1, 1000), 1000},
                 {}
             };
@@ -442,12 +488,12 @@ namespace {
                 {DiskLoc(0, 1000), 100},
                 {DiskLoc(0, 1100), 100},
                 {DiskLoc(0, 1300), 100},
-                {DiskLoc(0, 1200), 100},
+                {DiskLoc(0, 1200), 100}, // this is the new record
                 {DiskLoc(2, 1100), 100},
                 {}
             };
             LocAndSize drecs[] = {
-                {DiskLoc(2, 1100), 100},
+                {DiskLoc(2, 1000), 100},
                 {DiskLoc(1, 1000), 1000},
                 {}
             };
@@ -455,4 +501,275 @@ namespace {
         }
     }
 
+    /**
+     * Test that we keep looking for better matches for 5 links once we find a non-exact match.
+     * This "extra" scanning does not proceed into bigger buckets.
+     * WARNING: this test depends on magic numbers inside RSV1Simple::_allocFromExistingExtents.
+     */
+    TEST( SimpleRecordStoreV1, InsertLooksForBetterMatchUpTo5Links ) {
+        OperationContextNoop txn;
+        DummyExtentManager em;
+        DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
+        SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
+
+        {
+            LocAndSize recs[] = {
+                {}
+            };
+            LocAndSize drecs[] = {
+                // This intentionally leaves gaps to keep locs readable.
+                {DiskLoc(0, 1000),  75}, // too small
+                {DiskLoc(0, 1100), 100}, // 1st big enough: will be first record
+                {DiskLoc(0, 1200), 100}, // 2nd: will be third record
+                {DiskLoc(0, 1300), 100}, // 3rd
+                {DiskLoc(0, 1400), 100}, // 4th
+                {DiskLoc(0, 1500), 100}, // 5th: first and third will stop once they look here
+                {DiskLoc(0, 1600),  80}, // 6th: second will make it here and use this
+                {DiskLoc(0, 1700), 999}, // bigger bucket. Should never look here
+                {}
+            };
+            initializeV1RS(&txn, recs, drecs, &em, md);
+        }
+
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0);
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0);
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0);
+
+        {
+            LocAndSize recs[] = {
+                {DiskLoc(0, 1100), 100}, // 1st insert
+                {DiskLoc(0, 1600),  80}, // 2nd insert
+                {DiskLoc(0, 1200), 100}, // 3rd insert
+                {}
+            };
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 1000),  75},
+                {DiskLoc(0, 1300), 100},
+                {DiskLoc(0, 1400), 100},
+                {DiskLoc(0, 1500), 100},
+                {DiskLoc(0, 1700), 999},
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
+    }
+
+    /**
+     * Test that we stop looking in a bucket once we see 31 too small drecs.
+     * WARNING: this test depends on magic numbers inside RSV1Simple::_allocFromExistingExtents.
+     */
+    TEST( SimpleRecordStoreV1, InsertLooksForMatchUpTo31Links ) {
+        OperationContextNoop txn;
+        DummyExtentManager em;
+        DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
+        SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
+
+        {
+            LocAndSize recs[] = {
+                {}
+            };
+            LocAndSize drecs[] = {
+                // This intentionally leaves gaps to keep locs readable.
+                {DiskLoc(0, 1000),  50}, // different bucket
+
+                {DiskLoc(0, 1100),  75}, // 1st too small in correct bucket
+                {DiskLoc(0, 1200),  75},
+                {DiskLoc(0, 1300),  75},
+                {DiskLoc(0, 1400),  75},
+                {DiskLoc(0, 1500),  75},
+                {DiskLoc(0, 1600),  75},
+                {DiskLoc(0, 1700),  75},
+                {DiskLoc(0, 1800),  75},
+                {DiskLoc(0, 1900),  75},
+                {DiskLoc(0, 2000),  75}, // 10th too small
+                {DiskLoc(0, 2100),  75},
+                {DiskLoc(0, 2200),  75},
+                {DiskLoc(0, 2300),  75},
+                {DiskLoc(0, 2400),  75},
+                {DiskLoc(0, 2500),  75},
+                {DiskLoc(0, 2600),  75},
+                {DiskLoc(0, 2700),  75},
+                {DiskLoc(0, 2800),  75},
+                {DiskLoc(0, 2900),  75},
+                {DiskLoc(0, 3000),  75}, // 20th too small
+                {DiskLoc(0, 3100),  75},
+                {DiskLoc(0, 3200),  75},
+                {DiskLoc(0, 3300),  75},
+                {DiskLoc(0, 3400),  75},
+                {DiskLoc(0, 3500),  75},
+                {DiskLoc(0, 3600),  75},
+                {DiskLoc(0, 3700),  75},
+                {DiskLoc(0, 3800),  75},
+                {DiskLoc(0, 3900),  75},
+                {DiskLoc(0, 4000),  75}, // 30th too small
+                {DiskLoc(0, 4100),  75}, // 31st too small
+
+                {DiskLoc(0, 8000),  80}, // big enough but wont be seen until we take an earlier one
+                {DiskLoc(0, 9000), 140}, // bigger bucket. jumps here after seeing 31 drecs
+                {}
+            };
+            initializeV1RS(&txn, recs, drecs, &em, md);
+        }
+
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0); // takes from bigger bucket
+        rs.insertRecord(&txn, zeros, 70 - Record::HeaderSize, 0); // removes a 75-sized drec
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0); // now sees big-enough drec
+
+        {
+            LocAndSize recs[] = {
+                {DiskLoc(0, 9000), 80}, // 1st insert went here
+                {DiskLoc(0, 1100), 75}, // 2nd here
+                {DiskLoc(0, 8000), 80}, // 3rd here
+                {}
+            };
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 9000 + 80),  140 - 80}, // split off during first insert
+                {DiskLoc(0, 1000),  50},
+                {DiskLoc(0, 1200),  75},
+                {DiskLoc(0, 1300),  75},
+                {DiskLoc(0, 1400),  75},
+                {DiskLoc(0, 1500),  75},
+                {DiskLoc(0, 1600),  75},
+                {DiskLoc(0, 1700),  75},
+                {DiskLoc(0, 1800),  75},
+                {DiskLoc(0, 1900),  75},
+                {DiskLoc(0, 2000),  75},
+                {DiskLoc(0, 2100),  75},
+                {DiskLoc(0, 2200),  75},
+                {DiskLoc(0, 2300),  75},
+                {DiskLoc(0, 2400),  75},
+                {DiskLoc(0, 2500),  75},
+                {DiskLoc(0, 2600),  75},
+                {DiskLoc(0, 2700),  75},
+                {DiskLoc(0, 2800),  75},
+                {DiskLoc(0, 2900),  75},
+                {DiskLoc(0, 3000),  75},
+                {DiskLoc(0, 3100),  75},
+                {DiskLoc(0, 3200),  75},
+                {DiskLoc(0, 3300),  75},
+                {DiskLoc(0, 3400),  75},
+                {DiskLoc(0, 3500),  75},
+                {DiskLoc(0, 3600),  75},
+                {DiskLoc(0, 3700),  75},
+                {DiskLoc(0, 3800),  75},
+                {DiskLoc(0, 3900),  75},
+                {DiskLoc(0, 4000),  75},
+                {DiskLoc(0, 4100),  75},
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
+    }
+
+    /**
+     * Test that we stop looking in a bucket once we see 31 drecs, or look 4-past the first
+     * too-large match, whichever comes first. This is a combination of
+     * InsertLooksForBetterMatchUpTo5Links and InsertLooksForMatchUpTo31Links.
+     *
+     * WARNING: this test depends on magic numbers inside RSV1Simple::_allocFromExistingExtents.
+     */
+    TEST( SimpleRecordStoreV1, InsertLooksForMatchUpTo31LinksEvenIfFoundOversizedFit ) {
+        OperationContextNoop txn;
+        DummyExtentManager em;
+        DummyRecordStoreV1MetaData* md = new DummyRecordStoreV1MetaData( false, 0 );
+        SimpleRecordStoreV1 rs( &txn, "test.foo", md, &em, false );
+
+        {
+            LocAndSize recs[] = {
+                {}
+            };
+            LocAndSize drecs[] = {
+                // This intentionally leaves gaps to keep locs readable.
+                {DiskLoc(0, 1000),  50}, // different bucket
+
+                {DiskLoc(0, 1100),  75}, // 1st too small in correct bucket
+                {DiskLoc(0, 1200),  75},
+                {DiskLoc(0, 1300),  75},
+                {DiskLoc(0, 1400),  75},
+                {DiskLoc(0, 1500),  75},
+                {DiskLoc(0, 1600),  75},
+                {DiskLoc(0, 1700),  75},
+                {DiskLoc(0, 1800),  75},
+                {DiskLoc(0, 1900),  75},
+                {DiskLoc(0, 2000),  75}, // 10th too small
+                {DiskLoc(0, 2100),  75},
+                {DiskLoc(0, 2200),  75},
+                {DiskLoc(0, 2300),  75},
+                {DiskLoc(0, 2400),  75},
+                {DiskLoc(0, 2500),  75},
+                {DiskLoc(0, 2600),  75},
+                {DiskLoc(0, 2700),  75},
+                {DiskLoc(0, 2800),  75},
+                {DiskLoc(0, 2900),  75},
+                {DiskLoc(0, 3000),  75}, // 20th too small
+                {DiskLoc(0, 3100),  75},
+                {DiskLoc(0, 3200),  75},
+                {DiskLoc(0, 3300),  75},
+                {DiskLoc(0, 3400),  75},
+                {DiskLoc(0, 3500),  75},
+                {DiskLoc(0, 3600),  75},
+                {DiskLoc(0, 3700),  75}, // 27th too small
+
+                {DiskLoc(0, 7000),  95}, // 1st insert takes this
+                {DiskLoc(0, 7100),  95}, // 3rd insert takes this
+
+                {DiskLoc(0, 3800),  75},
+                {DiskLoc(0, 3900),  75}, // 29th too small (31st overall)
+
+                {DiskLoc(0, 8000),  80}, // exact match. taken by 2nd insert
+
+                {DiskLoc(0, 9000), 140}, // bigger bucket. Should never get here
+                {}
+            };
+            initializeV1RS(&txn, recs, drecs, &em, md);
+        }
+
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0);
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0);
+        rs.insertRecord(&txn, zeros, 80 - Record::HeaderSize, 0);
+
+        {
+            LocAndSize recs[] = {
+                {DiskLoc(0, 7000), 95}, // 1st insert went here
+                {DiskLoc(0, 8000), 80}, // 2nd here
+                {DiskLoc(0, 7100), 95}, // 3rd here
+                {}
+            };
+            LocAndSize drecs[] = {
+                {DiskLoc(0, 1000),  50},
+                {DiskLoc(0, 1100),  75},
+                {DiskLoc(0, 1200),  75},
+                {DiskLoc(0, 1300),  75},
+                {DiskLoc(0, 1400),  75},
+                {DiskLoc(0, 1500),  75},
+                {DiskLoc(0, 1600),  75},
+                {DiskLoc(0, 1700),  75},
+                {DiskLoc(0, 1800),  75},
+                {DiskLoc(0, 1900),  75},
+                {DiskLoc(0, 2000),  75},
+                {DiskLoc(0, 2100),  75},
+                {DiskLoc(0, 2200),  75},
+                {DiskLoc(0, 2300),  75},
+                {DiskLoc(0, 2400),  75},
+                {DiskLoc(0, 2500),  75},
+                {DiskLoc(0, 2600),  75},
+                {DiskLoc(0, 2700),  75},
+                {DiskLoc(0, 2800),  75},
+                {DiskLoc(0, 2900),  75},
+                {DiskLoc(0, 3000),  75},
+                {DiskLoc(0, 3100),  75},
+                {DiskLoc(0, 3200),  75},
+                {DiskLoc(0, 3300),  75},
+                {DiskLoc(0, 3400),  75},
+                {DiskLoc(0, 3500),  75},
+                {DiskLoc(0, 3600),  75},
+                {DiskLoc(0, 3700),  75},
+                {DiskLoc(0, 3800),  75},
+                {DiskLoc(0, 3900),  75},
+                {DiskLoc(0, 9000), 140},
+                {}
+            };
+            assertStateV1RS(recs, drecs, &em, md);
+        }
+    }
 }

@@ -73,13 +73,20 @@ namespace mongo {
 
     class DbWebServer : public MiniWebServer {
     public:
-        DbWebServer(const string& ip, int port, const AdminAccess* webUsers)
-            : MiniWebServer("admin web console", ip, port), _webUsers(webUsers) {
+        DbWebServer(const string& ip,
+                    int port,
+                    const AdminAccess* webUsers,
+                    OperationContext::Factory transactionFactory)
+                : MiniWebServer("admin web console", ip, port),
+                  _webUsers(webUsers),
+                  _transactionFactory(transactionFactory) {
+
             WebStatusPlugin::initAll();
         }
 
     private:
         const AdminAccess* _webUsers; // not owned here
+        const OperationContext::Factory _transactionFactory;
 
         void doUnlockedStuff(stringstream& ss) {
             /* this is in the header already ss << "port:      " << port << '\n'; */
@@ -179,6 +186,9 @@ namespace mongo {
             vector<string>& headers, // if completely empty, content-type: text/html will be added
             const SockAddr &from
         ) {
+
+            boost::scoped_ptr<OperationContext> txn(_transactionFactory()); // XXX SERVER-13931
+
             if ( url.size() > 1 ) {
 
                 if ( ! allowed( rq , headers, from ) ) {
@@ -206,7 +216,7 @@ namespace mongo {
                             uassert(13453, "server not started with --jsonp",
                                     callback.empty() || serverGlobalParams.jsonp);
 
-                            handler->handle( rq , url , params , responseMsg , responseCode , headers , from );
+                            handler->handle( txn.get(), rq , url , params , responseMsg , responseCode , headers , from );
 
                             if (responseCode == 200 && !callback.empty()) {
                                 responseMsg = callback + '(' + responseMsg + ')';
@@ -410,7 +420,8 @@ namespace mongo {
     public:
         FavIconHandler() : DbWebHandler( "favicon.ico" , 0 , false ) {}
 
-        virtual void handle( const char *rq, const std::string& url, BSONObj params,
+        virtual void handle( OperationContext* txn,
+                             const char *rq, const std::string& url, BSONObj params,
                              string& responseMsg, int& responseCode,
                              vector<string>& headers,  const SockAddr &from ) {
             responseCode = 404;
@@ -424,7 +435,8 @@ namespace mongo {
     public:
         StatusHandler() : DbWebHandler( "_status" , 1 , false ) {}
 
-        virtual void handle( const char *rq, const std::string& url, BSONObj params,
+        virtual void handle( OperationContext* txn,
+                             const char *rq, const std::string& url, BSONObj params,
                              string& responseMsg, int& responseCode,
                              vector<string>& headers,  const SockAddr &from ) {
             headers.push_back( "Content-Type: application/json;charset=utf-8" );
@@ -459,7 +471,7 @@ namespace mongo {
                 string errmsg;
 
                 BSONObjBuilder sub;
-                if ( ! c->run( "admin.$cmd" , co , 0, errmsg , sub , false ) )
+                if ( ! c->run( txn, "admin.$cmd" , co , 0, errmsg , sub , false ) )
                     buf.append( cmd , errmsg );
                 else
                     buf.append( cmd , sub.obj() );
@@ -475,7 +487,8 @@ namespace mongo {
     public:
         CommandListHandler() : DbWebHandler( "_commands" , 1 , true ) {}
 
-        virtual void handle( const char *rq, const std::string& url, BSONObj params,
+        virtual void handle( OperationContext* txn,
+                             const char *rq, const std::string& url, BSONObj params,
                              string& responseMsg, int& responseCode,
                              vector<string>& headers,  const SockAddr &from ) {
             headers.push_back( "Content-Type: text/html;charset=utf-8" );
@@ -527,7 +540,8 @@ namespace mongo {
             return _cmd(cmd) != 0;
         }
 
-        virtual void handle( const char *rq, const std::string& url, BSONObj params,
+        virtual void handle( OperationContext* txn,
+                             const char *rq, const std::string& url, BSONObj params,
                              string& responseMsg, int& responseCode,
                              vector<string>& headers,  const SockAddr &from ) {
             string cmd;
@@ -540,7 +554,7 @@ namespace mongo {
             Client& client = cc();
 
             BSONObjBuilder result;
-            Command::execCommand(c, client, 0, "admin.", cmdObj , result, false);
+            Command::execCommand(txn, c, client, 0, "admin.", cmdObj , result, false);
 
             responseCode = 200;
 
@@ -561,11 +575,12 @@ namespace mongo {
 
     // --- external ----
 
-    void webServerThread(const AdminAccess* adminAccess) {
+    void webServerThread(const AdminAccess* adminAccess,
+                         OperationContext::Factory transactionFactory) {
         boost::scoped_ptr<const AdminAccess> adminAccessPtr(adminAccess); // adminAccess is owned here
         Client::initThread("websvr");
         const int p = serverGlobalParams.port + 1000;
-        DbWebServer mini(serverGlobalParams.bind_ip, p, adminAccessPtr.get());
+        DbWebServer mini(serverGlobalParams.bind_ip, p, adminAccessPtr.get(), transactionFactory);
         mini.setupSockets();
         mini.initAndListen();
         cc().shutdown();

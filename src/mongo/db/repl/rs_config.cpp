@@ -39,19 +39,20 @@
 #include "mongo/db/repl/oplog.h"
 #include "mongo/db/repl/repl_settings.h"  // replSettings
 #include "mongo/db/repl/rs.h"
-#include "mongo/db/storage/mmap_v1/dur_transaction.h"
+#include "mongo/db/operation_context_impl.h"
 #include "mongo/util/net/hostandport.h"
 #include "mongo/util/text.h"
 
 using namespace bson;
 
 namespace mongo {
+namespace replset {
 
     mongo::mutex ReplSetConfig::groupMx("RS tag group");
     const int ReplSetConfig::DEFAULT_HB_TIMEOUT = 10;
 
     static AtomicUInt _warnedAboutVotes = 0;
-    void logOpInitiate(TransactionExperiment* txn, const bo&);
+    void logOpInitiate(OperationContext* txn, const bo&);
 
     void assertOnlyHas(BSONObj o, const set<string>& fields) {
         BSONObj::iterator i(o);
@@ -82,7 +83,7 @@ namespace mongo {
               << newConfigBSON << rsLog;
         {
             Client::WriteContext cx( rsConfigNs );
-            DurTransaction txn;
+            OperationContextImpl txn;
 
             //theReplSet->lastOpTimeWritten = ??;
             //rather than above, do a logOp()? probably
@@ -495,7 +496,6 @@ namespace mongo {
         static const set<string> legals(legal, legal + 4);
         assertOnlyHas(o, legals);
 
-        md5 = o.md5();
         _id = o["_id"].String();
         if( o["version"].ok() ) {
             version = o["version"].numberInt();
@@ -650,7 +650,6 @@ namespace mongo {
     }
 
     void ReplSetConfig::init(BSONObj cfg, bool force) {
-        _constructed = false;
         clear();
         from(cfg);
         if( force ) {
@@ -660,7 +659,6 @@ namespace mongo {
         if( version < 1 )
             version = 1;
         _ok = true;
-        _constructed = true;
     }
 
     ReplSetConfig* ReplSetConfig::make(const HostAndPort& h) {
@@ -684,7 +682,6 @@ namespace mongo {
     void ReplSetConfig::init(const HostAndPort& h) {
         LOG(2) << "ReplSetConfig load " << h.toString() << rsLog;
 
-        _constructed = false;
         clear();
         int level = 2;
         DEV level = 0;
@@ -760,7 +757,7 @@ namespace mongo {
         checkRsConfig();
         _ok = true;
         LOG(level) << "replSet load config ok from " << (h.isSelf() ? "self" : h.toString()) << rsLog;
-        _constructed = true;
     }
 
-}
+} // namespace replset
+} // namespace mongo

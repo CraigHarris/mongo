@@ -40,11 +40,10 @@
 #include "mongo/db/catalog/index_key_validate.h"
 #include "mongo/db/index/index_access_method.h"
 #include "mongo/db/kill_current_op.h"
-#include "mongo/db/structure/catalog/namespace_details.h"
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
 #include "mongo/db/storage/record.h"
-#include "mongo/db/storage/transaction.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/util/touch_pages.h"
 
 namespace mongo {
@@ -104,7 +103,7 @@ namespace mongo {
     }
 
 
-    StatusWith<CompactStats> Collection::compact( TransactionExperiment* txn,
+    StatusWith<CompactStats> Collection::compact( OperationContext* txn,
                                                   const CompactOptions* compactOptions ) {
         if ( !_recordStore->compactSupported() )
             return StatusWith<CompactStats>( ErrorCodes::BadValue,
@@ -148,7 +147,7 @@ namespace mongo {
             return StatusWith<CompactStats>( status );
         }
 
-        killCurrentOp.checkForInterrupt();
+        txn->checkForInterrupt();
 
         CompactStats stats;
 

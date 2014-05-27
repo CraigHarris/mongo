@@ -45,7 +45,7 @@ namespace mongo {
     public:
         using BtreeBasedAccessMethod::_descriptor;
 
-        HashAccessMethod(IndexCatalogEntry* btreeState);
+        HashAccessMethod(IndexCatalogEntry* btreeState, RecordStore* rs);
         virtual ~HashAccessMethod() { }
 
         // This is a NO-OP.
@@ -57,7 +57,7 @@ namespace mongo {
         virtual void getKeys(const BSONObj& obj, BSONObjSet* keys);
 
         // Only one of our fields is hashed.  This is the field name for it.
-        string _hashedField;
+        std::string _hashedField;
 
         // _seed defaults to zero.
         HashSeed _seed;

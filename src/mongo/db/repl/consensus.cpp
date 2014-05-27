@@ -33,6 +33,7 @@
 #include "mongo/db/repl/replset_commands.h"
 
 namespace mongo {
+namespace replset {
 
     /** the first cmd called by a node seeking election and it's a basic sanity 
         test: do any of the nodes it can reach know that it can't be the primary?
@@ -101,7 +102,7 @@ namespace mongo {
             return false;
         }
 
-        virtual bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
+        virtual bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             if( !check(errmsg, result) )
                 return false;
 
@@ -149,7 +150,7 @@ namespace mongo {
             out->push_back(Privilege(ResourcePattern::forClusterResource(), actions));
         }
     private:
-        virtual bool run(const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
+        virtual bool run(OperationContext* txn, const string& , BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             if( !check(errmsg, result) )
                 return false;
             theReplSet->elect.electCmdReceived(cmdObj, &result);
@@ -357,7 +358,7 @@ namespace mongo {
 
     void Consensus::_multiCommand(BSONObj cmd, list<Target>& L) {
         verify( !rs.lockedByMe() );
-        mongo::multiCommand(cmd, L);
+        multiCommand(cmd, L);
     }
 
     void Consensus::_electSelf() {
@@ -487,4 +488,5 @@ namespace mongo {
         }
     }
 
-}
+} // namespace replset
+} // namespace mongo

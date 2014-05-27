@@ -623,6 +623,7 @@ var authCommandsLib = {
         {
             testname: "copydb",
             command: {copydb: 1, fromdb: firstDbName, todb: secondDbName},
+            skipSharded: true, // Does not work sharded due to SERVER-13080
             testcases: [
                 {
                     runOnDb: adminDbName,
@@ -1770,7 +1771,6 @@ var authCommandsLib = {
             command: {renameCollection: firstDbName + ".x", to: secondDbName + ".y"},
             setup: function (db) {
                 db.getSisterDB(firstDbName).x.save( {} );
-                db.getSisterDB(firstDbName).getLastError();
                 db.getSisterDB(adminDbName).runCommand({movePrimary: firstDbName, to: shard0name});
                 db.getSisterDB(adminDbName).runCommand({movePrimary: secondDbName, to: shard0name});
             },

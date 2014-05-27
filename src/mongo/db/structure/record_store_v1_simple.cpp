@@ -36,7 +36,7 @@
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
 #include "mongo/db/storage/record.h"
-#include "mongo/db/storage/transaction.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/db/structure/record_store_v1_simple_iterator.h"
 #include "mongo/util/progress_meter.h"
 #include "mongo/util/timer.h"
@@ -57,7 +57,7 @@ namespace mongo {
     static ServerStatusMetricField<Counter64> dFreelist3( "storage.freelist.search.scanned",
                                                           &freelistIterations );
 
-    SimpleRecordStoreV1::SimpleRecordStoreV1( TransactionExperiment* txn,
+    SimpleRecordStoreV1::SimpleRecordStoreV1( OperationContext* txn,
                                               const StringData& ns,
                                               RecordStoreV1MetaData* details,
                                               ExtentManager* em,
@@ -76,10 +76,10 @@ namespace mongo {
     SimpleRecordStoreV1::~SimpleRecordStoreV1() {
     }
 
-    DiskLoc SimpleRecordStoreV1::_allocFromExistingExtents( TransactionExperiment* txn,
+    DiskLoc SimpleRecordStoreV1::_allocFromExistingExtents( OperationContext* txn,
                                                             int lenToAlloc ) {
-        // align very slightly.
-        lenToAlloc = (lenToAlloc + 3) & 0xfffffffc;
+        // align size up to a multiple of 4
+        lenToAlloc = (lenToAlloc + (4-1)) & ~(4-1);
 
         freelistAllocs.increment();
         DiskLoc loc;
@@ -87,7 +87,7 @@ namespace mongo {
             DiskLoc *prev = 0;
             DiskLoc *bestprev = 0;
             DiskLoc bestmatch;
-            int bestmatchlen = 0x7fffffff;
+            int bestmatchlen = INT_MAX; // sentinel meaning we haven't found a record big enough
             int b = bucket(lenToAlloc);
             DiskLoc cur = _details->deletedListEntry(b);
             int extra = 5; // look for a better fit, a little.
@@ -109,7 +109,7 @@ namespace mongo {
                 }
                 if ( cur.isNull() ) {
                     // move to next bucket.  if we were doing "extra", just break
-                    if ( bestmatchlen < 0x7fffffff )
+                    if ( bestmatchlen < INT_MAX )
                         break;
 
                     if ( chain > 0 ) {
@@ -137,7 +137,7 @@ namespace mongo {
                         // exact match, stop searching
                         break;
                 }
-                if ( bestmatchlen < 0x7fffffff && --extra <= 0 )
+                if ( bestmatchlen < INT_MAX && --extra <= 0 )
                     break;
                 if ( ++chain > 30 && b < MaxBucket ) {
                     // too slow, force move to next bucket to grab a big chunk
@@ -155,7 +155,7 @@ namespace mongo {
             // unlink ourself from the deleted list
             DeletedRecord *bmr = drec(bestmatch);
             if ( bestprev ) {
-                *txn->writing(bestprev) = bmr->nextDeleted();
+                *txn->recoveryUnit()->writing(bestprev) = bmr->nextDeleted();
             }
             else {
                 // should be the front of a free-list
@@ -163,7 +163,7 @@ namespace mongo {
                 invariant( _details->deletedListEntry(myBucket) == bestmatch );
                 _details->setDeletedListEntry(txn, myBucket, bmr->nextDeleted());
             }
-            *txn->writing(&bmr->nextDeleted()) = DiskLoc().setInvalid(); // defensive.
+            *txn->recoveryUnit()->writing(&bmr->nextDeleted()) = DiskLoc().setInvalid(); // defensive.
             invariant(bmr->extentOfs() < bestmatch.getOfs());
 
             freelistIterations.increment( 1 + chain );
@@ -183,7 +183,7 @@ namespace mongo {
         invariant( r->extentOfs() < loc.getOfs() );
 
         int left = regionlen - lenToAlloc;
-        if ( left < 24 || left < (lenToAlloc >> 3) ) {
+        if ( left < 24 || left < (lenToAlloc / 8) ) {
             // you get the whole thing.
             return loc;
         }
@@ -204,11 +204,11 @@ namespace mongo {
         }
 
         /* split off some for further use. */
-        txn->writingInt(r->lengthWithHeaders()) = lenToAlloc;
+        txn->recoveryUnit()->writingInt(r->lengthWithHeaders()) = lenToAlloc;
         DiskLoc newDelLoc = loc;
         newDelLoc.inc(lenToAlloc);
         DeletedRecord* newDel = drec(newDelLoc);
-        DeletedRecord* newDelW = txn->writing(newDel);
+        DeletedRecord* newDelW = txn->recoveryUnit()->writing(newDel);
         newDelW->extentOfs() = r->extentOfs();
         newDelW->lengthWithHeaders() = left;
         newDelW->nextDeleted().Null();
@@ -219,7 +219,7 @@ namespace mongo {
 
     }
 
-    StatusWith<DiskLoc> SimpleRecordStoreV1::allocRecord( TransactionExperiment* txn,
+    StatusWith<DiskLoc> SimpleRecordStoreV1::allocRecord( OperationContext* txn,
                                                           int lengthWithHeaders,
                                                           int quotaMax ) {
         DiskLoc loc = _allocFromExistingExtents( txn, lengthWithHeaders );
@@ -259,18 +259,18 @@ namespace mongo {
         return StatusWith<DiskLoc>( ErrorCodes::InternalError, "cannot allocate space" );
     }
 
-    Status SimpleRecordStoreV1::truncate(TransactionExperiment* txn) {
+    Status SimpleRecordStoreV1::truncate(OperationContext* txn) {
         return Status( ErrorCodes::InternalError,
                        "SimpleRecordStoreV1::truncate not implemented" );
     }
 
-    void SimpleRecordStoreV1::addDeletedRec( TransactionExperiment* txn, const DiskLoc& dloc ) {
+    void SimpleRecordStoreV1::addDeletedRec( OperationContext* txn, const DiskLoc& dloc ) {
         DeletedRecord* d = drec( dloc );
 
         DEBUGGING log() << "TEMP: add deleted rec " << dloc.toString() << ' ' << hex << d->extentOfs() << endl;
 
         int b = bucket(d->lengthWithHeaders());
-        *txn->writing(&d->nextDeleted()) = _details->deletedListEntry(b);
+        *txn->recoveryUnit()->writing(&d->nextDeleted()) = _details->deletedListEntry(b);
         _details->setDeletedListEntry(txn, b, dloc);
     }
 
@@ -324,7 +324,7 @@ namespace mongo {
         size_t _allocationSize;
     };
 
-    void SimpleRecordStoreV1::_compactExtent(TransactionExperiment* txn,
+    void SimpleRecordStoreV1::_compactExtent(OperationContext* txn,
                                              const DiskLoc diskloc,
                                              int extentNumber,
                                              RecordStoreCompactAdaptor* adaptor,
@@ -415,11 +415,11 @@ namespace mongo {
                     // remove the old records (orphan them) periodically so our commit block doesn't get too large
                     bool stopping = false;
                     RARELY stopping = !txn->checkForInterruptNoAssert().isOK();
-                    if( stopping || txn->isCommitNeeded() ) {
-                        *txn->writing(&e->firstRecord) = L;
+                    if( stopping || txn->recoveryUnit()->isCommitNeeded() ) {
+                        *txn->recoveryUnit()->writing(&e->firstRecord) = L;
                         Record *r = recordFor(L);
-                        txn->writingInt(r->prevOfs()) = DiskLoc::NullOfs;
-                        txn->commitIfNeeded();
+                        txn->recoveryUnit()->writingInt(r->prevOfs()) = DiskLoc::NullOfs;
+                        txn->recoveryUnit()->commitIfNeeded();
                         txn->checkForInterrupt();
                     }
                 }
@@ -429,10 +429,10 @@ namespace mongo {
             invariant( _details->lastExtent() != diskloc );
             DiskLoc newFirst = e->xnext;
             _details->setFirstExtent( txn, newFirst );
-            *txn->writing(&_extentManager->getExtent( newFirst )->xprev) = DiskLoc();
+            *txn->recoveryUnit()->writing(&_extentManager->getExtent( newFirst )->xprev) = DiskLoc();
             _extentManager->freeExtent( txn, diskloc );
 
-            txn->commitIfNeeded();
+            txn->recoveryUnit()->commitIfNeeded();
 
             {
                 double op = 1.0;
@@ -446,13 +446,13 @@ namespace mongo {
 
     }
 
-    Status SimpleRecordStoreV1::compact( TransactionExperiment* txn,
+    Status SimpleRecordStoreV1::compact( OperationContext* txn,
                                          RecordStoreCompactAdaptor* adaptor,
                                          const CompactOptions* options,
                                          CompactStats* stats ) {
 
         // this is a big job, so might as well make things tidy before we start just to be nice.
-        txn->commitIfNeeded();
+        txn->recoveryUnit()->commitIfNeeded();
 
         list<DiskLoc> extents;
         for( DiskLoc extLocation = _details->firstExtent();

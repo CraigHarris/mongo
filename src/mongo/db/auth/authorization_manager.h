@@ -28,7 +28,6 @@
 
 #pragma once
 
-#include <boost/function.hpp>
 #include <boost/scoped_ptr.hpp>
 #include <boost/thread/condition_variable.hpp>
 #include <boost/thread/mutex.hpp>
@@ -38,6 +37,7 @@
 #include "mongo/base/disallow_copying.h"
 #include "mongo/base/status.h"
 #include "mongo/bson/mutable/element.h"
+#include "mongo/bson/oid.h"
 #include "mongo/db/auth/action_set.h"
 #include "mongo/db/auth/resource_pattern.h"
 #include "mongo/db/auth/role_graph.h"
@@ -47,6 +47,7 @@
 #include "mongo/db/jsobj.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/platform/unordered_map.h"
+#include "mongo/stdx/functional.h"
 
 namespace mongo {
 
@@ -165,6 +166,11 @@ namespace mongo {
          */
         Status getAuthorizationVersion(int* version);
 
+        /**
+         * Returns the user cache generation identifier.
+         */
+        OID getCacheGeneration();
+
         // Returns true if there exists at least one privilege document in the system.
         bool hasAnyPrivilegeDocuments() const;
 
@@ -252,7 +258,7 @@ namespace mongo {
         Status queryAuthzDocument(const NamespaceString& collectionName,
                                   const BSONObj& query,
                                   const BSONObj& projection,
-                                  const boost::function<void(const BSONObj&)>& resultProcessor);
+                                  const stdx::function<void(const BSONObj&)>& resultProcessor);
 
         // Checks to see if "doc" is a valid privilege document, assuming it is stored in the
         // "system.users" collection of database "dbname".
@@ -270,7 +276,7 @@ namespace mongo {
          * membership and delegation information, a full list of the user's privileges, and a full
          * list of the user's roles, including those roles held implicitly through other roles
          * (indirect roles).  In the event that some of this information is inconsistent, the
-         * document will contain a "warnings" array, with string messages describing
+         * document will contain a "warnings" array, with std::string messages describing
          * inconsistencies.
          *
          * If the user does not exist, returns ErrorCodes::UserNotFound.
@@ -284,7 +290,7 @@ namespace mongo {
          * implicitly through other roles (indirect roles). If "showPrivileges" is true, then the
          * description documents will also include a full list of the role's privileges.
          * In the event that some of this information is inconsistent, the document will contain a
-         * "warnings" array, with string messages describing inconsistencies.
+         * "warnings" array, with std::string messages describing inconsistencies.
          *
          * If the role does not exist, returns ErrorCodes::RoleNotFound.
          */
@@ -300,13 +306,13 @@ namespace mongo {
          * contain description documents for all the builtin roles for the given database, if it
          * is false the result will just include user defined roles.
          * In the event that some of the information in a given role description is inconsistent,
-         * the document will contain a "warnings" array, with string messages describing
+         * the document will contain a "warnings" array, with std::string messages describing
          * inconsistencies.
          */
         Status getRoleDescriptionsForDB(const std::string dbname,
                                         bool showPrivileges,
                                         bool showBuiltinRoles,
-                                        vector<BSONObj>* result);
+                                        std::vector<BSONObj>* result);
 
         /**
          *  Returns the User object for the given userName in the out parameter "acquiredUser".
@@ -444,6 +450,11 @@ namespace mongo {
                                           const BSONObj* o2);
 
         /**
+         * Updates _cacheGeneration to a new OID
+         */
+        void _updateCacheGeneration_inlock();
+
+        /**
          * Fetches user information from a v2-schema user document for the named user,
          * and stores a pointer to a new user object into *acquiredUser on success.
          */
@@ -485,10 +496,10 @@ namespace mongo {
         unordered_map<UserName, User*> _userCache;
 
         /**
-         * Current generation of cached data.  Bumped every time part of the cache gets
-         * invalidated.
+         * Current generation of cached data.  Updated every time part of the cache gets
+         * invalidated.  Protected by CacheGuard.
          */
-        uint64_t _cacheGeneration;
+        OID _cacheGeneration;
 
         /**
          * True if there is an update to the _userCache in progress, and that update is currently in

@@ -28,6 +28,8 @@
 *    it in the license file.
 */
 
+#include "mongo/db/commands/get_last_error.h"
+
 #include "mongo/db/client.h"
 #include "mongo/db/curop.h"
 #include "mongo/db/commands.h"
@@ -57,7 +59,7 @@ namespace mongo {
             help << "reset error state (used with getpreverror)";
         }
         CmdResetError() : Command("resetError", false, "reseterror") {}
-        bool run(const string& db, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
+        bool run(OperationContext* txn, const string& db, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             LastError *le = lastError.get();
             verify( le );
             le->reset();
@@ -91,7 +93,7 @@ namespace mongo {
                  << "  { wtimeout:m} - timeout for w in m milliseconds";
         }
 
-        bool run( const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                   BSONObj& cmdObj,
                   int,
                   string& errmsg,
@@ -210,7 +212,7 @@ namespace mongo {
 
             // If we got an electionId, make sure it matches
             if (electionIdPresent) {
-                if (!theReplSet) {
+                if (!replset::theReplSet) {
                     // Ignore electionIds of 0 from mongos.
                     if (electionId != OID()) {
                         errmsg = "wElectionId passed but no replication active";
@@ -219,9 +221,9 @@ namespace mongo {
                     }
                 } 
                 else {
-                    if (electionId != theReplSet->getElectionId()) {
+                    if (electionId != replset::theReplSet->getElectionId()) {
                         LOG(3) << "oid passed in is " << electionId
-                               << ", but our id is " << theReplSet->getElectionId();
+                               << ", but our id is " << replset::theReplSet->getElectionId();
                         errmsg = "election occurred after write";
                         result.append("code", ErrorCodes::WriteConcernFailed);
                         return false;
@@ -232,7 +234,7 @@ namespace mongo {
             cc().curop()->setMessage( "waiting for write concern" );
 
             WriteConcernResult wcResult;
-            status = waitForWriteConcern( writeConcern, lastOpTime, &wcResult );
+            status = waitForWriteConcern( txn, writeConcern, lastOpTime, &wcResult );
             wcResult.appendTo( writeConcern, &result );
 
             // For backward compatibility with 2.4, wtimeout returns ok : 1.0
@@ -262,7 +264,7 @@ namespace mongo {
                                            const BSONObj& cmdObj,
                                            std::vector<Privilege>* out) {} // No auth required
         CmdGetPrevError() : Command("getPrevError", false, "getpreverror") {}
-        bool run(const string& dbname, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
+        bool run(OperationContext* txn, const string& dbname, BSONObj& cmdObj, int, string& errmsg, BSONObjBuilder& result, bool fromRepl) {
             LastError *le = lastError.disableForCommand();
             le->appendSelf( result );
             if ( le->valid )

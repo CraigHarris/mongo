@@ -32,6 +32,8 @@
 
 namespace mongo {
 
+    class OperationContext;
+
     /**
      * Verifies that a WriteConcern is valid for this particular host.
      */
@@ -57,9 +59,9 @@ namespace mongo {
 
         bool wTimedOut;
         int wTime;
-        vector<BSONObj> writtenTo;
+        std::vector<BSONObj> writtenTo;
 
-        string err; // this is the old err field, should deprecate
+        std::string err; // this is the old err field, should deprecate
     };
 
     /**
@@ -74,7 +76,8 @@ namespace mongo {
      * Returns NotMaster if the host steps down while waiting for replication
      * Returns UnknownReplWriteConcern if the wMode specified was not enforceable
      */
-    Status waitForWriteConcern( const WriteConcernOptions& writeConcern,
+    Status waitForWriteConcern( OperationContext* txn,
+                                const WriteConcernOptions& writeConcern,
                                 const OpTime& replOpTime,
                                 WriteConcernResult* result );
 

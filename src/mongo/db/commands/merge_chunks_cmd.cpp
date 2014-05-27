@@ -80,7 +80,7 @@ namespace mongo {
         static BSONField<string> shardNameField;
         static BSONField<string> configField;
 
-        bool run( const string& dbname,
+        bool run(OperationContext* txn, const string& dbname,
                   BSONObj& cmdObj,
                   int,
                   string& errmsg,
@@ -160,7 +160,7 @@ namespace mongo {
                 return false;
             }
 
-            return mergeChunks( NamespaceString( ns ), minKey, maxKey, epoch, true, &errmsg );
+            return mergeChunks( NamespaceString( ns ), minKey, maxKey, epoch, &errmsg );
         }
     };
 

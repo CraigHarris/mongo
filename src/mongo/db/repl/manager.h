@@ -28,10 +28,12 @@
 
 #pragma once
 
-#include "mongo/db/repl/member.h"
+#include "mongo/db/jsobj.h"
 #include "mongo/db/repl/server.h"
 
 namespace mongo {
+namespace replset {
+    class Member;
     class ReplSetImpl;
 
     class Manager : public task::Server {
@@ -55,4 +57,5 @@ namespace mongo {
         void msgCheckNewState();
     };
 
-}
+} // namespace replset
+} // namespace mongo

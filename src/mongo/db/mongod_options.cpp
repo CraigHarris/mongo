@@ -28,6 +28,7 @@
 
 #include "mongo/db/mongod_options.h"
 
+#include <boost/filesystem.hpp>
 #include <string>
 #include <vector>
 
@@ -155,9 +156,13 @@ namespace mongo {
         // Storage Options
 
 #ifdef _WIN32
+        boost::filesystem::path currentPath = boost::filesystem::current_path();
+
+        std::string defaultPath = currentPath.root_name().string() + "\\data\\db\\";
         general_options.addOptionChaining("storage.dbPath", "dbpath", moe::String,
-                "directory for datafiles - defaults to \\data\\db\\")
-                                         .setDefault(moe::Value(std::string("\\data\\db\\")));
+                "directory for datafiles - defaults to \\data\\db\\ which is " + defaultPath + 
+                " based on the current working drive")
+                                         .setDefault(moe::Value(defaultPath));
 
 #else
         general_options.addOptionChaining("storage.dbPath", "dbpath", moe::String,
@@ -221,6 +226,10 @@ namespace mongo {
         general_options.addOptionChaining("noscripting", "noscripting", moe::Switch,
                 "disable scripting engine")
                                          .setSources(moe::SourceAllLegacy);
+
+        general_options.addOptionChaining("security.javascriptEnabled", "", moe::Bool,
+                "Enable javascript execution")
+                                         .setSources(moe::SourceYAMLConfig);
 
         // Query Options
 
@@ -521,6 +530,16 @@ namespace mongo {
             }
         }
 
+#ifdef _WIN32
+        if (params.count("install") || params.count("reinstall")) {
+            if (params.count("storage.dbPath") &&
+                !boost::filesystem::path(params["storage.dbPath"].as<string>()).is_absolute()) {
+                return Status(ErrorCodes::BadValue,
+                    "dbPath requires an absolute file path with Windows services");
+            }
+        }
+#endif
+
         return Status::OK();
     }
 
@@ -808,6 +827,20 @@ namespace mongo {
             }
         }
 
+        // "security.javascriptEnabled" comes from the config file, so override it if "noscripting"
+        // is set since that comes from the command line.
+        if (params->count("noscripting")) {
+            Status ret = params->set("security.javascriptEnabled",
+                                     moe::Value(!(*params)["noscripting"].as<bool>()));
+            if (!ret.isOK()) {
+                return ret;
+            }
+            ret = params->remove("noscripting");
+            if (!ret.isOK()) {
+                return ret;
+            }
+        }
+
         return Status::OK();
     }
 
@@ -923,7 +956,7 @@ namespace mongo {
             storageGlobalParams.useHints = !params["nohints"].as<bool>();
         }
         if (params.count("nopreallocj")) {
-            storageGlobalParams.preallocj = params["nopreallocj"].as<bool>();
+            storageGlobalParams.preallocj = !params["nopreallocj"].as<bool>();
         }
 
         if (params.count("net.http.RESTInterfaceEnabled")) {
@@ -932,8 +965,8 @@ namespace mongo {
         if (params.count("net.http.JSONPEnabled")) {
             serverGlobalParams.jsonp = params["net.http.JSONPEnabled"].as<bool>();
         }
-        if (params.count("noscripting")) {
-            mongodGlobalParams.scriptingEnabled = !params["noscripting"].as<bool>();
+        if (params.count("security.javascriptEnabled")) {
+            mongodGlobalParams.scriptingEnabled = params["security.javascriptEnabled"].as<bool>();
         }
         if (params.count("storage.preallocDataFiles")) {
             storageGlobalParams.prealloc = params["storage.preallocDataFiles"].as<bool>();
@@ -969,36 +1002,36 @@ namespace mongo {
             storageGlobalParams.noTableScan = params["notablescan"].as<bool>();
         }
         if (params.count("master")) {
-            replSettings.master = params["master"].as<bool>();
+            replset::replSettings.master = params["master"].as<bool>();
         }
         if (params.count("slave") && params["slave"].as<bool>() == true) {
-            replSettings.slave = SimpleSlave;
+            replset::replSettings.slave = replset::SimpleSlave;
         }
         if (params.count("slavedelay")) {
-            replSettings.slavedelay = params["slavedelay"].as<int>();
+            replset::replSettings.slavedelay = params["slavedelay"].as<int>();
         }
         if (params.count("fastsync")) {
-            replSettings.fastsync = params["fastsync"].as<bool>();
+            replset::replSettings.fastsync = params["fastsync"].as<bool>();
         }
         if (params.count("autoresync")) {
-            replSettings.autoresync = params["autoresync"].as<bool>();
+            replset::replSettings.autoresync = params["autoresync"].as<bool>();
         }
         if (params.count("source")) {
             /* specifies what the source in local.sources should be */
-            replSettings.source = params["source"].as<string>().c_str();
+            replset::replSettings.source = params["source"].as<string>().c_str();
         }
         if( params.count("pretouch") ) {
-            replSettings.pretouch = params["pretouch"].as<int>();
+            replset::replSettings.pretouch = params["pretouch"].as<int>();
         }
         if (params.count("replication.replSetName")) {
-            replSettings.replSet = params["replication.replSetName"].as<string>().c_str();
+            replset::replSettings.replSet = params["replication.replSetName"].as<string>().c_str();
         }
         if (params.count("replication.replSet")) {
             /* seed list of hosts for the repl set */
-            replSettings.replSet = params["replication.replSet"].as<string>().c_str();
+            replset::replSettings.replSet = params["replication.replSet"].as<string>().c_str();
         }
         if (params.count("replication.secondaryIndexPrefetch")) {
-            replSettings.rsIndexPrefetch =
+            replset::replSettings.rsIndexPrefetch =
                 params["replication.secondaryIndexPrefetch"].as<std::string>();
         }
 
@@ -1007,7 +1040,7 @@ namespace mongo {
         }
 
         if (params.count("only")) {
-            replSettings.only = params["only"].as<string>().c_str();
+            replset::replSettings.only = params["only"].as<string>().c_str();
         }
         if( params.count("storage.nsSize") ) {
             int x = params["storage.nsSize"].as<int>();
@@ -1029,8 +1062,8 @@ namespace mongo {
                    << "MB is too big for 32 bit version. Use 64 bit build instead.";
                 return Status(ErrorCodes::BadValue, sb.str());
             }
-            replSettings.oplogSize = x * 1024 * 1024;
-            verify(replSettings.oplogSize > 0);
+            replset::replSettings.oplogSize = x * 1024 * 1024;
+            verify(replset::replSettings.oplogSize > 0);
         }
         if (params.count("cacheSize")) {
             long x = params["cacheSize"].as<long>();
@@ -1065,7 +1098,9 @@ namespace mongo {
             params["sharding.clusterRole"].as<std::string>() == "configsvr") {
             serverGlobalParams.configsvr = true;
             storageGlobalParams.smallfiles = true; // config server implies small files
-            if (replSettings.usingReplSets() || replSettings.master || replSettings.slave) {
+            if (replset::replSettings.usingReplSets()
+                    || replset::replSettings.master
+                    || replset::replSettings.slave) {
                 return Status(ErrorCodes::BadValue,
                               "replication should not be enabled on a config server");
             }
@@ -1078,9 +1113,9 @@ namespace mongo {
 
             if (!params.count("storage.dbPath"))
                 storageGlobalParams.dbpath = "/data/configdb";
-            replSettings.master = true;
+            replset::replSettings.master = true;
             if (!params.count("replication.oplogSizeMB"))
-                replSettings.oplogSize = 5 * 1024 * 1024;
+                replset::replSettings.oplogSize = 5 * 1024 * 1024;
         }
 
         if (params.count("sharding.archiveMovedChunks")) {
@@ -1115,8 +1150,8 @@ namespace mongo {
             storageGlobalParams.repairpath = storageGlobalParams.dbpath;
         }
 
-        if (replSettings.pretouch)
-            log() << "--pretouch " << replSettings.pretouch << endl;
+        if (replset::replSettings.pretouch)
+            log() << "--pretouch " << replset::replSettings.pretouch;
 
         // Check if we are 32 bit and have not explicitly specified any journaling options
         if (sizeof(void*) == 4 && !params.count("storage.journal.enabled")) {

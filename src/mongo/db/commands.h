@@ -2,17 +2,29 @@
 
 /*    Copyright 2009 10gen Inc.
  *
- *    Licensed under the Apache License, Version 2.0 (the "License");
- *    you may not use this file except in compliance with the License.
- *    You may obtain a copy of the License at
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU Affero General Public License for more details.
  *
- *    Unless required by applicable law or agreed to in writing, software
- *    distributed under the License is distributed on an "AS IS" BASIS,
- *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *    See the License for the specific language governing permissions and
- *    limitations under the License.
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects
+ *    for all of the code used other than as permitted herein. If you modify
+ *    file(s) with this exception, you may extend this exception to your
+ *    version of the file(s), but you are not obligated to do so. If you do not
+ *    wish to do so, delete this exception statement from your version. If you
+ *    delete this exception statement from all source files in the program,
+ *    then also delete it in the license file.
  */
 
 #pragma once
@@ -33,6 +45,7 @@ namespace mongo {
     class Client;
     class Database;
     class Timer;
+    class OperationContext;
 
 namespace mutablebson {
     class Document;
@@ -45,14 +58,14 @@ namespace mutablebson {
     protected:
         // The type of the first field in 'cmdObj' must be mongo::String. The first field is
         // interpreted as a collection name.
-        string parseNsFullyQualified(const string& dbname, const BSONObj& cmdObj) const;
+        std::string parseNsFullyQualified(const std::string& dbname, const BSONObj& cmdObj) const;
     public:
 
         // Return the namespace for the command. If the first field in 'cmdObj' is of type
         // mongo::String, then that field is interpreted as the collection name, and is
         // appended to 'dbname' after a '.' character. If the first field is not of type
         // mongo::String, then 'dbname' is returned unmodified.
-        virtual string parseNs(const string& dbname, const BSONObj& cmdObj) const;
+        virtual std::string parseNs(const std::string& dbname, const BSONObj& cmdObj) const;
 
         // Utility that returns a ResourcePattern for the namespace returned from
         // parseNs(dbname, cmdObj).  This will be either an exact namespace resource pattern
@@ -61,7 +74,7 @@ namespace mutablebson {
         ResourcePattern parseResourcePattern(const std::string& dbname,
                                              const BSONObj& cmdObj) const;
 
-        const string name;
+        const std::string name;
 
         /* run the given command
            implement this...
@@ -71,7 +84,13 @@ namespace mutablebson {
 
            return value is true if succeeded.  if false, set errmsg text.
         */
-        virtual bool run(const string& db, BSONObj& cmdObj, int options, string& errmsg, BSONObjBuilder& result, bool fromRepl = false ) = 0;
+        virtual bool run(OperationContext* txn,
+                         const std::string& db,
+                         BSONObj& cmdObj,
+                         int options,
+                         std::string& errmsg,
+                         BSONObjBuilder& result,
+                         bool fromRepl = false ) = 0;
 
         /**
          * This designation for the command is only used by the 'help' call and has nothing to do 
@@ -88,7 +107,7 @@ namespace mutablebson {
             return false;
         }
 
-        void htmlHelp(stringstream&) const;
+        void htmlHelp(std::stringstream&) const;
 
         /* Like adminOnly, but even stricter: we must either be authenticated for admin db,
            or, if running without auth, on the local interface.  Used for things which 
@@ -116,7 +135,7 @@ namespace mutablebson {
          */
         virtual bool shouldAffectCommandCounter() const { return true; }
 
-        virtual void help( stringstream& help ) const;
+        virtual void help( std::stringstream& help ) const;
 
         /**
          * Checks if the given client is authorized to run this command on database "dbname"
@@ -151,7 +170,6 @@ namespace mutablebson {
         virtual ~Command() {}
 
     protected:
-
         /**
          * Appends to "*out" the privileges required to run this command on database "dbname" with
          * the invocation described by "cmdObj".  New commands shouldn't implement this, they should
@@ -172,27 +190,28 @@ namespace mutablebson {
             return BSONObj();
         }
 
-        static void logIfSlow( const Timer& cmdTimer,  const string& msg);
+        static void logIfSlow( const Timer& cmdTimer,  const std::string& msg);
 
-        static map<string,Command*> * _commands;
-        static map<string,Command*> * _commandsByBestName;
-        static map<string,Command*> * _webCommands;
+        static std::map<std::string,Command*> * _commands;
+        static std::map<std::string,Command*> * _commandsByBestName;
+        static std::map<std::string,Command*> * _webCommands;
 
     public:
         // Stops all index builds required to run this command and returns index builds killed.
         virtual std::vector<BSONObj> stopIndexBuilds(Database* db, 
                                                      const BSONObj& cmdObj);
 
-        static const map<string,Command*>* commandsByBestName() { return _commandsByBestName; }
-        static const map<string,Command*>* webCommands() { return _webCommands; }
+        static const std::map<std::string,Command*>* commandsByBestName() { return _commandsByBestName; }
+        static const std::map<std::string,Command*>* webCommands() { return _webCommands; }
         /** @return if command was found */
         static void runAgainstRegistered(const char *ns,
                                          BSONObj& jsobj,
                                          BSONObjBuilder& anObjBuilder,
                                          int queryOptions = 0);
-        static Command * findCommand( const string& name );
+        static Command * findCommand( const std::string& name );
         // For mongod and webserver.
-        static void execCommand(Command* c,
+        static void execCommand(OperationContext* txn,
+                                Command* c,
                                 Client& client,
                                 int queryOptions,
                                 const char *ns,
@@ -200,7 +219,8 @@ namespace mutablebson {
                                 BSONObjBuilder& result,
                                 bool fromRepl );
         // For mongos
-        static void execCommandClientBasic(Command* c,
+        static void execCommandClientBasic(OperationContext* txn,
+                                           Command* c,
                                            ClientBasic& client,
                                            int queryOptions,
                                            const char *ns,
@@ -223,6 +243,7 @@ namespace mutablebson {
         static int testCommandsEnabled;
 
     private:
+
         /**
          * Checks to see if the client is authorized to run the given command with the given
          * parameters on the given named database.
@@ -242,6 +263,12 @@ namespace mutablebson {
                                           bool fromRepl);
     };
 
-    bool _runCommands(const char *ns, BSONObj& jsobj, BufBuilder &b, BSONObjBuilder& anObjBuilder, bool fromRepl, int queryOptions);
+    bool _runCommands(OperationContext* txn,
+                      const char* ns,
+                      BSONObj& jsobj,
+                      BufBuilder& b,
+                      BSONObjBuilder& anObjBuilder,
+                      bool fromRepl,
+                      int queryOptions);
 
 } // namespace mongo

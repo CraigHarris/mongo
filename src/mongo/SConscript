@@ -18,6 +18,7 @@ Import("darwin windows solaris linux nix")
 
 env.SConscript(['base/SConscript',
                 'db/auth/SConscript',
+                'db/catalog/SConscript',
                 'db/commands/SConscript',
                 'db/exec/SConscript',
                 'db/fts/SConscript',
@@ -64,7 +65,8 @@ env.Library('foundation',
                      '$BUILD_DIR/mongo/platform/platform',
                      '$BUILD_DIR/mongo/util/concurrency/thread_name',
                      '$BUILD_DIR/third_party/shim_allocator',
-                     '$BUILD_DIR/third_party/shim_boost'])
+                     '$BUILD_DIR/third_party/shim_boost',
+                     '$BUILD_DIR/third_party/shim_tz'])
 
 env.CppUnitTest('text_test', 'util/text_test.cpp', LIBDEPS=['foundation'])
 env.CppUnitTest('util/time_support_test', 'util/time_support_test.cpp', LIBDEPS=['foundation'])
@@ -525,16 +527,12 @@ if has_option( "mm" ):
 else:
     mmapFiles += [ "util/mmap_${OS_FAMILY}.cpp" ]
 
-if has_option( "asio" ):
-    coreServerFiles += [ "util/net/message_server_asio.cpp" ]
-
 env.Library('index_set', [ 'db/index_set.cpp' ] )
 
 # mongod files - also files used in tools. present in dbtests, but not in mongos and not in client
 # libs.
 serverOnlyFiles = [ "db/curop.cpp",
                     "db/kill_current_op.cpp",
-                    "db/interrupt_status_mongod.cpp",
                     "db/d_globals.cpp",
                     "util/compress.cpp",
                     "db/ttl.cpp",
@@ -552,11 +550,12 @@ serverOnlyFiles = [ "db/curop.cpp",
                     "db/storage/mmap_v1/dur_commitjob.cpp",
                     "db/storage/mmap_v1/dur_recover.cpp",
                     "db/storage/mmap_v1/dur_journal.cpp",
-                    "db/storage/mmap_v1/dur_transaction.cpp",
+                    "db/storage/mmap_v1/dur_recovery_unit.cpp",
+                    "db/storage/mmap_v1/mmap_v1_engine.cpp",
+                    "db/operation_context_impl.cpp",
                     "db/storage/mmap_v1/mmap_v1_extent_manager.cpp",
                     "db/introspect.cpp",
                     "db/clientcursor.cpp",
-                    "db/tests.cpp",
                     "db/range_deleter_db_env.cpp",
                     "db/range_deleter_service.cpp",
                     "db/repl/repl_start.cpp",
@@ -564,6 +563,7 @@ serverOnlyFiles = [ "db/curop.cpp",
                     "db/repl/consensus.cpp",
                     "db/repl/rs_initiate.cpp",
                     "db/repl/repl_set_health_poll_task.cpp",
+                    "db/repl/repl_set_impl.cpp",
                     "db/repl/replset_commands.cpp",
                     "db/repl/manager.cpp",
                     "db/repl/health.cpp",
@@ -585,6 +585,7 @@ serverOnlyFiles = [ "db/curop.cpp",
                     "db/repl/repl_reads_ok.cpp",
                     "db/repl/resync.cpp",
                     "db/repl/oplog.cpp",
+                    "db/repl/topology_coordinator_impl.cpp",
                     "db/prefetch.cpp",
                     "db/repl/write_concern.cpp",
                     "db/index_legacy.cpp",
@@ -600,6 +601,8 @@ serverOnlyFiles = [ "db/curop.cpp",
                     "db/index/s2_access_method.cpp",
                     "db/cloner.cpp",
                     "db/structure/catalog/namespace_details.cpp",
+                    "db/structure/catalog/namespace_details_collection_entry.cpp",
+                    "db/structure/catalog/namespace_details_rsv1_metadata.cpp",
                     "db/structure/catalog/namespace_index.cpp",
                     "db/dbeval.cpp",
                     "db/dbhelpers.cpp",
@@ -619,7 +622,6 @@ serverOnlyFiles = [ "db/curop.cpp",
                     "db/repair_database.cpp",
                     "db/storage/data_file.cpp",
                     "db/structure/catalog/index_details.cpp",
-                    "db/extsort.cpp",
                     "db/index_builder.cpp",
                     "db/index_rebuilder.cpp",
                     "db/commands/geonear.cpp",
@@ -642,6 +644,10 @@ serverOnlyFiles = [ "db/curop.cpp",
                     # most commands are only for mongod
                     "db/stats/top.cpp",
                     "db/commands/apply_ops.cpp",
+                    "db/commands/clone_collection.cpp",
+                    "db/commands/clone.cpp",
+                    "db/commands/copydb.cpp",
+                    "db/commands/copydb_getnonce.cpp",
                     "db/commands/compact.cpp",
                     "db/commands/auth_schema_upgrade_d.cpp",
                     "db/commands/create_indexes.cpp",
@@ -658,14 +664,12 @@ serverOnlyFiles = [ "db/curop.cpp",
                     "db/commands/find_and_modify.cpp",
                     "db/commands/group.cpp",
                     "db/commands/index_filter_commands.cpp",
-                    "db/commands/index_stats.cpp",
                     "db/commands/mr.cpp",
                     "db/commands/oplog_note.cpp",
                     "db/commands/pipeline_command.cpp",
                     "db/commands/parallel_collection_scan.cpp",
                     "db/commands/plan_cache_commands.cpp",
                     "db/commands/rename_collection.cpp",
-                    "db/commands/storage_details.cpp",
                     "db/commands/test_commands.cpp",
                     "db/commands/validate.cpp",
                     "db/pipeline/pipeline_d.cpp",
@@ -698,7 +702,12 @@ env.CppUnitTest('diskloc_test', 'db/diskloc_test.cpp', LIBDEPS=[])
 
 env.CppUnitTest('v8_deadline_monitor_test', 'scripting/v8_deadline_monitor_test.cpp', LIBDEPS=[])
 
-env.Library('stacktrace', 'util/stacktrace.cpp')
+env.Library('stacktrace',
+            'util/stacktrace_${OS_FAMILY}.cpp',
+            LIBDEPS=['bson',
+                     'stringutils',
+                     'version',
+                     '$BUILD_DIR/mongo/base/base'])
 
 serverOnlyFiles += mmapFiles
 
@@ -716,7 +725,6 @@ env.Library('coreshard', ['s/distlock.cpp',
                      's/cluster_ops_impl']);
     
 mongosLibraryFiles = [
-    "s/interrupt_status_mongos.cpp",
     "s/strategy.cpp",
     "s/commands_admin.cpp",
     "s/commands_public.cpp",
@@ -809,6 +817,10 @@ serverOnlyFiles += [ "s/d_logic.cpp",
                      "s/d_merge.cpp",
                      "s/distlock_test.cpp" ]
 
+if has_option( 'use-cpu-profiler' ):
+    serverOnlyFiles.append( 'db/commands/cpuprofile.cpp' )
+    env.Append(LIBS=['unwind'])
+
 env.Library("defaultversion", "s/default_version.cpp")
 
 # Geo
@@ -887,6 +899,7 @@ env.Library("serveronly", serverOnlyFiles,
                      'range_deleter',
                      's/metadata',
                      's/batch_write_types',
+                     "db/catalog/collection_options",
                      "db/exec/working_set",
                      "db/exec/exec",
                      "db/query/query",
@@ -923,10 +936,6 @@ mongodOnlyFiles = [ "db/db.cpp", "db/commands/touch.cpp", "db/mongod_options_ini
 # ----- TARGETS ------
 
 env.Library("gridfs", "client/gridfs.cpp")
-
-if has_option( 'use-cpu-profiler' ):
-    coreServerFiles.append( 'db/commands/cpuprofile.cpp' )
-    env.Append(LIBS=['unwind'])
 
 env.Library("coreserver", coreServerFiles, LIBDEPS=["mongocommon", "scripting"])
 
@@ -1100,6 +1109,7 @@ env.JSHeader("shell/mongo.cpp",
                  "shell/upgrade_check.js",
                  "shell/utils.js",
                  "shell/utils_sh.js",
+                 "shell/utils_auth.js",
               ])
 
 # if you add a file here, you need to add it in shell/shell_utils.cpp and shell/createCPPfromJavaScriptFiles.js as well

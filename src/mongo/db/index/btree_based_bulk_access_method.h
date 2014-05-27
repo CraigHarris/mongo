@@ -32,7 +32,7 @@
 #include "mongo/base/error_codes.h"
 #include "mongo/base/status.h"
 #include "mongo/db/curop.h"
-#include "mongo/db/extsort.h"
+#include "mongo/db/sorter/sorter.h"
 #include "mongo/db/index/btree_based_access_method.h"
 #include "mongo/db/index/index_access_method.h"
 #include "mongo/db/index/index_descriptor.h"
@@ -47,15 +47,14 @@ namespace mongo {
          * Does not take ownership of any pointers.
          * All pointers must outlive 'this'.
          */
-        BtreeBasedBulkAccessMethod(TransactionExperiment* txn,
+        BtreeBasedBulkAccessMethod(OperationContext* txn,
                                    BtreeBasedAccessMethod* real,
                                    BtreeInterface* interface,
-                                   const IndexDescriptor* descriptor,
-                                   int numRecords);
+                                   const IndexDescriptor* descriptor);
 
         ~BtreeBasedBulkAccessMethod() {}
 
-        virtual Status insert(TransactionExperiment* txn,
+        virtual Status insert(OperationContext* txn,
                               const BSONObj& obj,
                               const DiskLoc& loc,
                               const InsertDeleteOptions& options,
@@ -81,7 +80,7 @@ namespace mongo {
             return _notAllowed();
         }
 
-        virtual Status touch(TransactionExperiment* txn) const {
+        virtual Status touch(OperationContext* txn) const {
             return _notAllowed();
         }
 
@@ -89,7 +88,7 @@ namespace mongo {
             return _notAllowed();
         }
 
-        virtual Status remove(TransactionExperiment* txn,
+        virtual Status remove(OperationContext* txn,
                               const BSONObj& obj,
                               const DiskLoc& loc,
                               const InsertDeleteOptions& options,
@@ -105,7 +104,7 @@ namespace mongo {
             return _notAllowed();
         }
 
-        virtual Status update(TransactionExperiment* txn,
+        virtual Status update(OperationContext* txn,
                               const UpdateTicket& ticket,
                               int64_t* numUpdated) {
             return _notAllowed();
@@ -115,15 +114,17 @@ namespace mongo {
             return _notAllowed();
         }
 
-        virtual Status initializeAsEmpty(TransactionExperiment* txn) {
+        virtual Status initializeAsEmpty(OperationContext* txn) {
             return _notAllowed();
         }
 
-        virtual IndexAccessMethod* initiateBulk(TransactionExperiment* txn) {
+        virtual IndexAccessMethod* initiateBulk(OperationContext* txn) {
             return NULL;
         }
 
     private:
+        typedef Sorter<BSONObj, DiskLoc> BSONObjExternalSorter;
+
         Status _notAllowed() const {
             return Status(ErrorCodes::InternalError, "cannot use bulk for this yet");
         }
@@ -137,9 +138,6 @@ namespace mongo {
         // The external sorter.
         boost::scoped_ptr<BSONObjExternalSorter> _sorter;
 
-        // A comparison object required by the sorter.
-        boost::scoped_ptr<ExternalSortComparison> _sortCmp;
-
         // How many docs are we indexing?
         unsigned long long _docsInserted;
 
@@ -149,7 +147,7 @@ namespace mongo {
         // Does any document have >1 key?
         bool _isMultiKey;
 
-        TransactionExperiment* _txn;
+        OperationContext* _txn;
     };
 
 }  // namespace mongo

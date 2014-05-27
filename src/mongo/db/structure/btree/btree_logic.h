@@ -32,7 +32,7 @@
 #include "mongo/db/diskloc.h"
 #include "mongo/db/jsobj.h"
 #include "mongo/db/storage/record.h"
-#include "mongo/db/storage/transaction.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/db/structure/btree/btree_ondisk.h"
 #include "mongo/db/structure/btree/key.h"
 #include "mongo/db/structure/btree/bucket_deletion_notification.h"
@@ -42,6 +42,11 @@
 namespace mongo {
 
     class BucketDeletionNotification;
+    class RecordStore;
+
+    // Used for unit-testing only
+    template <class BtreeLayout> class BtreeLogicTestBase;
+    template <class BtreeLayout> class ArtificialTreeBuilder;
 
     /**
      * This is the logic for manipulating the Btree.  It is (mostly) independent of the on-disk
@@ -101,7 +106,7 @@ namespace mongo {
         private:
             friend class BtreeLogic;
 
-            Builder(BtreeLogic* logic, TransactionExperiment* trans, bool dupsAllowed);
+            Builder(BtreeLogic* logic, OperationContext* txn, bool dupsAllowed);
 
             // Direct ports of functionality
             void newBucket();
@@ -124,18 +129,18 @@ namespace mongo {
             auto_ptr<KeyDataOwnedType> _keyLast;
 
             // Not owned.
-            TransactionExperiment* _trans;
+            OperationContext* _txn;
         };
 
         /**
          * Caller owns the returned pointer.
          * 'this' must outlive the returned pointer.
          */
-        Builder* newBuilder(TransactionExperiment* trans, bool dupsAllowed);
+        Builder* newBuilder(OperationContext* txn, bool dupsAllowed);
 
         Status dupKeyCheck(const BSONObj& key, const DiskLoc& loc) const;
 
-        Status insert(TransactionExperiment* trans,
+        Status insert(OperationContext* txn,
                       const BSONObj& rawKey,
                       const DiskLoc& value,
                       bool dupsAllowed);
@@ -158,7 +163,7 @@ namespace mongo {
 
         bool exists(const KeyDataType& key) const;
 
-        bool unindex(TransactionExperiment* trans,
+        bool unindex(OperationContext* txn,
                      const BSONObj& key,
                      const DiskLoc& recordLoc);
 
@@ -201,11 +206,6 @@ namespace mongo {
                              DiskLoc* bucketInOut,
                              int* keyOffsetInOut) const;
 
-        bool keyIsAt(const BSONObj& savedKey,
-                     const DiskLoc& savedLoc,
-                     BucketType* bucket,
-                     int keyPos) const;
-
         //
         // Creation and deletion
         //
@@ -213,10 +213,20 @@ namespace mongo {
         /**
          * Returns OK if the index was uninitialized before, error status otherwise.
          */
-        Status initAsEmpty(TransactionExperiment* trans);
+        Status initAsEmpty(OperationContext* txn);
+
+        //
+        // Size constants
+        //
+
+        static int lowWaterMark();
 
     private:
         friend class BtreeLogic::Builder;
+
+        // Used for unit-testing only
+        friend class BtreeLogicTestBase<BtreeLayout>;
+        friend class ArtificialTreeBuilder<BtreeLayout>;
 
         /**
          * This is an in memory wrapper for the variable length data associated with a
@@ -248,12 +258,6 @@ namespace mongo {
         // Functions that depend on the templated type info but nothing in 'this'.
         //
 
-        static int headerSize();
-
-        static int bodySize();
-
-        static int lowWaterMark();
-
         static LocType& childLocForPos(BucketType* bucket, int pos);
 
         static FullKey getFullKey(const BucketType* bucket, int i);
@@ -280,13 +284,13 @@ namespace mongo {
 
         static bool mayDropKey(BucketType* bucket, int index, int refPos);
 
-        static int packedDataSize(BucketType* bucket, int refPos);
+        static int _packedDataSize(BucketType* bucket, int refPos);
 
         static void setPacked(BucketType* bucket);
 
         static void setNotPacked(BucketType* bucket);
 
-        static BucketType* btreemod(TransactionExperiment* trans, BucketType* bucket);
+        static BucketType* btreemod(OperationContext* txn, BucketType* bucket);
 
         static int splitPos(BucketType* bucket, int keypos);
 
@@ -300,7 +304,7 @@ namespace mongo {
 
         static bool isHead(BucketType* bucket);
 
-        static void dump(BucketType* bucket, int depth = 0);
+        static void dumpBucket(const BucketType* bucket, int indentLength = 0);
 
         static void assertValid(const std::string& ns, 
                                 BucketType* bucket, 
@@ -312,7 +316,7 @@ namespace mongo {
         // information).
         //
 
-        bool basicInsert(TransactionExperiment* trans,
+        bool basicInsert(OperationContext* txn,
                          BucketType* bucket,
                          const DiskLoc bucketLoc,
                          int& keypos,
@@ -321,7 +325,7 @@ namespace mongo {
 
         void dropFront(BucketType* bucket, int nDrop, int& refpos);
 
-        void _pack(TransactionExperiment* trans, BucketType* bucket, const DiskLoc thisLoc, int &refPos);
+        void _pack(OperationContext* txn, BucketType* bucket, const DiskLoc thisLoc, int &refPos);
 
         void customLocate(DiskLoc* locInOut,
                           int* keyOfsInOut,
@@ -377,28 +381,26 @@ namespace mongo {
                        const DiskLoc& recordLoc,
                        const int direction) const;
 
-        long long fullValidate(const DiskLoc bucketLoc,
+        long long _fullValidate(const DiskLoc bucketLoc,
                                long long *unusedCount,
                                bool strict,
                                bool dumpBuckets,
                                unsigned depth);
 
-        DiskLoc addBucket(TransactionExperiment* trans);
+        DiskLoc _addBucket(OperationContext* txn);
 
         bool canMergeChildren(BucketType* bucket,
                               const DiskLoc bucketLoc,
                               const int leftIndex);
 
         // has to look in children of 'bucket' and requires record store
-        int rebalancedSeparatorPos(BucketType* bucket,
-                                   const DiskLoc bucketLoc,
-                                   int leftIndex);
+        int _rebalancedSeparatorPos(BucketType* bucket, int leftIndex);
 
         void _packReadyForMod(BucketType* bucket, int &refPos);
 
         void truncateTo(BucketType* bucket, int N, int &refPos);
 
-        void split(TransactionExperiment* trans,
+        void split(OperationContext* txn,
                    BucketType* bucket,
                    const DiskLoc bucketLoc,
                    int keypos,
@@ -407,7 +409,7 @@ namespace mongo {
                    const DiskLoc lchild,
                    const DiskLoc rchild);
 
-        Status _insert(TransactionExperiment* trans,
+        Status _insert(OperationContext* txn,
                        BucketType* bucket,
                        const DiskLoc bucketLoc,
                        const KeyDataType& key,
@@ -417,7 +419,7 @@ namespace mongo {
                        const DiskLoc rightChild);
 
         // TODO take a BucketType*?
-        void insertHere(TransactionExperiment* trans,
+        void insertHere(OperationContext* txn,
                         const DiskLoc bucketLoc,
                         int pos,
                         const KeyDataType& key,
@@ -425,9 +427,9 @@ namespace mongo {
                         const DiskLoc leftChild,
                         const DiskLoc rightChild);
 
-        string dupKeyError(const KeyDataType& key) const;
+        std::string dupKeyError(const KeyDataType& key) const;
 
-        void setInternalKey(TransactionExperiment* trans,
+        void setInternalKey(OperationContext* txn,
                             BucketType* bucket,
                             const DiskLoc bucketLoc,
                             int keypos,
@@ -436,22 +438,20 @@ namespace mongo {
                             const DiskLoc lchild,
                             const DiskLoc rchild);
 
-        void fix(TransactionExperiment* trans, const DiskLoc bucketLoc, const DiskLoc child);
-
-        void fixParentPtrs(TransactionExperiment* trans,
+        void fixParentPtrs(OperationContext* trans,
                            BucketType* bucket,
                            const DiskLoc bucketLoc,
                            int firstIndex = 0,
                            int lastIndex = -1);
 
-        bool mayBalanceWithNeighbors(TransactionExperiment* trans, BucketType* bucket, const DiskLoc bucketLoc);
+        bool mayBalanceWithNeighbors(OperationContext* txn, BucketType* bucket, const DiskLoc bucketLoc);
 
-        void doBalanceChildren(TransactionExperiment* trans,
+        void doBalanceChildren(OperationContext* txn,
                                BucketType* bucket,
                                const DiskLoc bucketLoc,
                                int leftIndex);
 
-        void doBalanceLeftToRight(TransactionExperiment* trans,
+        void doBalanceLeftToRight(OperationContext* txn,
                                   BucketType* bucket,
                                   const DiskLoc thisLoc,
                                   int leftIndex,
@@ -461,7 +461,7 @@ namespace mongo {
                                   BucketType* r,
                                   const DiskLoc rchild);
 
-        void doBalanceRightToLeft(TransactionExperiment* trans,
+        void doBalanceRightToLeft(OperationContext* txn,
                                   BucketType* bucket,
                                   const DiskLoc bucketLoc,
                                   int leftIndex,
@@ -471,47 +471,52 @@ namespace mongo {
                                   BucketType* r,
                                   const DiskLoc rchild);
 
-        bool tryBalanceChildren(TransactionExperiment* trans,
+        bool tryBalanceChildren(OperationContext* txn,
                                 BucketType* bucket,
                                 const DiskLoc bucketLoc,
                                 int leftIndex);
 
         int indexInParent(BucketType* bucket, const DiskLoc bucketLoc) const;
 
-        void doMergeChildren(TransactionExperiment* trans,
+        void doMergeChildren(OperationContext* txn,
                              BucketType* bucket,
                              const DiskLoc bucketLoc,
                              int leftIndex);
 
-        void replaceWithNextChild(TransactionExperiment* trans,
+        void replaceWithNextChild(OperationContext* txn,
                                   BucketType* bucket,
                                   const DiskLoc bucketLoc);
 
-        void deleteInternalKey(TransactionExperiment* trans,
+        void deleteInternalKey(OperationContext* txn,
                                BucketType* bucket,
                                const DiskLoc bucketLoc,
                                int keypos);
 
-        void delKeyAtPos(TransactionExperiment* trans,
+        void delKeyAtPos(OperationContext* txn,
                          BucketType* bucket,
                          const DiskLoc bucketLoc,
                          int p);
 
-        void delBucket(TransactionExperiment* trans,
+        void delBucket(OperationContext* txn,
                        BucketType* bucket,
                        const DiskLoc bucketLoc);
 
-        void deallocBucket(TransactionExperiment* trans,
+        void deallocBucket(OperationContext* txn,
                            BucketType* bucket,
                            const DiskLoc bucketLoc);
+
+        bool _keyIsAt(const BSONObj& savedKey,
+                     const DiskLoc& savedLoc,
+                     BucketType* bucket,
+                     int keyPos) const;
 
         // TODO 'this' for _ordering(?)
         int customBSONCmp(const BSONObj& l,
                           const BSONObj& rBegin,
                           int rBeginLen,
                           bool rSup,
-                          const vector<const BSONElement*>& rEnd,
-                          const vector<bool>& rEndInclusive,
+                          const std::vector<const BSONElement*>& rEnd,
+                          const std::vector<bool>& rEndInclusive,
                           const Ordering& o,
                           int direction) const;
 

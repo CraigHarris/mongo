@@ -2,17 +2,29 @@
 
 /*    Copyright 2009 10gen Inc.
  *
- *    Licensed under the Apache License, Version 2.0 (the "License");
- *    you may not use this file except in compliance with the License.
- *    You may obtain a copy of the License at
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU Affero General Public License for more details.
  *
- *    Unless required by applicable law or agreed to in writing, software
- *    distributed under the License is distributed on an "AS IS" BASIS,
- *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *    See the License for the specific language governing permissions and
- *    limitations under the License.
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects
+ *    for all of the code used other than as permitted herein. If you modify
+ *    file(s) with this exception, you may extend this exception to your
+ *    version of the file(s), but you are not obligated to do so. If you do not
+ *    wish to do so, delete this exception statement from your version. If you
+ *    delete this exception statement from all source files in the program,
+ *    then also delete it in the license file.
  */
 
 #pragma once
@@ -31,8 +43,8 @@ namespace mongo {
     struct HostAndPort {
         HostAndPort() : _port(-1) { }
 
-        /** From a string hostname[:portnumber]
-            Throws user assertion if bad config string or bad port #.
+        /** From a std::string hostname[:portnumber]
+            Throws user assertion if bad config std::string or bad port #.
         */
         HostAndPort(const std::string& s);
 
@@ -66,16 +78,16 @@ namespace mongo {
         /**
          * @param includePort host:port if true, host otherwise
          */
-        string toString( bool includePort=true ) const;
+        std::string toString( bool includePort=true ) const;
 
-        operator string() const { return toString(); }
+        operator std::string() const { return toString(); }
 
         void append( StringBuilder& ss ) const;
 
         bool empty() const {
             return _host.empty() && _port < 0;
         }
-        const string& host() const {
+        const std::string& host() const {
             return _host;
         }
         int port() const {
@@ -92,21 +104,21 @@ namespace mongo {
 
     private:
         void init(const char *);
-        string _host;
+        std::string _host;
         int _port; // -1 indicates unspecified
     };
 
     inline HostAndPort HostAndPort::me() {
         const char* ips = serverGlobalParams.bind_ip.c_str();
         while(*ips) {
-            string ip;
+            std::string ip;
             const char * comma = strchr(ips, ',');
             if (comma) {
-                ip = string(ips, comma - ips);
+                ip = std::string(ips, comma - ips);
                 ips = comma + 1;
             }
             else {
-                ip = string(ips);
+                ip = std::string(ips);
                 ips = "";
             }
             HostAndPort h = HostAndPort(ip, serverGlobalParams.port);
@@ -115,13 +127,13 @@ namespace mongo {
             }
         }
 
-        string h = getHostName();
+        std::string h = getHostName();
         verify( !h.empty() );
         verify( h != "localhost" );
         return HostAndPort(h, serverGlobalParams.port);
     }
 
-    inline string HostAndPort::toString( bool includePort ) const {
+    inline std::string HostAndPort::toString( bool includePort ) const {
         if ( ! includePort )
             return host();
 
@@ -153,7 +165,7 @@ namespace mongo {
 
 
     inline bool HostAndPort::isLocalHost() const {
-        string _host = host();
+        std::string _host = host();
         return (  _host == "localhost"
                || mongoutils::str::startsWith(_host.c_str(), "127.")
                || _host == "::1"
@@ -168,7 +180,7 @@ namespace mongo {
         if( colon ) {
             int port = atoi(colon+1);
             massert(13095, "HostAndPort: bad port #", port > 0);
-            _host = string(p,colon-p);
+            _host = std::string(p,colon-p);
             _port = port;
         }
         else {
