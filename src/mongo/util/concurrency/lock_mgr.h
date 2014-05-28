@@ -364,7 +364,57 @@ namespace mongo {
                                const ResourceId& parentId,
                                const ResourceId& resId);
 
-    private:
+    private: // alphabetical
+
+        /**
+         * called by public ::abort and internally upon deadlock
+	 * releases all locks acquired by goner, notify's any
+	 * transactions that were waiting, then throws AbortException
+         */
+        void abort_internal( const TxId& goner );
+
+	/**
+	 * main workhorse for acquiring locks on resources, blocking
+	 * or aborting on conflict
+	 *
+	 * returns a non-zero LockId, or throws AbortException on deadlock
+	 *
+	 */
+        LockId acquire_internal( const TxId& requestor,
+				 const unsigned& mode,
+				 const LockId& containerLid,
+				 const ResourceId& resId,
+				 Notifier* notifier,
+                                 boost::unique_lock<boost::mutex>& guard);
+
+        /**
+         * adds a lock request to the list of requests for a resource
+         * using the LockingPolicy.  Called by acquire_internal
+         */
+        void addLockToQueueUsingPolicy( LockRequest* lr );
+
+        /**
+         * set up for future deadlock detection, called from acquire
+         */
+        void addWaiter( const TxId& blocker, const TxId& waiter );
+
+        /**
+         * when inserting a new lock request into the middle of a queue,
+         * add any remaining incompatible requests in the queue to the
+         * new lock request's set of waiters... for future deadlock detection
+         */
+        void addWaiters( LockRequest* blocker,
+                         list<LockId>::iterator nextLockId,
+                         list<LockId>::iterator lastLockId );
+
+	/**
+	 *  if request conflicts with _policy or a pre-existing lock
+	 *  in the queue, block until the conflict is resolved
+	 */
+	void blockOnConflict( LockRequest* request,
+			      std::list<LockId>* queue,
+			      Notifier* notifier,
+			      boost::unique_lock<boost::mutex>& guard );
 
         /**
          * returns true if a newRequest should be honored before an oldRequest according
@@ -381,6 +431,23 @@ namespace mongo {
          */
         bool conflictExists( const LockRequest* lr, const list<LockId>* queue, TxId* blocker );
 
+	/**
+	 * looks for an existing LockRequest that matches the four input params
+	 * if not found, sets outLid to zero and returns a reason, otherwise
+	 * sets outLid to the LockId that matches and returns FOUND
+	 */
+        LockStatus find_lock( const TxId& requestor,
+                              const unsigned& mode,
+                              const ResourceId& parentId,
+                              const ResourceId& resId,
+			      LockId* outLid );
+
+        /**
+         * called externally by getTransactionPriority
+         * and internally by addLockToQueueUsingPolicy
+         */
+        int get_transaction_priority_internal( const TxId& xid );
+
         /**
          * returns true if acquire would return without waiting
          * used by acquireOne
@@ -390,54 +457,11 @@ namespace mongo {
                           const ResourceId& parentId,
                           const ResourceId& resId );
 
-        LockStatus find_lock( const TxId& requestor,
-                              const unsigned& mode,
-                              const ResourceId& parentId,
-                              const ResourceId& resId,
-			      LockId* outLid );
-
-        /**
-         * set up for future deadlock detection, called from acquire
-         */
-        void addWaiter( const TxId& blocker, const TxId& waiter );
-
-        /**
-         * when inserting a new lock request into the middle of a queue,
-         * add any remaining incompatible requests in the queue to the
-         * new lock request's set of waiters... for future deadlock detection
-         */
-        void addWaiters( LockRequest* blocker,
-                         list<LockId>::iterator nextLockId,
-                         list<LockId>::iterator lastLockId );
-        /**
-         * adds a lock request to the list of requests for a resource
-         * using the LockingPolicy.  Called by acquire
-         */
-        void addLockToQueueUsingPolicy( LockRequest* lr );
-
-        LockId acquire_internal( const TxId& requestor,
-				 const unsigned& mode,
-				 const LockId& containerLid,
-				 const ResourceId& resId,
-				 Notifier* notifier,
-                                 boost::unique_lock<boost::mutex>& guard);
-
         /**
          * called by public ::release and internally by abort.
          * assumes caller as acquired a mutex.
          */
         LockStatus release_internal( const LockId& lid );
-
-        /**
-         * called by public ::abort and internally by deadlock
-         */
-        void abort_internal( const TxId& goner );
-
-        /**
-         * called externally by getTransactionPriority
-         * and internally by addLockToQueueUsingPolicy
-         */
-        int get_transaction_priority_internal( const TxId& xid );
 
         // Singleton instance
         static LockMgr* _singleton;
