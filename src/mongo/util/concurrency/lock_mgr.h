@@ -39,6 +39,7 @@
 
 #include "mongo/db/structure/record_store.h"
 #include "mongo/util/log.h"
+#include "mongo/util/timer.h"
 
 /*
  * LockMgr controls access to resources through two functions: acquire and release
@@ -53,8 +54,8 @@
  */
 
 namespace mongo {
-    typedef size_t TxId;        // identifies requesting transaction
-    typedef size_t ResourceId;  // identifies requested resource, 
+    typedef size_t TxId;        // identifies requesting transaction. 0 is reserved
+    typedef size_t ResourceId;  // identifies requested resource or container. 0 is reserved
 
     class AbortException : public std::exception {
     public:
@@ -91,7 +92,6 @@ namespace mongo {
             BIGGEST_BLOCKER_FIRST,
             READERS_ONLY,
             WRITERS_ONLY,
-            SHUTDOWN_QUIESCE,
             SHUTDOWN
         };
 
@@ -107,7 +107,7 @@ namespace mongo {
             RESOURCE_NOT_FOUND_IN_MODE
         };
 
-        typedef size_t LockId;
+        typedef size_t LockId; // valid LockIds are > 0
 
         /**
          * Data structure used to record a resource acquisition request
@@ -130,7 +130,7 @@ namespace mongo {
 
             static LockId nextLid;     // unique id for each request. zero not used
 
-            bool sleep;                // true if waiting, false if resource acquired
+            size_t sleepCount;         // >0 if waiting, 0 if resource acquired
             LockId parentLid;          // the LockId of the parent of this resource, or zero
             LockId lid;                // 
             TxId xid;                  // transaction that made this request
@@ -166,7 +166,9 @@ namespace mongo {
                   _numDeadlocks(0),
                   _numDowngrades(0),
                   _numUpgrades(0),
-                  _numMillisBlocked(0) { }
+                  _numMillisBlocked(0),
+                  _numCurrentActiveReadRequests(0),
+                  _numCurrentActiveWriteRequests(0) { }
 
             LockStats(const LockStats& other);
             LockStats& operator=(const LockStats& other);
@@ -178,6 +180,14 @@ namespace mongo {
             void incDowngrades() { _numDowngrades++; }
             void incUpgrades() { _numUpgrades++; }
             void incTimeBlocked( unsigned long long numMillis ) { _numMillisBlocked += numMillis; }
+
+            void incActiveReads() { _numCurrentActiveReadRequests++; }
+            void decActiveReads() { _numCurrentActiveReadRequests--; }
+            void incActiveWrites() { _numCurrentActiveWriteRequests++; }
+            void decActiveWrites() { _numCurrentActiveWriteRequests--; }
+
+            unsigned numActiveReads() const { return _numCurrentActiveReadRequests; }
+            unsigned numActiveWrites() const { return _numCurrentActiveWriteRequests; }
 
             unsigned long long getNumRequests() const { return _numRequests; }
             unsigned long long getNumPreexistingRequests() const { return _numPreexistingRequests; }
@@ -195,6 +205,8 @@ namespace mongo {
             unsigned long long _numDowngrades;
             unsigned long long _numUpgrades;
             unsigned long long _numMillisBlocked;
+            unsigned long _numCurrentActiveReadRequests;
+            unsigned long _numCurrentActiveWriteRequests;
         };
 
         /**
@@ -216,6 +228,16 @@ namespace mongo {
          * block all readers, writers, or any new resource acquisition
          */
         virtual void setPolicy(const LockingPolicy& policy);
+
+        /**
+         * Initiate a shutdown, specifying a period of time to quiesce.
+         *
+         * During this period, existing transactions can continue to acquire resources,
+         * but new transaction requests will throw AbortException.
+         *
+         * After quiescing, any new requests will throw AbortException
+         */
+        virtual void shutdown( const unsigned& millisToQuiesce );
 
         /**
          * For multi-level resource container hierarchies, the caller can optionally
@@ -434,6 +456,13 @@ namespace mongo {
         // synchronizes access to the lock manager, which is shared across threads
         boost::mutex _guard;
 
+        // for blocking when setting READERS_ONLY or WRITERS_ONLY policy
+        boost::condition_variable _policyLock;
+
+        // only meaningful when _policy == SHUTDOWN
+        int _millisToQuiesce;
+        Timer _timer;
+
         // owns the LockRequest*
         std::map<LockId,LockRequest*> _locks;
 
@@ -469,7 +498,7 @@ namespace mongo {
         //
         std::map<TxId, int> _txPriorities;
 
-        // stats
+        // stats, but also used internally
         LockStats _stats;
     };
 
