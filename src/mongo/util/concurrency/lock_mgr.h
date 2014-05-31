@@ -414,7 +414,8 @@ namespace mongo {
 	void blockOnConflict( LockRequest* request,
 			      std::list<LockId>* queue,
 			      Notifier* notifier,
-			      boost::unique_lock<boost::mutex>& guard );
+			      boost::unique_lock<boost::mutex>& guard,
+			      bool checkPolicyOnly = false );
 
         /**
          * returns true if a newRequest should be honored before an oldRequest according
@@ -429,7 +430,10 @@ namespace mongo {
          * if a lock request would conflict with others on a queue, set the blocker ouput parameter
          * to the TxId of the first conflicting request, and return true. otherwise return false
          */
-        bool conflictExists( const LockRequest* lr, const list<LockId>* queue, TxId* blocker );
+        bool conflictExists( const LockRequest* lr,
+			     const list<LockId>* queue,
+			     TxId* blocker,
+			     bool checkPolicyOnly = false );
 
 	/**
 	 * looks for an existing LockRequest that matches the four input params

@@ -603,7 +603,7 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
             // requestor is active and already holds the same lock
             // the only conflict is if _policy is READERS/WRITERS_ONLY
             //
-	    blockOnConflict( lr, queue, sleepNotifier, guard ); // possibly blocks
+	    blockOnConflict( lr, queue, sleepNotifier, guard, true );
             return lr->lid;
         }
         else if (isShared(mode)) {
@@ -622,7 +622,7 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
             // requestor is active and already holds the same lock
             // the only conflict is if _policy is READERS/WRITERS_ONLY
             //
-	    blockOnConflict( lr, queue, sleepNotifier, guard ); // possibly blocks
+	    blockOnConflict( lr, queue, sleepNotifier, guard, true ); // possibly blocks
             return lr->lid;
         }
 
@@ -886,9 +886,10 @@ void LockMgr::addWaiters( LockRequest* blocker,
 void LockMgr::blockOnConflict( LockRequest* lr,
 			       list<LockId>* queue,
 			       Notifier* sleepNotifier,
-			       boost::unique_lock<boost::mutex>& guard ) {
+			       boost::unique_lock<boost::mutex>& guard,
+			       bool checkPolicyOnly) {
     TxId blocker;
-    if (conflictExists(lr, queue, &blocker)) {
+    if (conflictExists(lr, queue, &blocker, checkPolicyOnly)) {
 
         // call the sleep notification function once
         if (NULL != sleepNotifier) {
@@ -916,7 +917,7 @@ void LockMgr::blockOnConflict( LockRequest* lr,
 	    if (blockersWaiters != _waiters.end()) {
 		blockersWaiters->second->erase(lr->xid);
 	    }
-	} while (conflictExists(lr, queue, &blocker));
+	} while (conflictExists(lr, queue, &blocker, checkPolicyOnly));
     }
 }
 
@@ -955,7 +956,10 @@ bool LockMgr::comesBeforeUsingPolicy( const TxId& requestor,
     }
 }
 
-bool LockMgr::conflictExists(const LockRequest* lr, const list<LockId>* queue, TxId* blocker) {
+bool LockMgr::conflictExists(const LockRequest* lr,
+			     const list<LockId>* queue,
+			     TxId* blocker,
+    			     bool checkPolicyOnly) {
 
     // check for exceptional policies
     if (LockMgr::READERS_ONLY == _policy && isExclusive(lr->mode)) {
@@ -965,6 +969,10 @@ bool LockMgr::conflictExists(const LockRequest* lr, const list<LockId>* queue, T
     else if (LockMgr::WRITERS_ONLY == _policy && isShared(lr->mode))  {
         *blocker = 0; // indicates blocked by LockMgr policy
         return true;
+    }
+    else if (checkPolicyOnly) {
+	*blocker = 0;
+	return false;
     }
 
     set<TxId> sharedOwners;
