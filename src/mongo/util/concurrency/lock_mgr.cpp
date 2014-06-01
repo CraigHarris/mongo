@@ -956,6 +956,9 @@ bool LockMgr::conflictExists(const LockRequest* lr,
                 ++nextLockId;
                 break;
             }
+	    LockRequest* nextLockRequest = _locks[*nextLockId];
+	    if (lr->xid == nextLockRequest->xid && lr->mode == nextLockRequest->mode)
+		return false; // already have the lock
         }
         return true;
     }
@@ -976,6 +979,9 @@ bool LockMgr::conflictExists(const LockRequest* lr,
                 ++nextLockId;
                 break;
             }
+	    LockRequest* nextLockRequest = _locks[*nextLockId];
+	    if (lr->xid == nextLockRequest->xid && lr->mode == nextLockRequest->mode)
+		return false; // already have the lock
         }
         return true;
     }
@@ -996,6 +1002,7 @@ bool LockMgr::conflictExists(const LockRequest* lr,
         if (lr->xid == nextLockRequest->xid) {
             // and upgrade or downgrade request, can't conflict with ourselves
             haveLock = true;
+	    isShared(lr->mode) ? _stats.incDowngrades() : _stats.incUpgrades();
             continue;
         }
 
@@ -1006,7 +1013,44 @@ bool LockMgr::conflictExists(const LockRequest* lr,
         // no conflict if we're compatible
         if (isCompatible(lr->mode, nextLockRequest->mode)) continue;
 
-        need upgrade/downgrade logic around here
+        if (haveLock) {
+	    // bumped into something incompatible while up/down grading
+	    if (isExclusive(lr->mode)) {
+		// upgrading
+		if (isExclusive(nextLockRequest->mode)) {
+		    // bumped into another exclusive lock
+		    if (sharedOwners.find(nextLockRequest->xid) != sharedOwners.end()) {
+			// the exclusive lock is also an upgrade, and it must
+			// be blocked, waiting for our original share lock to be released
+			// if we wait for its shared lock, we would deadlock
+			invariant( isBlocked(nextLockRequest) );
+			abort_internal(nextLockRequest->xid);
+		    }
+
+		    if (sharedOwners.empty()) {
+			// simple upgrade, queue in front of nextLockRequest, no conflict
+			return false;
+		    }
+		    else {
+			// we have to wait for another shared lock before upgrading
+			--nextLockRequest;
+			return true;
+		    }
+		}
+		else {
+		    invariant (!isBlocked(nextLockRequest));
+		    // we'll eventually block, but want to position the iterator
+		    // past the last sharedOwner.
+		    continue;
+		}
+	    }
+	    else if (isShared(lr->mode)) {
+		// downgrading, bumped into an exclusive lock, blocked on our original
+		invariant( isBlocked(nextLockRequest) );
+		// lr will be inserted before nextLockRequest
+		return false;
+	    }
+	}
 
         // no conflict if nextLock is blocked and we come before
         if (isBlocked(nextLockRequest) && comesBeforeUsingPolicy(lr->xid, lr->mode, nextLockRequest)) {
@@ -1035,6 +1079,12 @@ bool LockMgr::conflictExists(const LockRequest* lr,
             }
         }
         return true;
+    }
+    // positioned to the end of the queue
+    if (haveLock && isExclusive(lr->mode) && !isEmpty(sharedOwners)) {
+	// upgrading, queue consists of lr->xid's earlier share lock
+	// plus other share lock.  Must wait for the others to release
+	return true;
     }
     return false;
 }
