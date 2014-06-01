@@ -91,8 +91,7 @@ namespace mongo {
             OLDEST_TX_FIRST,
             BIGGEST_BLOCKER_FIRST,
             READERS_ONLY,
-            WRITERS_ONLY,
-            SHUTDOWN
+            WRITERS_ONLY
         };
 
         /** 
@@ -224,8 +223,9 @@ namespace mongo {
         virtual ~LockMgr();
 
         /**
-         * Change the current policy, typically used to temporarily
-         * block all readers, writers, or any new resource acquisition
+         * Change the current conflict policy.  For READERS/WRITERS_ONLY, this
+         * call may block until all current writers/readers have released their locks.
+         *
          */
         virtual void setPolicy(const LockingPolicy& policy);
 
@@ -237,7 +237,7 @@ namespace mongo {
          *
          * After quiescing, any new requests will throw AbortException
          */
-        virtual void shutdown( const unsigned& millisToQuiesce );
+        virtual void shutdown( const unsigned& millisToQuiesce = 1000 );
 
         /**
          * For multi-level resource container hierarchies, the caller can optionally
@@ -467,6 +467,14 @@ namespace mongo {
          */
         LockStatus release_internal( const LockId& lid );
 
+        /**
+         * called at start of public APIs, throws exception
+         * if quiescing period has expired, or if xid is new
+         */
+        void throwIfShuttingDown( const TxId& xid = 0 );
+
+        // ---------- private state ----------
+
         // Singleton instance
         static LockMgr* _singleton;
 
@@ -488,6 +496,7 @@ namespace mongo {
         boost::condition_variable _policyLock;
 
         // only meaningful when _policy == SHUTDOWN
+        bool _shuttingDown;
         int _millisToQuiesce;
         Timer _timer;
 

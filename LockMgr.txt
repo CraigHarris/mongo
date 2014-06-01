@@ -1,0 +1,83 @@
+need mutex around getSingleton
+
+possibly simplify addLockToQueueUsingPolicy by calling comesBeforeUsingPolicy?
+
+combine blockOnConflict/addLockToQueueUsingPolicy -> queueAndBlockOnConflict
+
+-----
+
+addLockToQueueUsingPolicy (currently only called from acquire_internal)
+	is{Exclusive,Shared,Compatible,Blocked}
+	get_transaction_priority_internal
+	addWaiters
+
+blockOnConflict
+	addWaiter
+	conflictExists (only called from blockOnConflict)
+		is{Exclusive,Shared,Compatible,Blocked}
+		comesBeforeUsingPolicy
+			get_transaction_priority_internal
+		abort_internal
+			release_internal
+
+isAvailable
+	is{Exclusive,Shared,Blocked,Compatible}
+        LR::matches
+        comesBeforeUsingPolicy
+        (overlaps conflictExists, but
+		doesn't check for deadlock
+                doesn't check for upgrade conflicts
+                doesn't check for down/upgrade sans conflict
+	(common code is
+                take lr info, not lr, because isAvail doesn't have lr
+                take queue
+                return position of 1st conflict)
+
+release_internal
+	is{Shared,Exclusive
+        shouldAwake
+
+
+blockOnConflict
+    finds location of 1st conflict
+    adds lock to queue 
+    waits until conflict is resolved
+
+if there's no conflict, relative position in the active portion of the queue doesn't matter
+(either one of many readers, or the one and only writer with no other readers)
+
+if no conflict, then position after looking for conflict is either end-of-queue,
+or if downgrade, after the 1st write lock, and before any other write locks, possibly before other readers
+or if upgrade, after 1st read lock and before any other write locks
+
+if there is conflict, position in the queue must come after all active lock holders
+
+SO, one idea is to have conflictExists set queue iterator position to 1st conflict
+Then blockOnConflict passes this position into addLockToQueueUsingPolicy
+
+DOWNGRADE:
+   * this would tend to position downgraded LR at end of reader queue, 
+
+UPGRADE:
+   * if no conflict, this would place LR before 1st writer, after own reader
+   * if conflict, this would place LR after other initial readers, before 1st writer
+
+
+
+
+addLockToQueueUsingPolicy
+   called by acquire_internal normal case, before blockOnConflict
+   ideally called after checking for conflicts, as it has overlapping logic
+
+
+
+conflictExists
+    comesBeforeUsingPolicy
+    isCompatible, isBlocked
+
+
+
+
+
+find_lock:
+    finds matching lock
