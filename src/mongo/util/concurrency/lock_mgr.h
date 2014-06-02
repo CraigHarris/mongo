@@ -1,30 +1,30 @@
 /**
-*    Copyright (C) 2014 MongoDB Inc.
-*
-*    This program is free software: you can redistribute it and/or  modify
-*    it under the terms of the GNU Affero General Public License, version 3,
-*    as published by the Free Software Foundation.
-*
-*    This program is distributed in the hope that it will be useful,
-*    but WITHOUT ANY WARRANTY; without even the implied warranty of
-*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*    GNU Affero General Public License for more details.
-*
-*    You should have received a copy of the GNU Affero General Public License
-*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*    As a special exception, the copyright holders give permission to link the
-*    code of portions of this program with the OpenSSL library under certain
-*    conditions as described in each individual source file and distribute
-*    linked combinations including the program with the OpenSSL library. You
-*    must comply with the GNU Affero General Public License in all respects for
-*    all of the code used other than as permitted herein. If you modify file(s)
-*    with this exception, you may extend this exception to your version of the
-*    file(s), but you are not obligated to do so. If you do not wish to do so,
-*    delete this exception statement from your version. If you delete this
-*    exception statement from all source files in the program, then also delete
-*    it in the license file.
-*/
+ *    Copyright (C) 2014 MongoDB Inc.
+ *
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
+ *
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU Affero General Public License for more details.
+ *
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects for
+ *    all of the code used other than as permitted herein. If you modify file(s)
+ *    with this exception, you may extend this exception to your version of the
+ *    file(s), but you are not obligated to do so. If you do not wish to do so,
+ *    delete this exception statement from your version. If you delete this
+ *    exception statement from all source files in the program, then also delete
+ *    it in the license file.
+ */
 
 #pragma once
 
@@ -130,23 +130,23 @@ namespace mongo {
          */
         class LockRequest {
         public:
-            LockRequest( const TxId& xid,
-                         const unsigned& mode,
-                         const ResourceId& container,
-                         const ResourceId& resId);
+            LockRequest(const TxId& xid,
+                        const unsigned& mode,
+                        const ResourceId& container,
+                        const ResourceId& resId);
 
             virtual ~LockRequest();
 
-            bool matches( const TxId& xid,
-                          const unsigned& mode,
-                          const ResourceId& parentId,
-                          const ResourceId& resId );
+            bool matches(const TxId& xid,
+                         const unsigned& mode,
+                         const ResourceId& parentId,
+                         const ResourceId& resId);
 
-            bool matches( const TxId& xid,
-                          const unsigned& mode,
-                          const ResourceId& resId );
+            bool matches(const TxId& xid,
+                         const unsigned& mode,
+                         const ResourceId& resId);
 
-            std::string toString( ) const;
+            std::string toString() const;
 
             static LockId nextLid;     // unique id for each request. zero not used
 
@@ -179,16 +179,16 @@ namespace mongo {
          */
         class LockStats {
         public:
-            LockStats( )
-                : _numRequests(0),
-                  _numPreexistingRequests(0),
-                  _numBlocks(0),
-                  _numDeadlocks(0),
-                  _numDowngrades(0),
-                  _numUpgrades(0),
-                  _numMillisBlocked(0),
-                  _numCurrentActiveReadRequests(0),
-                  _numCurrentActiveWriteRequests(0) { }
+        LockStats()
+            : _numRequests(0),
+                _numPreexistingRequests(0),
+                _numBlocks(0),
+                _numDeadlocks(0),
+                _numDowngrades(0),
+                _numUpgrades(0),
+                _numMillisBlocked(0),
+                _numCurrentActiveReadRequests(0),
+                _numCurrentActiveWriteRequests(0) { }
 
             LockStats(const LockStats& other);
             LockStats& operator=(const LockStats& other);
@@ -199,7 +199,7 @@ namespace mongo {
             void incDeadlocks() { _numDeadlocks++; }
             void incDowngrades() { _numDowngrades++; }
             void incUpgrades() { _numUpgrades++; }
-            void incTimeBlocked( unsigned long long numMillis ) { _numMillisBlocked += numMillis; }
+            void incTimeBlocked(unsigned long long numMillis ) { _numMillisBlocked += numMillis; }
 
             void incActiveReads() { _numCurrentActiveReadRequests++; }
             void decActiveReads() { _numCurrentActiveReadRequests--; }
@@ -258,7 +258,7 @@ namespace mongo {
          *
          * After quiescing, any new requests will throw AbortException
          */
-        virtual void shutdown( const unsigned& millisToQuiesce = 1000 );
+        virtual void shutdown(const unsigned& millisToQuiesce = 1000);
 
         /**
          * For multi-level resource container hierarchies, the caller can optionally
@@ -270,7 +270,7 @@ namespace mongo {
          * could also be used to lock the containing database, without supplying the
          * resourceId for the database.
          */
-        virtual void setParent( const ResourceId& container, const ResourceId& parent );
+        virtual void setParent(const ResourceId& container, const ResourceId& parent);
 
 
         /**
@@ -284,8 +284,8 @@ namespace mongo {
          *
          * zero priority uses the LockMgr's default LockingPolicy
          */
-        void setTransactionPriority( const TxId& xid, int priority );
-        int  getTransactionPriority( const TxId& xid );
+        void setTransactionPriority(const TxId& xid, int priority);
+        int  getTransactionPriority(const TxId& xid);
 
 
         /**
@@ -301,11 +301,11 @@ namespace mongo {
          *
          * can throw AbortException
          */
-        virtual LockId acquire( const TxId& requestor,
-				const unsigned& mode,
-				const ResourceId& container,
-				const ResourceId& resId,
-				Notifier* notifier = NULL);
+        virtual LockId acquire(const TxId& requestor,
+                               const unsigned& mode,
+                               const ResourceId& container,
+                               const ResourceId& resId,
+                               Notifier* notifier = NULL);
 
         /**
          * acquire a hierarchical resource, locking it and its ancestors in
@@ -323,10 +323,10 @@ namespace mongo {
          * and so on.  If modes is shorter thant resIdPath, the last mode will
          * be used for any remaining ancestor locking.
          */
-        virtual LockId acquire( const TxId& requestor,
-				const std::vector<unsigned>& modes,
-				const std::vector<ResourceId>& resIdPath,
-				Notifier* notifier = NULL);
+        virtual LockId acquire(const TxId& requestor,
+                               const std::vector<unsigned>& modes,
+                               const std::vector<ResourceId>& resIdPath,
+                               Notifier* notifier = NULL);
 
         /**
          * for bulk operations:
@@ -334,11 +334,11 @@ namespace mongo {
          * hopefully without blocking, return index of 
          * acquired ResourceId, or -1 if vector was empty
          */
-        virtual int acquireOne( const TxId& requestor,
-                                const unsigned& mode,
-                                const ResourceId& container,
-                                const vector<ResourceId>& records,
-                                Notifier* notifier = NULL );
+        virtual int acquireOne(const TxId& requestor,
+                               const unsigned& mode,
+                               const ResourceId& container,
+                               const vector<ResourceId>& records,
+                               Notifier* notifier = NULL);
 
         /**
          * release a ResourceId in a container.
@@ -346,147 +346,147 @@ namespace mongo {
          * The modes that applied to the ancestor containers are
          * already known
          */
-        virtual LockStatus release( const TxId& holder,
-				    const unsigned& mode,
-				    const ResourceId& container,
-				    const ResourceId& resId);
+        virtual LockStatus release(const TxId& holder,
+                                   const unsigned& mode,
+                                   const ResourceId& container,
+                                   const ResourceId& resId);
 
-	/**
-	 * releases the lock returned by acquire.  should perhaps replace above?
-	 */
-	virtual LockStatus releaseLock( const LockId& lid );
+        /**
+         * releases the lock returned by acquire.  should perhaps replace above?
+         */
+        virtual LockStatus releaseLock(const LockId& lid);
 
         /**
          * release all resources acquired by a transaction
          * returns number of locks released
          */
-        virtual size_t release( const TxId& holder);
+        virtual size_t release(const TxId& holder);
 
         /**
-        * called internally for deadlock
-        * possibly called publicly to stop a long transaction
-        * also used for testing
-        */
-        void abort( const TxId& goner );
+         * called internally for deadlock
+         * possibly called publicly to stop a long transaction
+         * also used for testing
+         */
+        void abort(const TxId& goner);
 
-        void getStats( LockStats* stats );
+        void getStats(LockStats* stats);
 
 
 
         // --- for testing and logging
 
-         std::string toString( );
+        std::string toString();
 
         /**
          * test whether a TxId has locked a nested ResourceId in a mode
          */
-        virtual bool isLocked( const TxId& holder,
-                               const unsigned& mode,
-                               const ResourceId& parentId,
-                               const ResourceId& resId);
+        virtual bool isLocked(const TxId& holder,
+                              const unsigned& mode,
+                              const ResourceId& parentId,
+                              const ResourceId& resId);
 
     private: // alphabetical
 
         /**
          * called by public ::abort and internally upon deadlock
-	 * releases all locks acquired by goner, notify's any
-	 * transactions that were waiting, then throws AbortException
+         * releases all locks acquired by goner, notify's any
+         * transactions that were waiting, then throws AbortException
          */
-        void abort_internal( const TxId& goner );
+        void abortInternal(const TxId& goner);
 
-	/**
-	 * main workhorse for acquiring locks on resources, blocking
-	 * or aborting on conflict
-	 *
-	 * returns a non-zero LockId, or throws AbortException on deadlock
-	 *
-	 */
-        LockId acquire_internal( const TxId& requestor,
-				 const unsigned& mode,
-				 const LockId& containerLid,
-				 const ResourceId& resId,
-				 Notifier* notifier,
-                                 boost::unique_lock<boost::mutex>& guard);
+        /**
+         * main workhorse for acquiring locks on resources, blocking
+         * or aborting on conflict
+         *
+         * returns a non-zero LockId, or throws AbortException on deadlock
+         *
+         */
+        LockId acquireInternal(const TxId& requestor,
+                               const unsigned& mode,
+                               const LockId& containerLid,
+                               const ResourceId& resId,
+                               Notifier* notifier,
+                               boost::unique_lock<boost::mutex>& guard);
 
         /**
          * adds a conflicting lock request to the list of requests for a resource
-         * using the LockingPolicy.  Called by acquire_internal
+         * using the LockingPolicy.  Called by acquireInternal
          */
-        void addLockToQueueUsingPolicy( LockRequest* lr,
-                                        list<LockId>* queue,
-                                        list<LockId>::iterator& position );
+        void addLockToQueueUsingPolicy(LockRequest* lr,
+                                       list<LockId>* queue,
+                                       list<LockId>::iterator& position);
 
         /**
          * set up for future deadlock detection, called from acquire
          */
-        void addWaiter( const TxId& blocker, const TxId& waiter );
+        void addWaiter(const TxId& blocker, const TxId& waiter);
 
         /**
          * when inserting a new lock request into the middle of a queue,
          * add any remaining incompatible requests in the queue to the
          * new lock request's set of waiters... for future deadlock detection
          */
-        void addWaiters( LockRequest* blocker,
-                         list<LockId>::iterator nextLockId,
-                         list<LockId>::iterator lastLockId );
+        void addWaiters(LockRequest* blocker,
+                        list<LockId>::iterator nextLockId,
+                        list<LockId>::iterator lastLockId);
 
         /**
          * returns true if a newRequest should be honored before an oldRequest according
          * to the lockManager's policy.  Used by acquire to decide whether a new share request
          * conflicts with a previous upgrade-to-exclusive request that is blocked.
          */
-        bool comesBeforeUsingPolicy( const TxId& newReqXid,
-                                     const unsigned& newReqMode,
-                                     const LockRequest* oldReq );
+        bool comesBeforeUsingPolicy(const TxId& newReqXid,
+                                    const unsigned& newReqMode,
+                                    const LockRequest* oldReq);
 
         /**
          * determine whether a resource request would conflict with an existing lock
          * set the position to the first possible insertion point, which is usually
          * the position of the first conflict, or the end of the queue, or to an existing lock
          */
-        ConflictStatus conflictExists( const TxId& requestor,
-                                       const unsigned& mode,
-                                       const ResourceId& resId,
-                                       list<LockId>* queue,
-                                       list<LockId>::iterator& position /* in/out */ );
+        ConflictStatus conflictExists(const TxId& requestor,
+                                      const unsigned& mode,
+                                      const ResourceId& resId,
+                                      list<LockId>* queue,
+                                      list<LockId>::iterator& position /* in/out */);
 
-	/**
-	 * looks for an existing LockRequest that matches the four input params
-	 * if not found, sets outLid to zero and returns a reason, otherwise
-	 * sets outLid to the LockId that matches and returns FOUND
-	 */
-        LockStatus find_lock( const TxId& requestor,
-                              const unsigned& mode,
-                              const ResourceId& parentId,
-                              const ResourceId& resId,
-			      LockId* outLid );
+        /**
+         * looks for an existing LockRequest that matches the four input params
+         * if not found, sets outLid to zero and returns a reason, otherwise
+         * sets outLid to the LockId that matches and returns FOUND
+         */
+        LockStatus findLock(const TxId& requestor,
+                            const unsigned& mode,
+                            const ResourceId& parentId,
+                            const ResourceId& resId,
+                            LockId* outLid);
 
         /**
          * called externally by getTransactionPriority
          * and internally by addLockToQueueUsingPolicy
          */
-        int get_transaction_priority_internal( const TxId& xid );
+        int getTransactionPriorityInternal(const TxId& xid);
 
         /**
          * returns true if acquire would return without waiting
          * used by acquireOne
          */
-        bool isAvailable( const TxId& requestor,
-                          const unsigned& mode,
-                          const ResourceId& parentId,
-                          const ResourceId& resId );
+        bool isAvailable(const TxId& requestor,
+                         const unsigned& mode,
+                         const ResourceId& parentId,
+                         const ResourceId& resId);
 
         /**
          * called by public ::release and internally by abort.
          * assumes caller as acquired a mutex.
          */
-        LockStatus release_internal( const LockId& lid );
+        LockStatus releaseInternal(const LockId& lid);
 
         /**
          * called at start of public APIs, throws exception
          * if quiescing period has expired, or if xid is new
          */
-        void throwIfShuttingDown( const TxId& xid = 0 ) const;
+        void throwIfShuttingDown(const TxId& xid = 0 ) const;
 
         // ---------- private state ----------
 
@@ -540,7 +540,7 @@ namespace mongo {
         // NB: a transaction can only be directly waiting for a single resource/transaction
         // but to facilitate deadlock detection, if T1 is waiting for T2 and T2 is waiting
         // for T3, then both T1 and T2 are listed as T3's waiters.  
-        std::map<TxId, std::set<TxId>*> _waiters;
+        std::map<TxId, std::multiset<TxId>*> _waiters;
 
         // track transactions that have aborted, and don't accept further 
         // lock requests from them (which shouldn't happen anyway).
@@ -563,17 +563,17 @@ namespace mongo {
      */
     class ResourceLock {
     public:
-        ResourceLock( LockMgr* lm,
-                      const TxId& requestor,
-                      const unsigned& mode,
-                      const ResourceId& parentId,
-                      const ResourceId& resId,
-                      LockMgr::Notifier* notifier = NULL );
+        ResourceLock(LockMgr* lm,
+                     const TxId& requestor,
+                     const unsigned& mode,
+                     const ResourceId& parentId,
+                     const ResourceId& resId,
+                     LockMgr::Notifier* notifier = NULL);
 
-        virtual ~ResourceLock( );
+        virtual ~ResourceLock();
     private:
-	// not owned here
-	LockMgr* _lm;
-	LockMgr::LockId _lid;
+        // not owned here
+        LockMgr* _lm;
+        LockMgr::LockId _lid;
     };
 }

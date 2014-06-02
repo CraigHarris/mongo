@@ -39,7 +39,7 @@ using namespace mongo;
 
 /*---------- LockStats functions ----------*/
 
-LockMgr::LockStats::LockStats( const LockMgr::LockStats& other )
+LockMgr::LockStats::LockStats(const LockMgr::LockStats& other)
     : _numRequests(other._numRequests),
       _numPreexistingRequests(other._numPreexistingRequests),
       _numBlocks(other._numBlocks),
@@ -48,7 +48,7 @@ LockMgr::LockStats::LockStats( const LockMgr::LockStats& other )
       _numUpgrades(other._numUpgrades),
       _numMillisBlocked(other._numMillisBlocked) { }
 
-LockMgr::LockStats& LockMgr::LockStats::operator=( const LockMgr::LockStats& other ) {
+LockMgr::LockStats& LockMgr::LockStats::operator=(const LockMgr::LockStats& other) {
     if (this != &other) {
         _numRequests = other._numRequests;
         _numPreexistingRequests = other._numPreexistingRequests;
@@ -66,10 +66,10 @@ LockMgr::LockStats& LockMgr::LockStats::operator=( const LockMgr::LockStats& oth
 
 LockMgr::LockId LockMgr::LockRequest::nextLid = 1; // a zero parentLid means no parent
 
-LockMgr::LockRequest::LockRequest( const TxId& xid,
-                                   const unsigned& mode,
-                                   const ResourceId& container,
-                                   const ResourceId& resId)
+LockMgr::LockRequest::LockRequest(const TxId& xid,
+                                  const unsigned& mode,
+                                  const ResourceId& container,
+                                  const ResourceId& resId)
     : sleepCount(0),
       parentLid(0),
       lid(nextLid++),
@@ -79,21 +79,21 @@ LockMgr::LockRequest::LockRequest( const TxId& xid,
       resId(resId),
       count(1) { }
 
-LockMgr::LockRequest::~LockRequest( ) { }
+LockMgr::LockRequest::~LockRequest() { }
 
-bool LockMgr::LockRequest::matches( const TxId& xid,
-                                    const unsigned& mode,
-                                    const ResourceId& resId ) {
+bool LockMgr::LockRequest::matches(const TxId& xid,
+                                   const unsigned& mode,
+                                   const ResourceId& resId) {
     return
         this->xid == xid &&
         this->mode == mode &&
         this->resId == resId;
 }
 
-bool LockMgr::LockRequest::matches( const TxId& xid,
-                                    const unsigned& mode,
-                                    const ResourceId& container,
-                                    const ResourceId& resId ) {
+bool LockMgr::LockRequest::matches(const TxId& xid,
+                                   const unsigned& mode,
+                                   const ResourceId& container,
+                                   const ResourceId& resId) {
     return
         this->xid == xid &&
         this->mode == mode &&
@@ -101,7 +101,7 @@ bool LockMgr::LockRequest::matches( const TxId& xid,
         this->resId == resId;
 }
 
-string LockMgr::LockRequest::toString( ) const {
+string LockMgr::LockRequest::toString() const {
     stringstream result;
     result << "<lid:" << lid
            << ",parentLid: " << parentLid
@@ -110,6 +110,7 @@ string LockMgr::LockRequest::toString( ) const {
            << ",resId:" << resId
            << ",container:" << container
            << ",count:" << count
+           << ",sleepCount:" << sleepCount
            << ">";
     return result.str();
 }
@@ -118,27 +119,27 @@ string LockMgr::LockRequest::toString( ) const {
 
 namespace {
 
-    bool isExclusive( const unsigned& mode, const unsigned level=0 ) {
+    bool isExclusive(const unsigned& mode, const unsigned level=0) {
         return LockMgr::kExclusive == (mode & (0x1 << level));
     }
 
-    bool isShared( const unsigned& mode, const unsigned level=0 ) {
+    bool isShared(const unsigned& mode, const unsigned level=0) {
         return LockMgr::kShared == (mode & (0x1 << level));
     }
 
-    bool isCompatible( const unsigned& mode1, const unsigned& mode2 ) {
+    bool isCompatible(const unsigned& mode1, const unsigned& mode2) {
         return mode1==mode2 && (isShared(mode1) || isShared(mode1));
     }
 
-    bool isBlocked( const LockMgr::LockRequest* lr ) {
+    bool isBlocked(const LockMgr::LockRequest* lr) {
         return lr->sleepCount > 0;
     }
 
-    bool shouldAwake( LockMgr::LockRequest* lr ) {
+    bool shouldAwake(LockMgr::LockRequest* lr) {
         return 0 == --lr->sleepCount;
     }
 
-    bool hasConflict( const LockMgr::ConflictStatus& status ) {
+    bool hasConflict(const LockMgr::ConflictStatus& status) {
         return LockMgr::CONFLICT == status || LockMgr::UPGRADE_CONFLICT == status;
     }
 }
@@ -158,13 +159,13 @@ LockMgr* LockMgr::getSingleton(const LockingPolicy& policy) {
     return _singleton;
 }
 
-LockMgr::LockMgr( const LockingPolicy& policy )
+LockMgr::LockMgr(const LockingPolicy& policy)
   : _policy(policy),
     _guard(),
     _shuttingDown(false),
     _millisToQuiesce(-1) { }
 
-LockMgr::~LockMgr( ) {
+LockMgr::~LockMgr() {
     unique_lock<boost::mutex> guard(_guard);
     for(map<LockId,LockRequest*>::iterator locks = _locks.begin();
         locks != _locks.end(); ++locks) {
@@ -172,7 +173,7 @@ LockMgr::~LockMgr( ) {
     }
 }
 
-void LockMgr::shutdown(const unsigned& millisToQuiesce ) {
+void LockMgr::shutdown(const unsigned& millisToQuiesce) {
     unique_lock<boost::mutex> guard(_guard);
 
 #ifdef DONT_ALLOW_CHANGE_TO_QUIESCE_PERIOD
@@ -188,7 +189,7 @@ void LockMgr::shutdown(const unsigned& millisToQuiesce ) {
     _timer.millisReset();
 }
 
-void LockMgr::setPolicy( const LockingPolicy& policy ) {
+void LockMgr::setPolicy(const LockingPolicy& policy) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown();
     if (policy == _policy) return;
@@ -224,29 +225,29 @@ void LockMgr::setPolicy( const LockingPolicy& policy ) {
     }
 }
 
-void LockMgr::setParent( const ResourceId& container, const ResourceId& parent ) {
+void LockMgr::setParent(const ResourceId& container, const ResourceId& parent) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown();
     _containerAncestry[container] = parent;
 }
 
-void LockMgr::setTransactionPriority( const TxId& xid, int priority ) {
+void LockMgr::setTransactionPriority(const TxId& xid, int priority) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(xid);
     _txPriorities[xid] = priority;
 }
 
-int LockMgr::getTransactionPriority( const TxId& xid ) {
+int LockMgr::getTransactionPriority(const TxId& xid) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(xid);
-    return get_transaction_priority_internal( xid );
+    return getTransactionPriorityInternal(xid);
 }
 
-LockMgr::LockId LockMgr::acquire( const TxId& requestor,
-				  const unsigned& mode,
-				  const ResourceId& container,
-				  const ResourceId& resId,
-				  Notifier* notifier) {
+LockMgr::LockId LockMgr::acquire(const TxId& requestor,
+                                 const unsigned& mode,
+                                 const ResourceId& container,
+                                 const ResourceId& resId,
+                                 Notifier* notifier) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(requestor);
 
@@ -259,9 +260,9 @@ LockMgr::LockId LockMgr::acquire( const TxId& requestor,
 
     // construct lineage from _containerAncestry
     vector<ResourceId> lineage;
-    lineage.push_back( resId );
+    lineage.push_back(resId);
     if (container != 0) {
-        lineage.push_back( container );
+        lineage.push_back(container);
     }
     ResourceId nextAncestor = _containerAncestry[container];
     while (0 != nextAncestor) {
@@ -277,12 +278,8 @@ LockMgr::LockId LockMgr::acquire( const TxId& requestor,
         if (nextAncestorIdx < sizeof(unsigned) && isExclusive(mode,nextAncestorIdx))
             nextMode = LockMgr::kExclusive;
         ResourceId container = (0==parentLock) ? 0 : _locks[parentLock]->resId;
-        LockId res = acquire_internal( requestor,
-                                       nextMode,
-                                       container,
-                                       lineage[nextAncestorIdx],
-                                       notifier,
-                                       guard );
+        LockId res = acquireInternal(requestor, nextMode, container,
+                                     lineage[nextAncestorIdx], notifier, guard);
         _locks[res]->parentLid = parentLock;
         parentLock = res;
         if (0 == nextAncestorIdx--) break;
@@ -291,10 +288,10 @@ LockMgr::LockId LockMgr::acquire( const TxId& requestor,
     return parentLock;
 }
 
-LockMgr::LockId LockMgr::acquire( const TxId& requestor,
-				  const std::vector<unsigned>& modes,
-				  const std::vector<ResourceId>& lineage,
-				  Notifier* notifier) {
+LockMgr::LockId LockMgr::acquire(const TxId& requestor,
+                                  const std::vector<unsigned>& modes,
+                                  const std::vector<ResourceId>& lineage,
+                                  Notifier* notifier) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(requestor);
 
@@ -313,12 +310,8 @@ LockMgr::LockId LockMgr::acquire( const TxId& requestor,
         unsigned nextMode = (nextAncestorIdx < modes.size() && !modes.empty())
                           ?  modes[nextAncestorIdx] : LockMgr::kShared;
         ResourceId container = (0==parentLock) ? 0 : _locks[parentLock]->resId;
-        LockId res = acquire_internal( requestor,
-                                       nextMode,
-                                       container,
-                                       lineage[nextAncestorIdx],
-                                       notifier,
-                                       guard );
+        LockId res = acquireInternal(requestor, nextMode, container,
+                                     lineage[nextAncestorIdx], notifier, guard);
         _locks[res]->parentLid = parentLock;
         parentLock = res;
         if (0 == nextAncestorIdx--) break;
@@ -327,11 +320,11 @@ LockMgr::LockId LockMgr::acquire( const TxId& requestor,
     return parentLock;
 }
 
-int LockMgr::acquireOne( const TxId& requestor,
-			 const unsigned& mode,
-			 const ResourceId& container,
-			 const vector<ResourceId>& resources,
-			 Notifier* notifier) {
+int LockMgr::acquireOne(const TxId& requestor,
+                        const unsigned& mode,
+                        const ResourceId& container,
+                        const vector<ResourceId>& resources,
+                        Notifier* notifier) {
 
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(requestor);
@@ -347,7 +340,7 @@ int LockMgr::acquireOne( const TxId& requestor,
 
     // construct lineage from _containerAncestry
     vector<ResourceId> lineage; // typically < 4 levels: system.database.collection.document?
-    lineage.push_back( container );
+    lineage.push_back(container);
     ResourceId nextAncestor = _containerAncestry[container];
     while (0 != nextAncestor) {
         lineage.push_back(nextAncestor);
@@ -363,12 +356,8 @@ int LockMgr::acquireOne( const TxId& requestor,
         if (nextAncestorIdx < sizeof(unsigned) && isExclusive(mode, nextAncestorIdx+1))
             nextMode = LockMgr::kExclusive;
         ResourceId container = (0==parentLock) ? 0 : _locks[parentLock]->resId;
-        LockId res = acquire_internal( requestor,
-                                       nextMode,
-                                       container,
-                                       lineage[nextAncestorIdx],
-                                       notifier,
-                                       guard );
+        LockId res = acquireInternal(requestor, nextMode, container,
+                                     lineage[nextAncestorIdx], notifier, guard);
         _locks[res]->parentLid = parentLock;
         parentLock = res;
         if (0 == nextAncestorIdx--) break;
@@ -377,20 +366,20 @@ int LockMgr::acquireOne( const TxId& requestor,
 
     // acquire the first available recordId
     for (unsigned ix=0; ix < resources.size(); ix++) {
-	if (isAvailable( requestor, mode, container, resources[ix] )) {
-	    acquire_internal( requestor, mode, container, resources[ix], notifier, guard );
+        if (isAvailable(requestor, mode, container, resources[ix])) {
+            acquireInternal(requestor, mode, container, resources[ix], notifier, guard);
             isShared(mode) ? _stats.incActiveReads() : _stats.incActiveWrites();
-	    return ix;
-	}
+            return ix;
+        }
     }
 
     // sigh. none of the records are currently available. wait on the first.
-    acquire_internal( requestor, mode, container, resources[0], notifier, guard );
+    acquireInternal(requestor, mode, container, resources[0], notifier, guard);
     isShared(mode) ? _stats.incActiveReads() : _stats.incActiveWrites();
     return 0;
 }
 
-LockMgr::LockStatus LockMgr::releaseLock( const LockId& lid ) {
+LockMgr::LockStatus LockMgr::releaseLock(const LockId& lid) {
     unique_lock<boost::mutex> guard(_guard);
 
     map<LockId,LockRequest*>::iterator it = _locks.find(lid);
@@ -399,29 +388,29 @@ LockMgr::LockStatus LockMgr::releaseLock( const LockId& lid ) {
         throwIfShuttingDown(theLock->xid);
         isShared(theLock->mode) ? _stats.decActiveReads() : _stats.decActiveWrites();
     }
-    return release_internal( lid );
+    return releaseInternal(lid);
 }
 
-LockMgr::LockStatus LockMgr::release( const TxId& holder,
-				      const unsigned& mode,
-				      const ResourceId& store,
-				      const ResourceId& resId) {
+LockMgr::LockStatus LockMgr::release(const TxId& holder,
+                                     const unsigned& mode,
+                                     const ResourceId& store,
+                                     const ResourceId& resId) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(holder);
 
     LockId lid;
-    LockMgr::LockStatus status = find_lock( holder, mode, store, resId, &lid );
+    LockMgr::LockStatus status = findLock(holder, mode, store, resId, &lid);
     if (LockMgr::FOUND != status) {
         return status; // error, resource wasn't acquired in this mode by holder
     }
     isShared(_locks[lid]->mode) ? _stats.decActiveReads() : _stats.decActiveWrites();
-    return release_internal( lid );
+    return releaseInternal(lid);
 }
 
 /*
  * release all resource acquired by a transaction, returning the count
  */
-size_t LockMgr::release( const TxId& holder ) {
+size_t LockMgr::release(const TxId& holder) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(holder);
 
@@ -430,26 +419,26 @@ size_t LockMgr::release( const TxId& holder ) {
     size_t numLocksReleased = 0;
     for (set<LockId>::iterator nextLockId = lockIdsHeld->second->begin();
          nextLockId != lockIdsHeld->second->end(); ++nextLockId) {
-        release_internal(*nextLockId);
+        releaseInternal(*nextLockId);
         isShared(_locks[*nextLockId]->mode) ? _stats.decActiveReads() : _stats.decActiveWrites();
         numLocksReleased++;
     }
     return numLocksReleased;
 }
 
-void LockMgr::abort( const TxId& goner ) {
+void LockMgr::abort(const TxId& goner) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(goner);
-    abort_internal(goner);
+    abortInternal(goner);
 }
 
-void LockMgr::getStats( LockMgr::LockStats* out ) {
+void LockMgr::getStats(LockMgr::LockStats* out) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown();
     *out = _stats;
 }
 
-string LockMgr::toString( ) {
+string LockMgr::toString() {
     unique_lock<boost::mutex> guard(_guard);
 #ifdef DONT_CARE_ABOUT_DEBUG_EVEN_WHEN_SHUTTING_DOWN
     // seems like we might want to allow toString for debug during shutdown?
@@ -489,8 +478,8 @@ string LockMgr::toString( ) {
     }
 
     result << "\t_resourceLocks:" << endl;
-    for (map<ResourceId,map<ResourceId,list<LockId>*> >::const_iterator storeLocks = _resourceLocks.begin();
-         storeLocks != _resourceLocks.end(); ++storeLocks) {
+    for (map<ResourceId,map<ResourceId,list<LockId>*> >::const_iterator storeLocks
+             = _resourceLocks.begin(); storeLocks != _resourceLocks.end(); ++storeLocks) {
         result << "\n\t\tstore=" << storeLocks->first << ": {";
         for (map<ResourceId,list<LockId>*>::const_iterator recordLocks = storeLocks->second.begin();
              recordLocks != storeLocks->second.end(); ++recordLocks) {
@@ -508,11 +497,11 @@ string LockMgr::toString( ) {
     }
 
     result << "\t_waiters:" << endl;
-    for (map<TxId, set<TxId>*>::const_iterator txWaiters = _waiters.begin();
+    for (map<TxId, multiset<TxId>*>::const_iterator txWaiters = _waiters.begin();
          txWaiters != _waiters.end(); ++txWaiters) {
         bool firstTime=true;
         result << "\t\t" << txWaiters->first << ": {";
-        for (set<TxId>::const_iterator nextWaiter = txWaiters->second->begin();
+        for (multiset<TxId>::const_iterator nextWaiter = txWaiters->second->begin();
              nextWaiter != txWaiters->second->end(); ++nextWaiter) {
             if (firstTime) firstTime=false;
             else result << ", ";
@@ -524,15 +513,15 @@ string LockMgr::toString( ) {
     return result.str();
 }
 
-bool LockMgr::isLocked( const TxId& holder,
-                        const unsigned& mode,
-                        const ResourceId& store,
-                        const ResourceId& resId) {
+bool LockMgr::isLocked(const TxId& holder,
+                       const unsigned& mode,
+                       const ResourceId& store,
+                       const ResourceId& resId) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown(holder);
 
     LockId unused;
-    return LockMgr::FOUND == find_lock( holder, mode, store, resId, &unused );
+    return LockMgr::FOUND == findLock(holder, mode, store, resId, &unused);
 }
 
 /*---------- LockMgr private functions (alphabetical) ----------*/
@@ -542,7 +531,7 @@ bool LockMgr::isLocked( const TxId& holder,
  * any waiters that they can retry their resource acquisition.  cleanup
  * and throw an AbortException.
  */
-void LockMgr::abort_internal(const TxId& goner) {
+void LockMgr::abortInternal(const TxId& goner) {
     map<TxId, set<LockId>*>::iterator locks = _xaLocks.find(goner);
 
     if (locks == _xaLocks.end()) {
@@ -553,18 +542,18 @@ void LockMgr::abort_internal(const TxId& goner) {
     // make a copy of the TxId's locks, because releasing
     // would otherwise affect the iterator. XXX find a better way?
     //
-    set<TxId> copyOfLocks = *locks->second;
+    set<LockId> copyOfLocks = *locks->second;
 
     // release all resources acquired by this transaction
     // notifying any waiters that they can continue
     //
     for (set<LockId>::iterator nextLockId = copyOfLocks.begin();
          nextLockId != copyOfLocks.end(); ++nextLockId) {
-        release_internal(*nextLockId);
+        releaseInternal(*nextLockId);
     }
 
     // erase aborted transaction's waiters
-    map<TxId,set<TxId>*>::iterator waiters = _waiters.find(goner);
+    map<TxId,multiset<TxId>*>::iterator waiters = _waiters.find(goner);
     if (waiters != _waiters.end()) {
         delete waiters->second;
         _waiters.erase(waiters);
@@ -576,12 +565,12 @@ void LockMgr::abort_internal(const TxId& goner) {
     throw AbortException();
 }
 
-LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
-					   const unsigned& mode,
-					   const ResourceId& store,
-					   const ResourceId& resId,
-					   Notifier* sleepNotifier,
-                                           unique_lock<boost::mutex>& guard) {
+LockMgr::LockId LockMgr::acquireInternal(const TxId& requestor,
+                                         const unsigned& mode,
+                                         const ResourceId& store,
+                                         const ResourceId& resId,
+                                         Notifier* sleepNotifier,
+                                         unique_lock<boost::mutex>& guard) {
 
     // if this is the 1st lock request against this store, create the entry
     if (_resourceLocks.find(store) == _resourceLocks.end()) {
@@ -622,14 +611,18 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
 
     if (LockMgr::NO_CONFLICT == conflictStatus) {
         queue->insert(lastCheckedPosition, lr->lid);
+        addWaiters(lr, lastCheckedPosition, queue->end());
         return lr->lid;
     }
 
     // some type of conflict
-    if (LockMgr::UPGRADE_CONFLICT == conflictStatus)
+    if (LockMgr::UPGRADE_CONFLICT == conflictStatus) {
         queue->insert(lastCheckedPosition, lr->lid);
-    else
-        addLockToQueueUsingPolicy(lr, queue, lastCheckedPosition );
+        addWaiters(lr, lastCheckedPosition, queue->end());
+    }
+    else {
+        addLockToQueueUsingPolicy(lr, queue, lastCheckedPosition);
+    }
 
     // call the sleep notification function once
     if (NULL != sleepNotifier) {
@@ -642,10 +635,11 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
     do {
         // set up for future deadlock detection add requestor to blockers' waiters
         //
-        for (list<LockId>::iterator nextBlocker = lastCheckedPosition;
+        for (list<LockId>::iterator nextBlocker = queue->begin();
                nextBlocker != queue->end() && _locks[*nextBlocker]->lid != lr->lid;
                ++nextBlocker) {
-            addWaiter( _locks[*nextBlocker]->xid, lr->xid );
+            if (isCompatible(_locks[*nextBlocker]->mode, lr->mode)) {continue;}
+            addWaiter(_locks[*nextBlocker]->xid, lr->xid);
             ++lr->sleepCount;            
         }
 
@@ -653,7 +647,7 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
         while (isBlocked(lr)) {
             Timer timer;
             lr->lock.wait(guard);
-            _stats.incTimeBlocked( timer.millis() );
+            _stats.incTimeBlocked(timer.millis());
         }
 
         lastCheckedPosition = queue->begin();
@@ -665,10 +659,13 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
 
 /*
  * called only when there are conflicting LockRequests
+ * positions a lock request (lr) in a queue at or after position
+ * also adds remaining requests in queue as lr's waiters
+ * for subsequent deadlock detection
  */
-void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr,
-                                         list<LockId>* queue,
-                                         list<LockId>::iterator& position ) {
+void LockMgr::addLockToQueueUsingPolicy(LockMgr::LockRequest* lr,
+                                        list<LockId>* queue,
+                                        list<LockId>::iterator& position) {
 
     if (position == queue->end()) {
         queue->insert(position, lr->lid);
@@ -676,28 +673,28 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr,
     }
     
     // use lock request's transaction's priority if specified
-    int txPriority = get_transaction_priority_internal( lr->xid );
+    int txPriority = getTransactionPriorityInternal(lr->xid);
     if (txPriority > 0) {
         for (; position != queue->end(); ++position) {
             LockMgr::LockRequest* nextRequest = _locks[*position];
-	    if (txPriority > get_transaction_priority_internal( nextRequest->xid )) {
+            if (txPriority > getTransactionPriorityInternal(nextRequest->xid)) {
                 // add in front of request with lower priority that is either
-		// compatible, or blocked
+                // compatible, or blocked
                 queue->insert(position, lr->lid);
 
                 // set remaining incompatible requests as lr's waiters
-                addWaiters( lr, position, queue->end() );
+                addWaiters(lr, position, queue->end());
 
                 return;
-	    }
+            }
         }
-	queue->push_back( lr->lid );
-	return;
+        queue->push_back(lr->lid);
+        return;
     }
     else if (txPriority < 0) {
-	// for now, just push to end
-	// TODO: honor position of low priority requests
-	queue->push_back( lr->lid );
+        // for now, just push to end
+        // TODO: honor position of low priority requests
+        queue->push_back(lr->lid);
     }
 
     // use LockMgr's default policy
@@ -717,7 +714,7 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr,
                 queue->insert(position, lr->lid);
 
                 // set remaining incompatible requests as lr's waiters
-                addWaiters( lr, position, queue->end() );
+                addWaiters(lr, position, queue->end());
                 
                 return;
             }
@@ -732,25 +729,25 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr,
                 queue->insert(position, lr->lid);
 
                 // set remaining incompatible requests as lr's waiters
-                addWaiters( lr, position, queue->end() );
+                addWaiters(lr, position, queue->end());
                 return;
             }
         }
         break;
     case BIGGEST_BLOCKER_FIRST: {
-        map<TxId,set<TxId>*>::iterator lrWaiters = _waiters.find(lr->xid);
+        map<TxId,multiset<TxId>*>::iterator lrWaiters = _waiters.find(lr->xid);
         size_t lrNumWaiters = (lrWaiters == _waiters.end()) ? 0 : lrWaiters->second->size();
         for (; position != queue->end(); ++position) {
             LockMgr::LockRequest* nextRequest = _locks[*position];
-            map<TxId,set<TxId>*>::iterator nextRequestWaiters = _waiters.find(nextRequest->xid);
-            size_t nextRequestNumWaiters = (nextRequestWaiters == _waiters.end())
-                ? 0 : nextRequestWaiters->second->size();
+            map<TxId,multiset<TxId>*>::iterator requestWaiters = _waiters.find(nextRequest->xid);
+            size_t nextRequestNumWaiters =
+                (requestWaiters == _waiters.end()) ? 0 : requestWaiters->second->size();
             if (lrNumWaiters > nextRequestNumWaiters &&
                 (isCompatible(lr->mode, nextRequest->mode) || isBlocked(nextRequest))) {
                 queue->insert(position, lr->lid);
 
                 // set remaining incompatible requests as lr's waiters
-                addWaiters( lr, position, queue->end() );
+                addWaiters(lr, position, queue->end());
                 return;
             }
         }
@@ -763,11 +760,11 @@ void LockMgr::addLockToQueueUsingPolicy( LockMgr::LockRequest* lr,
     queue->push_back(lr->lid);
 }
 
-void LockMgr::addWaiter( const TxId& blocker, const TxId& requestor ) {
-    map<TxId, set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
-    set<TxId>* waiters;
+void LockMgr::addWaiter(const TxId& blocker, const TxId& requestor) {
+    map<TxId, multiset<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
+    multiset<TxId>* waiters;
     if (blockersWaiters == _waiters.end()) {
-        waiters = new set<TxId>();
+        waiters = new multiset<TxId>();
         _waiters[blocker] = waiters;
     }
     else {
@@ -776,31 +773,31 @@ void LockMgr::addWaiter( const TxId& blocker, const TxId& requestor ) {
 
     waiters->insert(requestor);
 
-    map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
+    map<TxId, multiset<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
     if (requestorsWaiters != _waiters.end()) {
         waiters->insert(requestorsWaiters->second->begin(),
                         requestorsWaiters->second->end());
     }
 }
 
-void LockMgr::addWaiters( LockRequest* blocker,
-                          list<LockId>::iterator nextLockId,
-                          list<LockId>::iterator lastLockId ) {
-    for (; nextLockId != lastLockId; ++nextLockId ) {
+void LockMgr::addWaiters(LockRequest* blocker,
+                         list<LockId>::iterator nextLockId,
+                         list<LockId>::iterator lastLockId) {
+    for (; nextLockId != lastLockId; ++nextLockId) {
         LockRequest* nextLockRequest = _locks[*nextLockId];
-        if (! isCompatible( blocker->mode, nextLockRequest->mode)) {
+        if (! isCompatible(blocker->mode, nextLockRequest->mode)) {
             nextLockRequest->sleepCount++;
-            addWaiter( blocker->xid, nextLockRequest->xid );
+            addWaiter(blocker->xid, nextLockRequest->xid);
         }
     }
 }
 
-bool LockMgr::comesBeforeUsingPolicy( const TxId& requestor,
-				      const unsigned& mode,
-                                      const LockMgr::LockRequest* oldRequest ) {
-    if (get_transaction_priority_internal(requestor) >
-        get_transaction_priority_internal(oldRequest->xid)) {
-	return true;
+bool LockMgr::comesBeforeUsingPolicy(const TxId& requestor,
+                                     const unsigned& mode,
+                                     const LockMgr::LockRequest* oldRequest) {
+    if (getTransactionPriorityInternal(requestor) >
+        getTransactionPriorityInternal(oldRequest->xid)) {
+        return true;
     }
 
     switch (_policy) {
@@ -811,19 +808,19 @@ bool LockMgr::comesBeforeUsingPolicy( const TxId& requestor,
     case OLDEST_TX_FIRST:
         return requestor < oldRequest->xid;
     case BIGGEST_BLOCKER_FIRST: {
-        map<TxId,set<TxId>*>::const_iterator newRequestWaiters = _waiters.find(requestor);
-        if (newRequestWaiters == _waiters.end()) {
+        map<TxId,multiset<TxId>*>::const_iterator newReqWaiters = _waiters.find(requestor);
+        if (newReqWaiters == _waiters.end()) {
             // new request isn't blocking anything, can't come first
             return false;
         }
 
-        map<TxId,set<TxId>*>::const_iterator oldRequestWaiters = _waiters.find(oldRequest->xid);
-        if (oldRequestWaiters == _waiters.end()) {
+        map<TxId,multiset<TxId>*>::const_iterator oldReqWaiters = _waiters.find(oldRequest->xid);
+        if (oldReqWaiters == _waiters.end()) {
             // old request isn't blocking anything, so new request comes first
             return true;
         }
 
-        return newRequestWaiters->second->size() > oldRequestWaiters->second->size();
+        return newReqWaiters->second->size() > oldReqWaiters->second->size();
     }
     default:
         return false;
@@ -854,9 +851,9 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
                 ++nextLockId;
                 break;
             }
-	    LockRequest* nextLockRequest = _locks[*nextLockId];
-	    if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
-		return LockMgr::HAS_LOCK; // already have the lock
+            LockRequest* nextLockRequest = _locks[*nextLockId];
+            if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
+                return LockMgr::HAS_LOCK; // already have the lock
         }
         return LockMgr::CONFLICT;
     }
@@ -877,9 +874,9 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
                 ++nextLockId;
                 break;
             }
-	    LockRequest* nextLockRequest = _locks[*nextLockId];
-	    if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
-		return LockMgr::HAS_LOCK; // already have the lock
+            LockRequest* nextLockRequest = _locks[*nextLockId];
+            if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
+                return LockMgr::HAS_LOCK; // already have the lock
         }
         return LockMgr::CONFLICT;
     }
@@ -905,21 +902,30 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
         LockRequest* nextLockRequest = _locks[*nextLockId];
 
         if (nextLockRequest->matches(requestor, mode, resId)) {
-            // if we're on the queue and haven't conflicted with anything
-            // ahead of us, then there's no conflict
+            // if we're already on the queue, there's no conflict
             return LockMgr::HAS_LOCK;
         }
 
         if (requestor == nextLockRequest->xid) {
-            // and upgrade or downgrade request, can't conflict with ourselves
+            // an upgrade or downgrade request, can't conflict with ourselves
+            if (isShared(mode)) {
+                // downgrade
+                _stats.incDowngrades();
+                ++nextLockId;
+                return LockMgr::NO_CONFLICT;
+            }
+
+            // upgrade
             alreadyHadLock = true;
-	    isShared(mode) ? _stats.incDowngrades() : _stats.incUpgrades();
+            _stats.incUpgrades();
+            // position after initial readers
             continue;
         }
 
         if (isShared(nextLockRequest->mode)) {
-            invariant( !isBlocked(nextLockRequest) );
+            invariant(!isBlocked(nextLockRequest));
             sharedOwners.insert(nextLockRequest->xid);
+
             if (isExclusive(mode) && firstConflict == queue->end()) {
                 // if "lr" proves not to be an upgrade, restore this position later
                 firstConflict = nextLockId;
@@ -929,18 +935,18 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
         }
 
         // the next lock on the queue is an exclusive request
-        invariant( isExclusive(nextLockRequest->mode) );
+        invariant(isExclusive(nextLockRequest->mode));
 
         if (alreadyHadLock) {
-	    // bumped into something incompatible while up/down grading
-	    if (isExclusive(mode)) {
-		// upgrading: bumped into another exclusive lock
+            // bumped into something incompatible while up/down grading
+            if (isExclusive(mode)) {
+                // upgrading: bumped into another exclusive lock
                 if (sharedOwners.find(nextLockRequest->xid) != sharedOwners.end()) {
                     // the exclusive lock is also an upgrade, and it must
                     // be blocked, waiting for our original share lock to be released
                     // if we wait for its shared lock, we would deadlock
-                    invariant( isBlocked(nextLockRequest) );
-                    abort_internal(nextLockRequest->xid);
+                    invariant(isBlocked(nextLockRequest));
+                    abortInternal(nextLockRequest->xid);
                 }
 
                 if (sharedOwners.empty()) {
@@ -951,11 +957,11 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
                     // we have to wait for another shared lock before upgrading
                     return LockMgr::UPGRADE_CONFLICT;
                 }
-	    }
+            }
 
             // downgrading, bumped into an exclusive lock, blocked on our original
             invariant (isShared(mode));
-            invariant( isBlocked(nextLockRequest) );
+            invariant(isBlocked(nextLockRequest));
             // lr will be inserted before nextLockRequest
             return LockMgr::NO_CONFLICT;
         }
@@ -971,16 +977,16 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
         }
 
         // there's a conflict, check for deadlock
-        map<TxId, set<TxId>*>::iterator waiters = _waiters.find(requestor);
+        map<TxId, multiset<TxId>*>::iterator waiters = _waiters.find(requestor);
         if (waiters != _waiters.end()) {
-            set<TxId>* requestorsWaiters = waiters->second;
+            multiset<TxId>* requestorsWaiters = waiters->second;
             if (requestorsWaiters->find(nextLockRequest->xid) != requestorsWaiters->end()) {
                 // the transaction that would block requestor is already blocked by requestor
                 // if requestor waited for nextLockRequest, there would be a deadlock
                 //
                 _stats.incDeadlocks();
 
-                abort_internal(requestor);
+                abortInternal(requestor);
             }
         }
         return LockMgr::CONFLICT;
@@ -988,25 +994,25 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
 
     // positioned to the end of the queue
     if (alreadyHadLock && isExclusive(mode) && !sharedOwners.empty()) {
-	// upgrading, queue consists of requestor's earlier share lock
-	// plus other share lock.  Must wait for the others to release
-	return LockMgr::UPGRADE_CONFLICT;
+        // upgrading, queue consists of requestor's earlier share lock
+        // plus other share lock.  Must wait for the others to release
+        return LockMgr::UPGRADE_CONFLICT;
     }
     else if (firstConflict != queue->end()) {
         nextLockId = firstConflict;
         LockRequest* nextLockRequest = _locks[*nextLockId];
 
         // there's a conflict, check for deadlock
-        map<TxId, set<TxId>*>::iterator waiters = _waiters.find(requestor);
+        map<TxId, multiset<TxId>*>::iterator waiters = _waiters.find(requestor);
         if (waiters != _waiters.end()) {
-            set<TxId>* requestorsWaiters = waiters->second;
+            multiset<TxId>* requestorsWaiters = waiters->second;
             if (requestorsWaiters->find(nextLockRequest->xid) != requestorsWaiters->end()) {
                 // the transaction that would block requestor is already blocked by requestor
                 // if requestor waited for nextLockRequest, there would be a deadlock
                 //
                 _stats.incDeadlocks();
 
-                abort_internal(requestor);
+                abortInternal(requestor);
             }
         }
         return LockMgr::CONFLICT;
@@ -1014,11 +1020,11 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
     return LockMgr::NO_CONFLICT;
 }
 
-LockMgr::LockStatus LockMgr::find_lock( const TxId& holder,
-                                        const unsigned& mode,
-                                        const ResourceId& store,
-                                        const ResourceId& resId,
-                                        LockId* outLockId ) {
+LockMgr::LockStatus LockMgr::findLock(const TxId& holder,
+                                      const unsigned& mode,
+                                      const ResourceId& store,
+                                      const ResourceId& resId,
+                                      LockId* outLockId) {
 
     *outLockId = 0; // set invalid;
 
@@ -1042,22 +1048,22 @@ LockMgr::LockStatus LockMgr::find_lock( const TxId& holder,
     return RESOURCE_NOT_FOUND_IN_MODE;
 }
 
-int LockMgr::get_transaction_priority_internal( const TxId& xid ) {
+int LockMgr::getTransactionPriorityInternal(const TxId& xid) {
     map<TxId, int>::const_iterator txPriority = _txPriorities.find(xid);
     if (txPriority == _txPriorities.end()) {
-	return 0;
+        return 0;
     }
     return txPriority->second;
 }
 
 /*
  * Used by acquireOne
- * XXX: there's overlap between this, conflictExists and find_lock
+ * XXX: there's overlap between this, conflictExists and findLock
  */
-bool LockMgr::isAvailable( const TxId& requestor,
-			   const unsigned& mode,
-			   const ResourceId& store,
-			   const ResourceId& resId ) {
+bool LockMgr::isAvailable(const TxId& requestor,
+                          const unsigned& mode,
+                          const ResourceId& store,
+                          const ResourceId& resId) {
 
     // check for exceptional policies
     if (LockMgr::READERS_ONLY == _policy && isExclusive(mode))
@@ -1067,12 +1073,12 @@ bool LockMgr::isAvailable( const TxId& requestor,
 
     map<ResourceId, map<ResourceId,list<LockId>*> >::iterator storeLocks = _resourceLocks.find(store);
     if (storeLocks == _resourceLocks.end()) {
-	return true; // no lock requests against this container, so must be available
+        return true; // no lock requests against this container, so must be available
     }
 
     map<ResourceId,list<LockId>*>::iterator resLocks = storeLocks->second.find(resId);
     if (resLocks == storeLocks->second.end()) {
-	return true; // no lock requests against this ResourceId, so must be available
+        return true; // no lock requests against this ResourceId, so must be available
     }
 
     // walk over the queue of previous requests for this ResourceId
@@ -1084,8 +1090,8 @@ bool LockMgr::isAvailable( const TxId& requestor,
 
         if (nextLockRequest->matches(requestor, mode, store, resId)) {
             // we're already have this lock, if we're asking, we can't be asleep
-	    invariant(! isBlocked(nextLockRequest));
-	    return true;
+            invariant(! isBlocked(nextLockRequest));
+            return true;
         }
 
         // no conflict if we're compatible
@@ -1095,14 +1101,14 @@ bool LockMgr::isAvailable( const TxId& requestor,
         if (isBlocked(nextLockRequest) && comesBeforeUsingPolicy(requestor, mode, nextLockRequest))
             return true;
 
-	return false; // we're incompatible and would block
+        return false; // we're incompatible and would block
     }
 
     // everything on the queue (if anything is on the queue) is compatible
     return true;
 }
 
-LockMgr::LockStatus LockMgr::release_internal( const LockId& lid ) {
+LockMgr::LockStatus LockMgr::releaseInternal(const LockId& lid) {
 
     if (0 == lid) { return LockMgr::CONTAINER_NOT_FOUND; }
 
@@ -1135,12 +1141,12 @@ LockMgr::LockStatus LockMgr::release_internal( const LockId& lid ) {
     list<LockId>::iterator nextLockId = queue->begin();
 
     // find the position of the lock to release in the queue
-    for( ; !foundLock && nextLockId != queue->end(); ++nextLockId) {
+    for(; !foundLock && nextLockId != queue->end(); ++nextLockId) {
         LockRequest* nextLock = _locks[*nextLockId];
         if (lid != *nextLockId) {
-	    if (nextLock->xid == holder) {
-		foundResource = true;
-	    }
+            if (nextLock->xid == holder) {
+                foundResource = true;
+            }
         }
         else {
             // this is our lock.
@@ -1182,14 +1188,15 @@ LockMgr::LockStatus LockMgr::release_internal( const LockId& lid ) {
         LockRequest* nextSleeper = _locks[*nextLockId];
         if (nextSleeper->xid == holder) continue;
 
-        invariant( isBlocked(nextSleeper) );
+        invariant(isBlocked(nextSleeper));
             
         // remove nextSleeper and its dependents from holder's waiters
-        
-        _waiters[holder]->erase(nextSleeper->xid);
-        map<TxId,set<TxId>*>::iterator sleepersWaiters = _waiters.find(nextSleeper->xid);
+
+        multiset<TxId>::iterator holdersWaiters = _waiters[holder]->find(nextSleeper->xid);
+        _waiters[holder]->erase(holdersWaiters);
+        map<TxId,multiset<TxId>*>::iterator sleepersWaiters = _waiters.find(nextSleeper->xid);
         if (sleepersWaiters != _waiters.end()) {
-            for (set<TxId>::iterator nextSleepersWaiter = sleepersWaiters->second->begin();
+            for (multiset<TxId>::iterator nextSleepersWaiter = sleepersWaiters->second->begin();
                  nextSleepersWaiter != sleepersWaiters->second->end(); ++nextSleepersWaiter) {
                 _waiters[holder]->erase(*nextSleepersWaiter);
             }
@@ -1202,32 +1209,33 @@ LockMgr::LockStatus LockMgr::release_internal( const LockId& lid ) {
     }
 
     // call recursively to release ancestors' locks
-    release_internal( parentLid );
+    releaseInternal(parentLid);
 
     return RELEASED;
 }
 
-void LockMgr::throwIfShuttingDown( const TxId& xid ) const {
+void LockMgr::throwIfShuttingDown(const TxId& xid) const {
     if (_shuttingDown && (_timer.millis() >= _millisToQuiesce ||
                           _xaLocks.find(xid) == _xaLocks.end())) {
          
-        throw AbortException(); // should this be something else?
+        throw AbortException(); // XXX should this be something else? ShutdownException?
     }
 }
 
 /*---------- ResourceLock functions ----------*/
    
-ResourceLock::ResourceLock( LockMgr* lm,
-			    const TxId& requestor,
-			    const unsigned& mode,
-			    const ResourceId& store,
-			    const ResourceId& resId,
-			    LockMgr::Notifier* notifier )
-    : _lm(lm), _lid(0) // if acquire throws, we want this initialized
+ResourceLock::ResourceLock(LockMgr* lm,
+                           const TxId& requestor,
+                           const unsigned& mode,
+                           const ResourceId& store,
+                           const ResourceId& resId,
+                           LockMgr::Notifier* notifier)
+    : _lm(lm),
+      _lid(0)  // if acquire throws, we want this initialized
 {
     _lid = lm->acquire(requestor, mode, store, resId, notifier);
 }
 
-ResourceLock::~ResourceLock( ) {
+ResourceLock::~ResourceLock() {
     _lm->releaseLock(_lid);
 }
