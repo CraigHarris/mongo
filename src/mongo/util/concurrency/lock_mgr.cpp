@@ -439,7 +439,7 @@ void LockMgr::getStats(LockMgr::LockStats* out) {
 }
 
 string LockMgr::toString() {
-    unique_lock<boost::mutex> guard(_guard);
+//    unique_lock<boost::mutex> guard(_guard);
 #ifdef DONT_CARE_ABOUT_DEBUG_EVEN_WHEN_SHUTTING_DOWN
     // seems like we might want to allow toString for debug during shutdown?
     throwIfShuttingDown();
@@ -509,6 +509,16 @@ string LockMgr::toString() {
         }
         result << "}" << endl;
     }
+
+    bool firstGoner = true;
+    result << "\t_aborted: {" << endl;
+    for (set<TxId>::iterator goners = _abortedTxIds.begin();
+         goners != _abortedTxIds.end(); ++goners) {
+        if (firstGoner) firstGoner = false;
+        else result << ",";
+        result << "t" << *goners;
+    }
+    result << "}";
 
     return result.str();
 }
@@ -636,8 +646,10 @@ LockMgr::LockId LockMgr::acquireInternal(const TxId& requestor,
         // set up for future deadlock detection add requestor to blockers' waiters
         //
         for (list<LockId>::iterator nextBlocker = queue->begin();
-               nextBlocker != queue->end() && _locks[*nextBlocker]->lid != lr->lid;
-               ++nextBlocker) {
+             nextBlocker != queue->end(); ++nextBlocker) {
+            LockRequest* nextBlockingRequest = _locks[*nextBlocker];
+            if (nextBlockingRequest->lid == lr->lid) {break;}
+            if (nextBlockingRequest->xid == lr->xid) {continue;}
             if (isCompatible(_locks[*nextBlocker]->mode, lr->mode)) {continue;}
             addWaiter(_locks[*nextBlocker]->xid, lr->xid);
             ++lr->sleepCount;            
@@ -761,6 +773,10 @@ void LockMgr::addLockToQueueUsingPolicy(LockMgr::LockRequest* lr,
 }
 
 void LockMgr::addWaiter(const TxId& blocker, const TxId& requestor) {
+    if (blocker == requestor) {
+        // can't wait on self
+        return;
+    }
     map<TxId, multiset<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
     multiset<TxId>* waiters;
     if (blockersWaiters == _waiters.end()) {
@@ -946,7 +962,7 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
                     // be blocked, waiting for our original share lock to be released
                     // if we wait for its shared lock, we would deadlock
                     invariant(isBlocked(nextLockRequest));
-                    abortInternal(nextLockRequest->xid);
+                    abortInternal(requestor);
                 }
 
                 if (sharedOwners.empty()) {
@@ -1193,12 +1209,18 @@ LockMgr::LockStatus LockMgr::releaseInternal(const LockId& lid) {
         // remove nextSleeper and its dependents from holder's waiters
 
         multiset<TxId>::iterator holdersWaiters = _waiters[holder]->find(nextSleeper->xid);
-        _waiters[holder]->erase(holdersWaiters);
-        map<TxId,multiset<TxId>*>::iterator sleepersWaiters = _waiters.find(nextSleeper->xid);
-        if (sleepersWaiters != _waiters.end()) {
-            for (multiset<TxId>::iterator nextSleepersWaiter = sleepersWaiters->second->begin();
-                 nextSleepersWaiter != sleepersWaiters->second->end(); ++nextSleepersWaiter) {
-                _waiters[holder]->erase(*nextSleepersWaiter);
+        if (holdersWaiters != _waiters[holder]->end()) {
+            // every sleeper should be among holders waiters, but a previous sleeper might have 
+            // had the nextSleeper as a dependent as well, in which case nextSleeer was removed 
+            // previously, hence the test for finding nextSleeper among holder's waiters
+            //
+            _waiters[holder]->erase(holdersWaiters);
+            map<TxId,multiset<TxId>*>::iterator sleepersWaiters = _waiters.find(nextSleeper->xid);
+            if (sleepersWaiters != _waiters.end()) {
+                for (multiset<TxId>::iterator nextSleepersWaiter = sleepersWaiters->second->begin();
+                     nextSleepersWaiter != sleepersWaiters->second->end(); ++nextSleepersWaiter) {
+                    _waiters[holder]->erase(*nextSleepersWaiter);
+                }
             }
         }
 
