@@ -580,121 +580,22 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
         _resourceLocks[store][resId] = new list<LockId>();
     }
 
-    // check to see if requestor has already locked resId
-    list<LockId>* queue = _resourceLocks[store][resId];
-    for (list<LockId>::iterator nextLockId = queue->begin();
-         nextLockId != queue->end(); ++nextLockId) {
-        LockRequest* nextRequest = _locks[*nextLockId];
-        if (nextRequest->xid != requestor) {
-            continue; // we're looking for our own locks
-        }
-
-        // requestor has some kind of lock on resId, we're either requesting
-        // the same mode, a downgrade or and upgrade.
-
-        // retrieve or create the LockRequest corresponding to this acquisition
-        //
-        bool hadLock = false;
-        LockRequest* lr;
-        if (nextRequest->mode == mode) {
-            // we already have the lock, just increment the count
-            lr = nextRequest;
-            lr->count++;
-            hadLock = true;
-        }
-        else {
-            // create the lock request and add to TxId's set of lock requests
-
-            // XXX should probably use placement operator new and manage LockRequest memory
-            lr = new LockRequest(requestor, mode, store, resId);
-            _locks[lr->lid] = lr;
-
-            // add lock request to set of requests of requesting TxId
-            map<TxId,set<LockId>*>::iterator xa_iter = _xaLocks.find(requestor);
-            if (xa_iter == _xaLocks.end()) {
-                set<LockId>* myLocks = new set<LockId>();
-                myLocks->insert(lr->lid);
-                _xaLocks[requestor] = myLocks;
-            }
-            else {
-                xa_iter->second->insert(lr->lid);
-            }
-        }
-
-        // deal with conflicts and placement of the request in the queue
-        if (hadLock) {
-            // requestor is active and already holds the same lock
-            // the only conflict is if _policy is READERS/WRITERS_ONLY
-            //
-	    blockOnConflict( lr, queue, sleepNotifier, guard, true );
-            return lr->lid;
-        }
-        else if (isShared(mode)) {
-            // downgrade: we're asking for a kShared lock and have an EXCLUSIVE
-            // since we're not blocked, the EXCLUSIVE must be at the front
-            invariant(isExclusive(nextRequest->mode) && nextLockId == queue->begin());
-
-            _stats.incDowngrades();
-
-            // add our kShared request immediately after
-            // our kExclusive request, so that when we
-            // release the EXCLUSIVE, we'll be granted the SHARED
-            //
-            queue->insert(++nextLockId, lr->lid);
-
-            // requestor is active and already holds the same lock
-            // the only conflict is if _policy is READERS/WRITERS_ONLY
-            //
-	    blockOnConflict( lr, queue, sleepNotifier, guard, true ); // possibly blocks
-            return lr->lid;
-        }
-
-        // we're asking for an upgrade.  this is ok if there are
-        // no other upgrade requests (otherwise there's a deadlock)
-        //
-        // we expect the queue to consist of some number of read requests
-        // (at least our own), followed optionally by a write request.
-        //
-        // if there are only read requests, our upgrade request goes to
-        // the end and waits for all intervening requests to end
-        //
-        // if there's a write request, if it is also an upgrade, then
-        // we have to abort.  Otherwise, we insert our upgrade request
-        // after the last reader and before the 1st writer.
-
-        _stats.incUpgrades();
-
-        // gather the set of initial readLock requestor TxIds,
-        // detecting deadlocks as we go
-        //
-        set<TxId> otherSharers; // used to detect pre-existing upgrades
-        list<LockId>::iterator nextSharerId = queue->begin();
-        for (; nextSharerId != queue->end(); ++nextSharerId) {
-            if (*nextSharerId == nextRequest->lid) continue; // skip our own locks
-            LockRequest* nextSharer = _locks[*nextSharerId];
-            if (isExclusive(nextSharer->mode)) {
-                set<TxId>::iterator nextUpgrader = otherSharers.find(nextSharer->xid);
-                if (nextUpgrader != otherSharers.end())  {
-
-                    // the requestor of the first exclusive lock previously requested
-                    // a shared lock (it's an upgrade, so we have to abort).
-                    //
-                    invariant(*nextUpgrader != requestor);
-                    abort_internal(requestor);
-                }
-                break;
-            }
-            otherSharers.insert(nextSharer->xid);
-        }
-
-        // safe to upgrade
-        queue->insert(nextSharerId, lr->lid);
-	blockOnConflict( lr, queue, sleepNotifier, guard ); // possibly blocks
-        return lr->lid;
+    list<LockId>::iterator lastCheckedPosition = queue->begin();
+    LockMgr::ConflictStatus conflictStatus = conflictExists(requestor,
+                                                            mode,
+                                                            store,
+                                                            resId,
+                                                            queue,
+                                                            &lastCheckedPosition);
+    if (LockMgr::HAS_LOCK == conflictStatus) {
+        ++_locks[*lastCheckedPosition]->count;
+        return;
     }
 
     // create the lock request and add to TxId's set of lock requests
-    LockRequest* lr = new LockRequest(requestor, mode, store, resId);
+
+    // XXX should probably use placement operator new and manage LockRequest memory
+    lr = new LockRequest(requestor, mode, store, resId);
     _locks[lr->lid] = lr;
 
     // add lock request to set of requests of requesting TxId
@@ -708,11 +609,55 @@ LockMgr::LockId LockMgr::acquire_internal( const TxId& requestor,
         xa_iter->second->insert(lr->lid);
     }
 
-    // add our request to the queue
-    addLockToQueueUsingPolicy( lr );
+    if (LockMgr::NO_CONFLICT == conflictStatus) {
+        queue->insert(lastCheckedPosition, lr);
+        return;
+    }
 
-    blockOnConflict(lr, queue, sleepNotifier, guard);
-    // check for conflicts and add lr to the queue
+    // some type of conflict
+    if (LockMgr::UPGRADE_CONFLICT == confictStatus)
+        queue->insert(lastCheckedPosition, lr);
+    else
+        addToQueueUsingPolicy(lr, lastCheckedPosition, true /* hasConflict */);
+
+    // call the sleep notification function once
+    if (NULL != sleepNotifier) {
+        // XXX should arg be xid of blocker?
+        (*sleepNotifier)(lr->xid);
+    }
+
+    _stats.incBlocks();
+
+    do {
+        // set up for future deadlock detection add requestor to blockers' waiters
+        //
+        while (list<LockId>::iterator nextBlocker = lastCheckedPosition
+               nextBlocker != queue->end() && _locks[*nextBlocker]->lid != lr->lid;
+               ++nextBlocker) {
+            addWaiter( _locks[*nextBlocker]->xid, lr->xid );
+            ++lr->sleepCount;            
+        }
+
+        // wait for blocker to release
+        while (isBlocked(lr)) {
+            Timer timer;
+            lr->lock.wait(guard);
+            _stats.incTimeBlocked( timer.millis() );
+        }
+
+        // XXX: release_internal should do this, because our dependencies
+        // could change without awakening
+
+        // when awakened, remove ourselves from the set of waiters
+        map<TxId,set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
+        if (blockersWaiters != _waiters.end()) {
+            blockersWaiters->second->erase(lr->xid);
+        }
+
+        lastCheckedPosition = queue->begin();
+        conflictStatus = conflictExists(lr->xid, lr->mode, lr->container, lr->resId,
+                                        queue, lastCheckedPosition);
+    } while (hasConflict(conflictStatus));
 
     return lr->lid;
 }
@@ -856,49 +801,6 @@ void LockMgr::addWaiters( LockRequest* blocker,
     }
 }
 
-void LockMgr::blockOnConflict( LockRequest* lr,
-			       list<LockId>* queue,
-			       Notifier* sleepNotifier,
-			       boost::unique_lock<boost::mutex>& guard) {
-
-    list<LockId>::iterator lastCheckedPosition = queue.begin();
-    if (conflictExists(lr, queue, &lastCheckedPosition)) {
-
-        addToQueueUsingPolicy(lr, lastCheckedPosition, true /* hasConflict */);
-
-        // call the sleep notification function once
-        if (NULL != sleepNotifier) {
-            // XXX should arg be xid of blocker?
-            (*sleepNotifier)(lr->xid);
-        }
-
-	do {
-	    // set up for future deadlock detection
-	    // add requestor to blocker's waiters
-	    //
-	    addWaiter( blocker, lr->xid );
-
-	    // wait for blocker to release
-	    ++lr->sleepCount;
-	    _stats.incBlocks();
-	    while (isBlocked(lr)) {
-		Timer timer;
-		lr->lock.wait(guard);
-		_stats.incTimeBlocked( timer.millis() );
-	    }
-
-	    // when awakened, remove ourselves from the set of waiters
-	    map<TxId,set<TxId>*>::iterator blockersWaiters = _waiters.find(blocker);
-	    if (blockersWaiters != _waiters.end()) {
-		blockersWaiters->second->erase(lr->xid);
-	    }
-	} while (conflictExists(lr, queue, &blocker, checkPolicyOnly));
-    }
-    else {
-        addToQueueUsingPolicy(lr, lastCheckedPosition, false /* no conflict */);
-    }
-}
-
 bool LockMgr::comesBeforeUsingPolicy( const TxId& requestor,
 				      const unsigned& mode,
                                       const LockMgr::LockRequest* oldRequest ) {
@@ -934,12 +836,14 @@ bool LockMgr::comesBeforeUsingPolicy( const TxId& requestor,
     }
 }
 
-bool LockMgr::conflictExists(const LockRequest* lr,
-			     const list<LockId>* queue,
-                             list<LockId>::iterator& nextLockId) {
+LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
+                                                const LockMode& mode,
+                                                const ResourceId& resId,
+                                                const list<LockId>* queue,
+                                                list<LockId>::iterator& nextLockId) {
 
     // handle READERS/WRITERS_ONLY policy conflicts
-    if (LockMgr::READERS_ONLY == _policy && isExclusive(lr->mode)) {
+    if (LockMgr::READERS_ONLY == _policy && isExclusive(mode)) {
         // find the last reader on the queue, then advance the nextLockId
         // forward iterator past that point.
         LockId lastReader = *nextLockId;
@@ -957,12 +861,12 @@ bool LockMgr::conflictExists(const LockRequest* lr,
                 break;
             }
 	    LockRequest* nextLockRequest = _locks[*nextLockId];
-	    if (lr->xid == nextLockRequest->xid && lr->mode == nextLockRequest->mode)
-		return false; // already have the lock
+	    if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
+		return LockMgr::HAS_LOCK; // already have the lock
         }
         return true;
     }
-    else if (LockMgr::WRITERS_ONLY == _policy && isShared(lr->mode))  {
+    else if (LockMgr::WRITERS_ONLY == _policy && isShared(mode))  {
         // find the last writer on the queue, then advance the nextLockId
         // forward iterator past that point
         LockId lastWriter = *nextLockId;
@@ -980,113 +884,120 @@ bool LockMgr::conflictExists(const LockRequest* lr,
                 break;
             }
 	    LockRequest* nextLockRequest = _locks[*nextLockId];
-	    if (lr->xid == nextLockRequest->xid && lr->mode == nextLockRequest->mode)
-		return false; // already have the lock
+	    if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
+		return LockMgr::HAS_LOCK; // already have the lock
         }
-        return true;
+        return LockMgr::CONFLICT;
     }
 
-    set<TxId> sharedOwners;
-    bool haveLock = false;
+    // loop over the lock requests in the queue, looking for the 1st conflict
+    // normally, we'll leave the nextLockId iterator positioned at the 1st conflict
+    // if there is one, or the position (often the end) where we know there is no conflict.
+    //
+    // upgrades complicate this picture, because we want to position the iterator
+    // after all initial share locks.  but we may not know whether an exclusived request
+    // is an upgrade until we look at all the initial share locks.
+    //
+    // so we record the position of the 1st conflict, but continue advancing the
+    // nextLockId iterator until we've seen all initial share locks.  If none have
+    // the same TxId as the exclusive request, we restore the position to 1st conflict
+    //
+    list<TxId>::iterator firstConflict = queue.begin();
+    set<TxId> sharedOwners; // all initial share lock owners
+    bool alreadyHadLock = false;  // true if we see a lock with the same Txid
+
     for (; nextLockId != queue->end(); ++nextLockId) {
 
         LockRequest* nextLockRequest = _locks[*nextLockId];
 
-        if (lr->lid == nextLockRequest->lid) {
+        if (nextLockRequest->matches(requestor, mode, container, resId)) {
             // if we're on the queue and haven't conflicted with anything
             // ahead of us, then there's no conflict
-            lastCheckedPosition = nextLockId;
-            return false;
+            return LockMgr::HAS_LOCK;
         }
 
-        if (lr->xid == nextLockRequest->xid) {
+        if (requestor == nextLockRequest->xid) {
             // and upgrade or downgrade request, can't conflict with ourselves
-            haveLock = true;
-	    isShared(lr->mode) ? _stats.incDowngrades() : _stats.incUpgrades();
+            alreadyHadLock = true;
+	    isShared(mode) ? _stats.incDowngrades() : _stats.incUpgrades();
             continue;
         }
 
         if (isShared(nextLockRequest->mode)) {
+            invariant( !isBlocked(nextLockRequest) );
             sharedOwners.insert(nextLockRequest->xid);
+            if (isExclusive(mode) && firstConflict == queue.begin()) {
+                // if "lr" proves not to be an upgrade, restore this position later
+                firstConflict = nextLockId;
+            }
+            // either there's no conflict yet, or we're not done checking for an upgrade
+            continue;
         }
 
-        // no conflict if we're compatible
-        if (isCompatible(lr->mode, nextLockRequest->mode)) continue;
+        // the next lock on the queue is an exclusive request
+        invariant( isExclusive(nextLockRequest->mode) );
 
-        if (haveLock) {
+        if (alreadyHadLock) {
 	    // bumped into something incompatible while up/down grading
-	    if (isExclusive(lr->mode)) {
-		// upgrading
-		if (isExclusive(nextLockRequest->mode)) {
-		    // bumped into another exclusive lock
-		    if (sharedOwners.find(nextLockRequest->xid) != sharedOwners.end()) {
-			// the exclusive lock is also an upgrade, and it must
-			// be blocked, waiting for our original share lock to be released
-			// if we wait for its shared lock, we would deadlock
-			invariant( isBlocked(nextLockRequest) );
-			abort_internal(nextLockRequest->xid);
-		    }
+	    if (isExclusive(mode)) {
+		// upgrading: bumped into another exclusive lock
+                if (sharedOwners.find(nextLockRequest->xid) != sharedOwners.end()) {
+                    // the exclusive lock is also an upgrade, and it must
+                    // be blocked, waiting for our original share lock to be released
+                    // if we wait for its shared lock, we would deadlock
+                    invariant( isBlocked(nextLockRequest) );
+                    abort_internal(nextLockRequest->xid);
+                }
 
-		    if (sharedOwners.empty()) {
-			// simple upgrade, queue in front of nextLockRequest, no conflict
-			return false;
-		    }
-		    else {
-			// we have to wait for another shared lock before upgrading
-			--nextLockRequest;
-			return true;
-		    }
-		}
-		else {
-		    invariant (!isBlocked(nextLockRequest));
-		    // we'll eventually block, but want to position the iterator
-		    // past the last sharedOwner.
-		    continue;
-		}
+                if (sharedOwners.empty()) {
+                    // simple upgrade, queue in front of nextLockRequest, no conflict
+                    return LockMgr::NO_CONFLICT;
+                }
+                else {
+                    // we have to wait for another shared lock before upgrading
+                    return LockMgr::UPGRADE_CONFLICT;
+                }
 	    }
-	    else if (isShared(lr->mode)) {
-		// downgrading, bumped into an exclusive lock, blocked on our original
-		invariant( isBlocked(nextLockRequest) );
-		// lr will be inserted before nextLockRequest
-		return false;
-	    }
-	}
+
+            // downgrading, bumped into an exclusive lock, blocked on our original
+            invariant (isShared(mode));
+            invariant( isBlocked(nextLockRequest) );
+            // lr will be inserted before nextLockRequest
+            return LockMgr::NO_CONFLICT;
+        }
+        else if (firstConflict != queue.begin()) {
+            // restore first conflict position 
+            nextLockId = firstConflict;
+            nextLockRequest = _locks[*nextLockId];
+        }
 
         // no conflict if nextLock is blocked and we come before
-        if (isBlocked(nextLockRequest) && comesBeforeUsingPolicy(lr->xid, lr->mode, nextLockRequest)) {
-            lastCheckedPosition = nextLockId;
-            return false;
+        if (isBlocked(nextLockRequest) && comesBeforeUsingPolicy(requestor, mode, nextLockRequest)) {
+            return LockMgr::NO_CONFLICT;
         }
 
-        // there's a conflict
-        *blocker = nextLockRequest->xid;
-
-        // check for deadlock
-        TxId requestor = lr->xid;
+        // there's a conflict, check for deadlock
         map<TxId, set<TxId>*>::iterator requestorsWaiters = _waiters.find(requestor);
         if (requestorsWaiters != _waiters.end()) {
             if (requestorsWaiters->second->find(*blocker) != requestorsWaiters->second->end()) {
                 // the transaction that would block requestor is already blocked by requestor
                 // if requestor waited for blocker there would be a deadlock
                 //
-                _xaLocks[requestor]->erase(lr->lid);
-                _locks.erase(lr->lid);
-                delete lr;
-
                 _stats.incDeadlocks();
 
                 abort_internal(requestor);
             }
         }
-        return true;
+        return LockMgr::CONFLICT;
     }
+
     // positioned to the end of the queue
-    if (haveLock && isExclusive(lr->mode) && !isEmpty(sharedOwners)) {
-	// upgrading, queue consists of lr->xid's earlier share lock
+    if (alreadyHadLock && isExclusive(mode) && !isEmpty(sharedOwners)) {
+	// upgrading, queue consists of requestor's earlier share lock
 	// plus other share lock.  Must wait for the others to release
-	return true;
+	return LockMgr::UPGRADE_CONFLICT;
     }
-    return false;
+    return LockMgr::NO_CONFLICT;
 }
 
 LockMgr::LockStatus LockMgr::find_lock( const TxId& holder,
