@@ -6,3 +6,12 @@ env.Library('thread_name',
             ['thread_name.cpp'],
             LIBDEPS=['$BUILD_DIR/mongo/base/base',
                      '$BUILD_DIR/third_party/shim_boost'])
+
+env.Library('lock_mgr',
+            ['lock_mgr.cpp'],
+            LIBDEPS=['$BUILD_DIR/mongo/base/base',
+                     '$BUILD_DIR/third_party/shim_boost'])
+
+env.CppUnitTest('lock_mgr_test',
+                'lock_mgr_test.cpp',
+                LIBDEPS=['lock_mgr'] )
