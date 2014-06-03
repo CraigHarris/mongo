@@ -53,6 +53,7 @@ namespace mongo {
 	ACQUIRE,
 	RELEASE,
 	ABORT,
+        POLICY,
 	QUIT,
 	INVALID
     };
@@ -82,6 +83,7 @@ namespace mongo {
 	unsigned mode;
 	ResourceId store;
 	ResourceId resId;
+        LockMgr::LockingPolicy policy;
     };
 
     class TxResponseBuffer {
@@ -125,11 +127,11 @@ namespace mongo {
 	TxCommandBuffer() : _count(0), _readPos(0), _writePos(0) { }
 
 	void post(const TxCmd& cmd,
-		   const TxId& xid,
-		   const unsigned& mode,
-		   const ResourceId& store,
-		   const ResourceId& resId
-	    ) {
+                  const TxId& xid = 0,
+                  const unsigned& mode = 0,
+                  const ResourceId& store = 0,
+                  const ResourceId& resId = 0,
+                  const LockMgr::LockingPolicy& policy = LockMgr::FIRST_COME) {
 	    boost::unique_lock<boost::mutex> guard(_guard);
 	    while (_count == 10)
 		_full.wait(guard);
@@ -138,6 +140,7 @@ namespace mongo {
 	    buffer[_writePos].mode = mode;
 	    buffer[_writePos].store = store;
 	    buffer[_writePos].resId = resId;
+            buffer[_writePos].policy = policy;
             _writePos++;
 	    _writePos %= 10;
 	    _count++;
@@ -186,7 +189,7 @@ namespace mongo {
 	}
 
 	void abort() {
-	    _cmd.post(ABORT, _xid, 0, 0, 0);
+	    _cmd.post(ABORT, _xid);
 	    TxResponse* rsp = _rsp.consume();
 	    ASSERT(ABORTED == rsp->rspCode);
 	}
@@ -196,8 +199,14 @@ namespace mongo {
 	    ASSERT(ACQUIRED == rsp->rspCode);
 	}
 
+        void setPolicy(const LockMgr::LockingPolicy& policy, const TxRsp& rspCode) {
+            _cmd.post(POLICY, 0, 0, 0, 0, policy);
+	    TxResponse* rsp = _rsp.consume();
+	    ASSERT(rspCode == rsp->rspCode);
+	}
+
 	void quit() {
-	    _cmd.post(QUIT, 0, 0, 0, 0);
+	    _cmd.post(QUIT);
 	}
 	
 	// these are run within the client threads
@@ -212,7 +221,7 @@ namespace mongo {
                         _rsp.post(ACQUIRED);
                     } catch (const AbortException& err) {
                         _rsp.post(ABORTED);
-			log() << "t" << _xid << ": aborted, ending" << endl;
+//			log() << "t" << _xid << ": aborted, ending" << endl;
 			return;
                     }
 		    break;
@@ -227,19 +236,24 @@ namespace mongo {
 			_rsp.post(ABORTED);
 		    }
 		    break;
+                case POLICY:
+                    try {
+                        _lm->setPolicy(req->policy, this);
+                        _rsp.post(ACQUIRED);
+                    } catch( const AbortException& err) {
+			_rsp.post(ABORTED);
+                    }
+                    break;
 		case QUIT:
-//                  log() << "t" << _xid << ": in QUIT" << endl;
 		default:
                     more = false;
 		    break;
 		}
 	    }
-            log() << "t" << _xid << ": ending" << endl;
 	}
 
 	// inherited from Notifier, used by LockMgr::acquire
 	virtual void operator()(const TxId& blocker) {
-//	    log() << "in sleep notifier" << endl;
 	    _rsp.post(BLOCKED);
 	}
 
@@ -788,5 +802,101 @@ namespace mongo {
 	    t3.quit();
 	    t4.quit();
 	}
+    }
+
+    /*
+     * test READERS_ONLY and WRITERS_ONLY policies
+     */
+    TEST(LockMgrTest, TxOnlyPolicies) {
+        LockMgr lm;
+        ClientTransaction t1(&lm, 1);
+        ClientTransaction t2(&lm, 2);
+        ClientTransaction t3(&lm, 3);
+        ClientTransaction t4(&lm, 4);
+        ClientTransaction t5(&lm, 5);
+        ClientTransaction tp(&lm, 6);
+
+        // show READERS_ONLY blocking writers, which
+        // awake when policy reverts
+        t1.acquire(LockMgr::kShared, 1, ACQUIRED);
+        tp.setPolicy(LockMgr::READERS_ONLY, ACQUIRED);
+        t3.acquire(LockMgr::kExclusive, 2, BLOCKED); // just policy conflict
+        t4.acquire(LockMgr::kExclusive, 1, BLOCKED); // both policy & t1
+        t5.acquire(LockMgr::kShared, 1, ACQUIRED);   // even tho t4
+        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        t3.wakened();
+        t3.release(LockMgr::kExclusive, 2);
+        t1.release(LockMgr::kShared, 1);
+        t5.release(LockMgr::kShared, 1);
+        t4.wakened();
+        t4.release(LockMgr::kExclusive, 1);
+
+        // show WRITERS_ONLY blocking readers, which
+        // awake when policy reverts
+        t1.acquire(LockMgr::kExclusive, 1, ACQUIRED);
+        tp.setPolicy(LockMgr::WRITERS_ONLY, ACQUIRED);
+        t3.acquire(LockMgr::kShared, 2, BLOCKED);       // just policy conflict
+        t4.acquire(LockMgr::kShared, 1, BLOCKED);       // both policy & t1
+        t5.acquire(LockMgr::kExclusive, 2, ACQUIRED);   // even tho t3
+        t5.release(LockMgr::kExclusive, 2);
+        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        t3.wakened();
+        t3.release(LockMgr::kShared, 2);
+        t1.release(LockMgr::kExclusive, 1);
+        t4.wakened();
+        t4.release(LockMgr::kShared, 1);
+
+        // show READERS_ONLY blocked by existing writer
+        // but still blocking new writers
+        t1.acquire(LockMgr::kExclusive, 1, ACQUIRED);
+        tp.setPolicy(LockMgr::READERS_ONLY, BLOCKED);  // blocked by t1
+        t2.acquire(LockMgr::kExclusive, 2, BLOCKED);   // just policy conflict
+        t3.acquire(LockMgr::kShared, 2, ACQUIRED);     // even tho t2
+        t3.release(LockMgr::kShared, 2);
+        t1.release(LockMgr::kExclusive, 1);
+        tp.wakened();
+        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        t2.wakened();
+        t2.release(LockMgr::kExclusive, 2);
+
+        // show WRITERS_ONLY blocked by existing reader
+        // but still blocking new readers
+        t1.acquire(LockMgr::kShared, 1, ACQUIRED);
+        tp.setPolicy(LockMgr::WRITERS_ONLY, BLOCKED);  // blocked by t1
+        t2.acquire(LockMgr::kShared, 2, BLOCKED);      // just policy conflict
+        t3.acquire(LockMgr::kExclusive, 2, ACQUIRED);  // even tho t2
+        t3.release(LockMgr::kExclusive, 2);
+        t1.release(LockMgr::kShared, 1);
+        tp.wakened();
+        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        t2.wakened();
+        t2.release(LockMgr::kShared, 2);
+
+        t1.quit();
+        t2.quit();
+        t3.quit();
+        t4.quit();
+        t5.quit();
+        tp.quit();
+    }
+
+    TEST(LockMgrTest, TxShutdown) {
+        LockMgr lm;
+        ClientTransaction t1(&lm, 1);
+        ClientTransaction t2(&lm, 2);
+
+        t1.acquire(LockMgr::kShared, 1, ACQUIRED);
+        lm.shutdown(3000);
+
+        // t1 can still do work while quiescing
+        t1.release(LockMgr::kShared, 1);
+        t1.acquire(LockMgr::kShared, 2, ACQUIRED);
+
+        // t2 is new and should be refused
+        t2.acquire(LockMgr::kShared, 3, ABORTED);
+
+        // after the quiescing period, t1's request should be refused
+        sleep(3);
+        t1.acquire(LockMgr::kShared, 4, ABORTED);
     }
 }

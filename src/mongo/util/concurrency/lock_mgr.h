@@ -105,6 +105,7 @@ namespace mongo {
             CONFLICT,         // requested resource is in use by another transaction
             HAS_LOCK,         // requested resource was already acquired, increment count
             NO_CONFLICT,      // requested resource is available. no waiting
+            POLICY_CONFLICT,  // requested mode is blocked by READER/WRITERS_ONLY policy
             UPGRADE_CONFLICT  // requested resource was previously acquired for shared use
                               // now requested for exclusive use, but there are other shared
                               // users, so this request must wait.
@@ -246,9 +247,8 @@ namespace mongo {
         /**
          * Change the current conflict policy.  For READERS/WRITERS_ONLY, this
          * call may block until all current writers/readers have released their locks.
-         *
          */
-        virtual void setPolicy(const LockingPolicy& policy);
+        virtual void setPolicy(const LockingPolicy& policy, Notifier* notifier = NULL);
 
         /**
          * Initiate a shutdown, specifying a period of time to quiesce.

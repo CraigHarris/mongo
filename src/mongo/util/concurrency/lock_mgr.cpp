@@ -140,7 +140,9 @@ namespace {
     }
 
     bool hasConflict(const LockMgr::ConflictStatus& status) {
-        return LockMgr::CONFLICT == status || LockMgr::UPGRADE_CONFLICT == status;
+        return LockMgr::CONFLICT == status ||
+               LockMgr::UPGRADE_CONFLICT == status ||
+               LockMgr::POLICY_CONFLICT == status;
     }
 }
 
@@ -189,27 +191,35 @@ void LockMgr::shutdown(const unsigned& millisToQuiesce) {
     _timer.millisReset();
 }
 
-void LockMgr::setPolicy(const LockingPolicy& policy) {
+void LockMgr::setPolicy(const LockingPolicy& policy, Notifier* notifier) {
     unique_lock<boost::mutex> guard(_guard);
     throwIfShuttingDown();
     if (policy == _policy) return;
 
+    LockingPolicy oldPolicy = _policy;
     _policy = policy;
 
     // if moving away from {READERS,WRITERS}_ONLY, awaken requests that were pending
     //
-    if (LockMgr::READERS_ONLY == _policy || LockMgr::WRITERS_ONLY == _policy) {
-        // Awaken requests that were blocked on the old policy
-        // these are waiting on TxId 0
-        map<TxId, set<LockId>*>::iterator lockIdsHeld = _xaLocks.find(0);
-        if (lockIdsHeld != _xaLocks.end()) {
-            for (set<LockId>::iterator nextLockId = lockIdsHeld->second->begin();
-                 nextLockId != lockIdsHeld->second->end(); ++nextLockId) {
-                LockRequest* nextLock = _locks[*nextLockId];
-                if (shouldAwake(nextLock)) {
-                    nextLock->lock.notify_one();
+    if (LockMgr::READERS_ONLY == oldPolicy || LockMgr::WRITERS_ONLY == oldPolicy) {
+        // Awaken requests that were blocked on the old policy.
+        // iterate over TxIds blocked on 0 (these are blocked on policy)
+        map<TxId, multiset<TxId>*>::iterator policyWaiters = _waiters.find(0);
+        if (policyWaiters != _waiters.end()) {
+            for (multiset<TxId>::iterator nextWaiter = policyWaiters->second->begin();
+                 nextWaiter != policyWaiters->second->end(); ++nextWaiter) {
+                // iterate over the locks acquired by the blocked transactions
+                for (set<TxId>::iterator nextLockId = _xaLocks[*nextWaiter]->begin();
+                     nextLockId != _xaLocks[*nextWaiter]->end(); ++nextLockId) {
+                    LockRequest* nextLock = _locks[*nextLockId];
+                    if (isBlocked(nextLock) && shouldAwake(nextLock)) {
+                        // each transaction can only be blocked by one request at time
+                        // this one must be due to policy that's now changed
+                        nextLock->lock.notify_one();
+                    }
                 }
             }
+            policyWaiters->second->clear();
         }
     }
 
@@ -219,8 +229,13 @@ void LockMgr::setPolicy(const LockingPolicy& policy) {
             ? &LockMgr::LockStats::numActiveWrites
             : &LockMgr::LockStats::numActiveReads;
 
-        while (0 < (_stats.*numBlockers)()) {
-            _policyLock.wait(guard);
+        if (0 < (_stats.*numBlockers)()) {
+            if (NULL != notifier) {
+                (*notifier)(0);
+            }
+            do {
+                _policyLock.wait(guard);
+            } while (0 < (_stats.*numBlockers)());
         }
     }
 }
@@ -649,10 +664,16 @@ LockMgr::LockId LockMgr::acquireInternal(const TxId& requestor,
              nextBlocker != queue->end(); ++nextBlocker) {
             LockRequest* nextBlockingRequest = _locks[*nextBlocker];
             if (nextBlockingRequest->lid == lr->lid) {break;}
-            if (nextBlockingRequest->xid == lr->xid) {continue;}
+            if (nextBlockingRequest->xid == requestor) {continue;}
             if (isCompatible(_locks[*nextBlocker]->mode, lr->mode)) {continue;}
-            addWaiter(_locks[*nextBlocker]->xid, lr->xid);
+            addWaiter(_locks[*nextBlocker]->xid, requestor);
             ++lr->sleepCount;            
+        }
+        if (LockMgr::POLICY_CONFLICT == conflictStatus) {
+            // to facilitate waking once the policy reverts, add requestor to system's waiters
+            // where the invalid TxId 0 indicates the system
+            addWaiter(0, requestor);
+            ++lr->sleepCount;
         }
 
         // wait for blocker to release
@@ -811,6 +832,13 @@ void LockMgr::addWaiters(LockRequest* blocker,
 bool LockMgr::comesBeforeUsingPolicy(const TxId& requestor,
                                      const unsigned& mode,
                                      const LockMgr::LockRequest* oldRequest) {
+
+    // handle special policies
+    if (READERS_ONLY == _policy && kShared == mode && isBlocked(oldRequest))
+        return true;
+    if (WRITERS_ONLY == _policy && kExclusive == mode && isBlocked(oldRequest))
+        return true;
+
     if (getTransactionPriorityInternal(requestor) >
         getTransactionPriorityInternal(oldRequest->xid)) {
         return true;
@@ -851,13 +879,14 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
 
     // handle READERS/WRITERS_ONLY policy conflicts
     if (LockMgr::READERS_ONLY == _policy && isExclusive(mode)) {
-        // find the last reader on the queue, then advance the nextLockId
+        // find the last active reader on the queue, then advance the nextLockId
         // forward iterator past that point.
+        if (nextLockId == queue->end()) { return LockMgr::POLICY_CONFLICT; }
         LockId lastReader = *nextLockId;
         for (list<LockId>::reverse_iterator tail = queue->rbegin();
              tail != queue->rend(); ++tail) {
             LockRequest* nextLock = _locks[*tail];
-            if (isShared(nextLock->mode)) {
+            if (isShared(nextLock->mode) && !isBlocked(nextLock)) {
                 lastReader = nextLock->lid;
                 break;
             }
@@ -871,11 +900,12 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
             if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
                 return LockMgr::HAS_LOCK; // already have the lock
         }
-        return LockMgr::CONFLICT;
+        return LockMgr::POLICY_CONFLICT;
     }
     else if (LockMgr::WRITERS_ONLY == _policy && isShared(mode))  {
         // find the last writer on the queue, then advance the nextLockId
         // forward iterator past that point
+        if (nextLockId == queue->end()) { return LockMgr::POLICY_CONFLICT; }
         LockId lastWriter = *nextLockId;
         for (list<LockId>::reverse_iterator tail = queue->rbegin();
              tail != queue->rend(); ++tail) {
@@ -894,7 +924,7 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
             if (requestor == nextLockRequest->xid && mode == nextLockRequest->mode)
                 return LockMgr::HAS_LOCK; // already have the lock
         }
-        return LockMgr::CONFLICT;
+        return LockMgr::POLICY_CONFLICT;
     }
 
     // loop over the lock requests in the queue, looking for the 1st conflict
