@@ -837,12 +837,12 @@ namespace mongo {
         tp.setPolicy(LockMgr::WRITERS_ONLY, ACQUIRED);
         t3.acquire(LockMgr::kShared, 2, BLOCKED);       // just policy conflict
         t4.acquire(LockMgr::kShared, 1, BLOCKED);       // both policy & t1
-        t5.acquire(LockMgr::kExclusive, 2, ACQUIRED);   // even tho t3
+        t1.release(LockMgr::kExclusive, 1);
+        t5.acquire(0x3/*LockMgr::kExclusive*/, 2, ACQUIRED);   // even tho t3
         t5.release(LockMgr::kExclusive, 2);
         tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
         t3.wakened();
         t3.release(LockMgr::kShared, 2);
-        t1.release(LockMgr::kExclusive, 1);
         t4.wakened();
         t4.release(LockMgr::kShared, 1);
 
@@ -864,8 +864,6 @@ namespace mongo {
         t1.acquire(LockMgr::kShared, 1, ACQUIRED);
         tp.setPolicy(LockMgr::WRITERS_ONLY, BLOCKED);  // blocked by t1
         t2.acquire(LockMgr::kShared, 2, BLOCKED);      // just policy conflict
-        t3.acquire(LockMgr::kExclusive, 2, ACQUIRED);  // even tho t2
-        t3.release(LockMgr::kExclusive, 2);
         t1.release(LockMgr::kShared, 1);
         tp.wakened();
         tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
