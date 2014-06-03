@@ -26,15 +26,29 @@
 *    it in the license file.
 */
 
+#include "mongo/util/concurrency/lock_mgr.h"
+
 #include <boost/thread/locks.hpp>
 #include <sstream>
+
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
-#include "mongo/util/concurrency/lock_mgr.h"
+#if 0
+using namespace boost::unique_lock;
 
-using namespace std;
+using namespace std::exception;
+using namespace std::list;
+using namespace std::map;
+using namespace std::multimap;
+using namespace std::set;
+using namespace std::string;
+using namespace std::vector;
+#else
 using namespace boost;
+using namespace std;
+#endif
+
 using namespace mongo;
 
 /*---------- LockStats functions ----------*/
@@ -83,7 +97,7 @@ LockMgr::LockRequest::~LockRequest() { }
 
 bool LockMgr::LockRequest::matches(const TxId& xid,
                                    const unsigned& mode,
-                                   const ResourceId& resId) {
+                                   const ResourceId& resId) const {
     return
         this->xid == xid &&
         this->mode == mode &&
@@ -93,7 +107,7 @@ bool LockMgr::LockRequest::matches(const TxId& xid,
 bool LockMgr::LockRequest::matches(const TxId& xid,
                                    const unsigned& mode,
                                    const ResourceId& container,
-                                   const ResourceId& resId) {
+                                   const ResourceId& resId) const {
     return
         this->xid == xid &&
         this->mode == mode &&
@@ -144,7 +158,7 @@ namespace {
                LockMgr::UPGRADE_CONFLICT == status ||
                LockMgr::POLICY_CONFLICT == status;
     }
-}
+} // namespace
 
 /*---------- LockMgr public functions (mutex guarded) ---------*/
 
@@ -169,7 +183,7 @@ LockMgr::LockMgr(const LockingPolicy& policy)
 
 LockMgr::~LockMgr() {
     unique_lock<boost::mutex> guard(_guard);
-    for(map<LockId,LockRequest*>::iterator locks = _locks.begin();
+    for (map<LockId, LockRequest*>::iterator locks = _locks.begin();
         locks != _locks.end(); ++locks) {
         delete locks->second;
     }
@@ -202,17 +216,22 @@ void LockMgr::setPolicy(const LockingPolicy& policy, Notifier* notifier) {
     // if moving away from {READERS,WRITERS}_ONLY, awaken requests that were pending
     //
     if (READERS_ONLY == oldPolicy || WRITERS_ONLY == oldPolicy) {
+
         // Awaken requests that were blocked on the old policy.
         // iterate over TxIds blocked on 0 (these are blocked on policy)
+
         map<TxId, multiset<TxId>*>::iterator policyWaiters = _waiters.find(0);
         if (policyWaiters != _waiters.end()) {
             for (multiset<TxId>::iterator nextWaiter = policyWaiters->second->begin();
                  nextWaiter != policyWaiters->second->end(); ++nextWaiter) {
+
                 // iterate over the locks acquired by the blocked transactions
                 for (set<TxId>::iterator nextLockId = _xaLocks[*nextWaiter]->begin();
                      nextLockId != _xaLocks[*nextWaiter]->end(); ++nextLockId) {
+
                     LockRequest* nextLock = _locks[*nextLockId];
                     if (isBlocked(nextLock) && shouldAwake(nextLock)) {
+
                         // each transaction can only be blocked by one request at time
                         // this one must be due to policy that's now changed
                         nextLock->lock.notify_one();
@@ -230,7 +249,7 @@ void LockMgr::setPolicy(const LockingPolicy& policy, Notifier* notifier) {
             : &LockMgr::LockStats::numActiveReads;
 
         if (0 < (_stats.*numBlockers)()) {
-            if (NULL != notifier) {
+            if (notifier) {
                 (*notifier)(0);
             }
             do {
@@ -465,7 +484,7 @@ void LockMgr::getStats(LockMgr::LockStats* out) {
     *out = _stats;
 }
 
-string LockMgr::toString() {
+string LockMgr::toString() const {
 //    unique_lock<boost::mutex> guard(_guard);
 #ifdef DONT_CARE_ABOUT_DEBUG_EVEN_WHEN_SHUTTING_DOWN
     // seems like we might want to allow toString for debug during shutdown?
@@ -1054,7 +1073,8 @@ LockMgr::ConflictStatus LockMgr::conflictExists(const TxId& requestor,
         }
 
         // no conflict if nextLock is blocked and we come before
-        if (isBlocked(nextLockRequest) && comesBeforeUsingPolicy(requestor, mode, nextLockRequest)) {
+        if (isBlocked(nextLockRequest) &&
+            comesBeforeUsingPolicy(requestor, mode, nextLockRequest)) {
             return NO_CONFLICT;
         }
 

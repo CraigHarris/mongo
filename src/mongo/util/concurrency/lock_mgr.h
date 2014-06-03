@@ -37,8 +37,6 @@
 #include <string>
 #include <vector>
 
-#include "mongo/db/structure/record_store.h"
-#include "mongo/util/log.h"
 #include "mongo/util/timer.h"
 
 /*
@@ -58,12 +56,11 @@ namespace mongo {
     typedef size_t ResourceId;  // identifies requested resource or container. 0 is reserved
 
     /**
-     * thrown primarily when deadlocks are detected, or when ::abort is called.
+     * thrown primarily when deadlocks are detected, or when LockMgr::abort is called.
      * also thrown when LockMgr requests are made during shutdown.
      */
     class AbortException : public std::exception {
     public:
-        AbortException() {}
         const char* what() const throw () { return "AbortException"; }
     };
 
@@ -141,11 +138,11 @@ namespace mongo {
             bool matches(const TxId& xid,
                          const unsigned& mode,
                          const ResourceId& parentId,
-                         const ResourceId& resId);
+                         const ResourceId& resId) const;
 
             bool matches(const TxId& xid,
                          const unsigned& mode,
-                         const ResourceId& resId);
+                         const ResourceId& resId) const;
 
             std::string toString() const;
 
@@ -180,16 +177,16 @@ namespace mongo {
          */
         class LockStats {
         public:
-        LockStats()
-            : _numRequests(0),
-                _numPreexistingRequests(0),
-                _numBlocks(0),
-                _numDeadlocks(0),
-                _numDowngrades(0),
-                _numUpgrades(0),
-                _numMillisBlocked(0),
-                _numCurrentActiveReadRequests(0),
-                _numCurrentActiveWriteRequests(0) { }
+            LockStats()
+                : _numRequests(0)
+                , _numPreexistingRequests(0)
+                , _numBlocks(0)
+                , _numDeadlocks(0)
+                , _numDowngrades(0)
+                , _numUpgrades(0)
+                , _numMillisBlocked(0)
+                , _numCurrentActiveReadRequests(0)
+                , _numCurrentActiveWriteRequests(0) { }
 
             LockStats(const LockStats& other);
             LockStats& operator=(const LockStats& other);
@@ -245,7 +242,7 @@ namespace mongo {
         virtual ~LockMgr();
 
         /**
-         * Change the current conflict policy.  For READERS/WRITERS_ONLY, this
+         * Change the current LockingPolicy.  For READERS/WRITERS_ONLY, this
          * call may block until all current writers/readers have released their locks.
          */
         virtual void setPolicy(const LockingPolicy& policy, Notifier* notifier = NULL);
@@ -274,18 +271,18 @@ namespace mongo {
 
 
         /**
-         * override default LockMgr's default LockingPolicy for a transaction
+         * override default LockMgr's default LockingPolicy for a transaction.
          *
          * positive priority moves transaction's resource requests toward the front
-         * of the queue, behind only those requests with higher priority
+         * of the queue, behind only those requests with higher priority.
          *
          * negative priority moves transaction's resource requests toward the back
          * of the queue, ahead of only those requests with lower priority.
          *
          * zero priority uses the LockMgr's default LockingPolicy
          */
-        void setTransactionPriority(const TxId& xid, int priority);
-        int  getTransactionPriority(const TxId& xid);
+        virtual void setTransactionPriority(const TxId& xid, int priority);
+        virtual int  getTransactionPriority(const TxId& xid);
 
 
         /**
@@ -337,7 +334,7 @@ namespace mongo {
         virtual int acquireOne(const TxId& requestor,
                                const unsigned& mode,
                                const ResourceId& container,
-                               const vector<ResourceId>& records,
+                               const std::vector<ResourceId>& records,
                                Notifier* notifier = NULL);
 
         /**
@@ -375,7 +372,7 @@ namespace mongo {
 
         // --- for testing and logging
 
-        std::string toString();
+        std::string toString() const;
 
         /**
          * test whether a TxId has locked a nested ResourceId in a mode
@@ -413,8 +410,8 @@ namespace mongo {
          * using the LockingPolicy.  Called by acquireInternal
          */
         void addLockToQueueUsingPolicy(LockRequest* lr,
-                                       list<LockId>* queue,
-                                       list<LockId>::iterator& position);
+                                       std::list<LockId>* queue,
+                                       std::list<LockId>::iterator& position);
 
         /**
          * set up for future deadlock detection, called from acquire
@@ -427,8 +424,8 @@ namespace mongo {
          * new lock request's set of waiters... for future deadlock detection
          */
         void addWaiters(LockRequest* blocker,
-                        list<LockId>::iterator nextLockId,
-                        list<LockId>::iterator lastLockId);
+                        std::list<LockId>::iterator nextLockId,
+                        std::list<LockId>::iterator lastLockId);
 
         /**
          * returns true if a newRequest should be honored before an oldRequest according
@@ -447,8 +444,8 @@ namespace mongo {
         ConflictStatus conflictExists(const TxId& requestor,
                                       const unsigned& mode,
                                       const ResourceId& resId,
-                                      list<LockId>* queue,
-                                      list<LockId>::iterator& position /* in/out */);
+                                      std::list<LockId>* queue,
+                                      std::list<LockId>::iterator& position /* in/out */);
 
         /**
          * looks for an existing LockRequest that matches the four input params
@@ -517,7 +514,7 @@ namespace mongo {
         Timer _timer;
 
         // owns the LockRequest*
-        std::map<LockId,LockRequest*> _locks;
+        std::map<LockId, LockRequest*> _locks;
 
         // maps containerId -> parentId
         std::map<ResourceId, ResourceId> _containerAncestry;
