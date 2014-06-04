@@ -83,7 +83,7 @@ namespace mongo {
 	unsigned mode;
 	ResourceId store;
 	ResourceId resId;
-        LockMgr::LockingPolicy policy;
+        LockMgr::Policy policy;
     };
 
     class TxResponseBuffer {
@@ -131,7 +131,7 @@ namespace mongo {
                   const unsigned& mode = 0,
                   const ResourceId& store = 0,
                   const ResourceId& resId = 0,
-                  const LockMgr::LockingPolicy& policy = LockMgr::FIRST_COME) {
+                  const LockMgr::Policy& policy = LockMgr::kPolicyFirstCome) {
 	    boost::unique_lock<boost::mutex> guard(_guard);
 	    while (_count == 10)
 		_full.wait(guard);
@@ -199,7 +199,7 @@ namespace mongo {
 	    ASSERT(ACQUIRED == rsp->rspCode);
 	}
 
-        void setPolicy(const LockMgr::LockingPolicy& policy, const TxRsp& rspCode) {
+        void setPolicy(const LockMgr::Policy& policy, const TxRsp& rspCode) {
             _cmd.post(POLICY, 0, 0, 0, 0, policy);
 	    TxResponse* rsp = _rsp.consume();
 	    ASSERT(rspCode == rsp->rspCode);
@@ -276,28 +276,28 @@ namespace mongo {
 
 	// release a lock on a record we haven't locked
 	status = lm.release(1, LockMgr::kShared, 0, 1);
-	ASSERT(LockMgr::CONTAINER_NOT_FOUND == status);
+	ASSERT(LockMgr::kLockContainerNotFound == status);
     
 
 	// release a lock on a record we haven't locked in a store we have locked
 	lm.acquire(1, LockMgr::kShared, 0, 2);
 	status = lm.release(1, LockMgr::kShared, 0, 1); // this is in error
-	ASSERT(LockMgr::RESOURCE_NOT_FOUND == status);
+	ASSERT(LockMgr::kLockResourceNotFound == status);
 	status = lm.release(1, LockMgr::kShared, 0, 2);
-	ASSERT(LockMgr::RELEASED == status);
+	ASSERT(LockMgr::kLockReleased == status);
 
 	// release a record we've locked in a different mode
 	lm.acquire(1, LockMgr::kShared, 0, 1);
 	status = lm.release(1, LockMgr::kExclusive, 0, 1); // this is in error
-	ASSERT(LockMgr::RESOURCE_NOT_FOUND_IN_MODE == status);
+	ASSERT(LockMgr::kLockModeNotFound == status);
 	status = lm.release(1, LockMgr::kShared, 0, 1);
-	ASSERT(LockMgr::RELEASED == status);
+	ASSERT(LockMgr::kLockReleased == status);
 
 	lm.acquire(1, LockMgr::kExclusive, 0, 1);
 	status = lm.release(1, LockMgr::kShared, 0, 1); // this is in error
-	ASSERT(LockMgr::RESOURCE_NOT_FOUND_IN_MODE == status);
+	ASSERT(LockMgr::kLockModeNotFound == status);
 	status = lm.release(1, LockMgr::kExclusive, 0, 1);
-	ASSERT(LockMgr::RELEASED == status);
+	ASSERT(LockMgr::kLockReleased == status);
 
 	// attempt to acquire on a transaction that aborted
 	try {
@@ -333,12 +333,12 @@ namespace mongo {
 
         // release the twice-acquired lock, once.  Still locked
         status = lm.release(t1, LockMgr::kShared, store, r1);
-	ASSERT(LockMgr::COUNT_DECREMENTED == status);
+	ASSERT(LockMgr::kLockCountDecremented == status);
         ASSERT(lm.isLocked(t1, LockMgr::kShared, store, r1));
 
         // after 2nd release, it's not locked
         status = lm.release(t1, LockMgr::kShared, store, r1);
-	ASSERT(LockMgr::RELEASED == status);
+	ASSERT(LockMgr::kLockReleased == status);
         ASSERT(!lm.isLocked(t1, LockMgr::kShared, store, r1));
 
 
@@ -448,7 +448,7 @@ namespace mongo {
     }
 
     TEST(LockMgrTest, TxDeadlock) {
-	LockMgr lm(LockMgr::READERS_FIRST);
+	LockMgr lm(LockMgr::kPolicyReadersFirst);
 	ClientTransaction t1(&lm, 1);
 	ClientTransaction t2(&lm, 2);
 
@@ -595,7 +595,7 @@ namespace mongo {
     }
 
     TEST(LockMgrTest, TxUpgrade) {
-	LockMgr lm(LockMgr::READERS_FIRST);
+	LockMgr lm(LockMgr::kPolicyReadersFirst);
 	ClientTransaction t1(&lm, 1);
 	ClientTransaction t2(&lm, 2);
 	ClientTransaction t3(&lm, 3);
@@ -693,10 +693,10 @@ namespace mongo {
 	}
 
 	{
-	    // Test READERS_FIRST policy
+	    // Test kPolicyReadersFirst
 	    // shared request are considered read requests
 
-	    LockMgr lm_readers(LockMgr::READERS_FIRST);
+	    LockMgr lm_readers(LockMgr::kPolicyReadersFirst);
 	    ClientTransaction t1(&lm_readers, 1);
 	    ClientTransaction t2(&lm_readers, 2);
 	    ClientTransaction t3(&lm_readers, 3);
@@ -722,7 +722,7 @@ namespace mongo {
 	    // Test OLDEST_TX_FIRST policy
 	    // for now, smaller TxIds are considered older
 
-	    LockMgr lm_oldest(LockMgr::OLDEST_TX_FIRST);
+	    LockMgr lm_oldest(LockMgr::kPolicyOldestTxFirst);
 	    ClientTransaction t1(&lm_oldest, 1);
 	    ClientTransaction t2(&lm_oldest, 2);
 	    ClientTransaction t3(&lm_oldest, 3);
@@ -758,7 +758,7 @@ namespace mongo {
 	}
 
 	{
-	    LockMgr lm_blockers(LockMgr::BIGGEST_BLOCKER_FIRST);
+	    LockMgr lm_blockers(LockMgr::kPolicyBlockersFirst);
 	    ClientTransaction t1(&lm_blockers, 1);
 	    ClientTransaction t2(&lm_blockers, 2);
 	    ClientTransaction t3(&lm_blockers, 3);
@@ -805,7 +805,7 @@ namespace mongo {
     }
 
     /*
-     * test READERS_ONLY and WRITERS_ONLY policies
+     * test kPolicyReadersOnly and kPolicyWritersOnly
      */
     TEST(LockMgrTest, TxOnlyPolicies) {
         LockMgr lm;
@@ -816,14 +816,14 @@ namespace mongo {
         ClientTransaction t5(&lm, 5);
         ClientTransaction tp(&lm, 6);
 
-        // show READERS_ONLY blocking writers, which
+        // show kPolicyReadersOnly blocking writers, which
         // awake when policy reverts
         t1.acquire(LockMgr::kShared, 1, ACQUIRED);
-        tp.setPolicy(LockMgr::READERS_ONLY, ACQUIRED);
+        tp.setPolicy(LockMgr::kPolicyReadersOnly, ACQUIRED);
         t3.acquire(LockMgr::kExclusive, 2, BLOCKED); // just policy conflict
         t4.acquire(LockMgr::kExclusive, 1, BLOCKED); // both policy & t1
         t5.acquire(LockMgr::kShared, 1, ACQUIRED);   // even tho t4
-        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        tp.setPolicy(LockMgr::kPolicyReadersFirst, ACQUIRED);
         t3.wakened();
         t3.release(LockMgr::kExclusive, 2);
         t1.release(LockMgr::kShared, 1);
@@ -834,13 +834,13 @@ namespace mongo {
         // show WRITERS_ONLY blocking readers, which
         // awake when policy reverts
         t1.acquire(LockMgr::kExclusive, 1, ACQUIRED);
-        tp.setPolicy(LockMgr::WRITERS_ONLY, ACQUIRED);
+        tp.setPolicy(LockMgr::kPolicyWritersOnly, ACQUIRED);
         t3.acquire(LockMgr::kShared, 2, BLOCKED);       // just policy conflict
         t4.acquire(LockMgr::kShared, 1, BLOCKED);       // both policy & t1
         t1.release(LockMgr::kExclusive, 1);
         t5.acquire(0x3/*LockMgr::kExclusive*/, 2, ACQUIRED);   // even tho t3
         t5.release(LockMgr::kExclusive, 2);
-        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        tp.setPolicy(LockMgr::kPolicyReadersFirst, ACQUIRED);
         t3.wakened();
         t3.release(LockMgr::kShared, 2);
         t4.wakened();
@@ -849,24 +849,24 @@ namespace mongo {
         // show READERS_ONLY blocked by existing writer
         // but still blocking new writers
         t1.acquire(LockMgr::kExclusive, 1, ACQUIRED);
-        tp.setPolicy(LockMgr::READERS_ONLY, BLOCKED);  // blocked by t1
+        tp.setPolicy(LockMgr::kPolicyReadersOnly, BLOCKED);  // blocked by t1
         t2.acquire(LockMgr::kExclusive, 2, BLOCKED);   // just policy conflict
         t3.acquire(LockMgr::kShared, 2, ACQUIRED);     // even tho t2
         t3.release(LockMgr::kShared, 2);
         t1.release(LockMgr::kExclusive, 1);
         tp.wakened();
-        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        tp.setPolicy(LockMgr::kPolicyReadersFirst, ACQUIRED);
         t2.wakened();
         t2.release(LockMgr::kExclusive, 2);
 
         // show WRITERS_ONLY blocked by existing reader
         // but still blocking new readers
         t1.acquire(LockMgr::kShared, 1, ACQUIRED);
-        tp.setPolicy(LockMgr::WRITERS_ONLY, BLOCKED);  // blocked by t1
+        tp.setPolicy(LockMgr::kPolicyWritersOnly, BLOCKED);  // blocked by t1
         t2.acquire(LockMgr::kShared, 2, BLOCKED);      // just policy conflict
         t1.release(LockMgr::kShared, 1);
         tp.wakened();
-        tp.setPolicy(LockMgr::READERS_FIRST, ACQUIRED);
+        tp.setPolicy(LockMgr::kPolicyReadersFirst, ACQUIRED);
         t2.wakened();
         t2.release(LockMgr::kShared, 2);
 
