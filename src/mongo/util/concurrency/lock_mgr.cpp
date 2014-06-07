@@ -36,20 +36,18 @@
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
-#if 0
-using namespace boost::unique_lock;
 
-using namespace std::exception;
-using namespace std::list;
-using namespace std::map;
-using namespace std::multimap;
-using namespace std::set;
-using namespace std::string;
-using namespace std::vector;
-#else
-using namespace boost;
-using namespace std;
-#endif
+using boost::unique_lock;
+
+using std::endl;
+using std::exception;
+using std::list;
+using std::map;
+using std::multiset;
+using std::set;
+using std::string;
+using std::stringstream;
+using std::vector;
 
 namespace mongo {
 
