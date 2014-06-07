@@ -195,13 +195,13 @@ namespace mongo {
         _timer.millisReset();
     }
 
-    LockManager::Policy LockManager::getPolicy() {
+    LockManager::Policy LockManager::getPolicy() const {
         unique_lock<boost::mutex> guard(_guard);
         _throwIfShuttingDown();
 	return _policy;
     }
 
-    TxId LockManager::getPolicySetter() {
+    TxId LockManager::getPolicySetter() const {
         unique_lock<boost::mutex> guard(_guard);
         _throwIfShuttingDown();
 	return _policySetter;
@@ -274,7 +274,7 @@ namespace mongo {
         _txPriorities[xid] = priority;
     }
 
-    int LockManager::getTransactionPriority(const TxId& xid) {
+    int LockManager::getTransactionPriority(const TxId& xid) const {
         unique_lock<boost::mutex> guard(_guard);
         _throwIfShuttingDown(xid);
         return _getTransactionPriorityInternal(xid);
@@ -489,7 +489,7 @@ namespace mongo {
         _abortInternal(goner);
     }
 
-    LockManager::LockStats LockManager::getStats() {
+    LockManager::LockStats LockManager::getStats() const {
         unique_lock<boost::mutex> guard(_guard);
         _throwIfShuttingDown();
         return _stats;
@@ -584,7 +584,7 @@ namespace mongo {
     bool LockManager::isLocked(const TxId& holder,
 			       const unsigned& mode,
 			       const ResourceId& store,
-			       const ResourceId& resId) {
+			       const ResourceId& resId) const {
         unique_lock<boost::mutex> guard(_guard);
         _throwIfShuttingDown(holder);
 
@@ -873,7 +873,7 @@ namespace mongo {
 
     bool LockManager::_comesBeforeUsingPolicy(const TxId& requestor,
 					      const unsigned& mode,
-					      const LockRequest* oldRequest) {
+					      const LockRequest* oldRequest) const {
 
         // handle special policies
         if (kPolicyReadersOnly == _policy && kShared == mode && oldRequest->isBlocked())
@@ -1090,22 +1090,22 @@ namespace mongo {
 						   const unsigned& mode,
 						   const ResourceId& store,
 						   const ResourceId& resId,
-						   LockId* outLockId) {
+						   LockId* outLockId) const {
 
         *outLockId = kReservedLockId; // set invalid;
 
         // get iterator for the resource container (store)
-        ContainerLocks::iterator storeLocks = _resourceLocks.find(store);
+        ContainerLocks::const_iterator storeLocks = _resourceLocks.find(store);
         if (storeLocks == _resourceLocks.end()) { return kLockContainerNotFound; }
 
         // get iterator for resId's locks
-        ResourceLocks::iterator resourceLocks = storeLocks->second.find(resId);
+        ResourceLocks::const_iterator resourceLocks = storeLocks->second.find(resId);
         if (resourceLocks == storeLocks->second.end()) { return kLockResourceNotFound; }
 
         // look for an existing lock request from holder in mode
-        for (list<LockId>::iterator nextLockId = resourceLocks->second->begin();
+        for (list<LockId>::const_iterator nextLockId = resourceLocks->second->begin();
              nextLockId != resourceLocks->second->end(); ++nextLockId) {
-            LockRequest* nextLockRequest = _locks[*nextLockId];
+            LockRequest* nextLockRequest = _locks.at(*nextLockId);
             if (nextLockRequest->xid == holder && nextLockRequest->mode == mode) {
                 *outLockId = nextLockRequest->lid;
                 return kLockFound;
@@ -1114,7 +1114,7 @@ namespace mongo {
         return kLockModeNotFound;
     }
 
-    int LockManager::_getTransactionPriorityInternal(const TxId& xid) {
+    int LockManager::_getTransactionPriorityInternal(const TxId& xid) const {
         map<TxId, int>::const_iterator txPriority = _txPriorities.find(xid);
         if (txPriority == _txPriorities.end()) {
             return 0;
@@ -1129,7 +1129,7 @@ namespace mongo {
     bool LockManager::_isAvailable(const TxId& requestor,
 				   const unsigned& mode,
 				   const ResourceId& store,
-				   const ResourceId& resId) {
+				   const ResourceId& resId) const {
 
         // check for exceptional policies
         if (kPolicyReadersOnly == _policy && isExclusive(mode))
@@ -1137,12 +1137,12 @@ namespace mongo {
         else if (kPolicyWritersOnly == _policy && isShared(mode))
             return false;
 
-        ContainerLocks::iterator storeLocks = _resourceLocks.find(store);
+        ContainerLocks::const_iterator storeLocks = _resourceLocks.find(store);
         if (storeLocks == _resourceLocks.end()) {
             return true; // no lock requests against this container, so must be available
         }
 
-        ResourceLocks::iterator resLocks = storeLocks->second.find(resId);
+        ResourceLocks::const_iterator resLocks = storeLocks->second.find(resId);
         if (resLocks == storeLocks->second.end()) {
             return true; // no lock requests against this ResourceId, so must be available
         }
@@ -1152,7 +1152,7 @@ namespace mongo {
         for (list<LockId>::const_iterator nextLockId = queue->begin();
              nextLockId != queue->end(); ++nextLockId) {
 
-            LockRequest* nextLockRequest = _locks[*nextLockId];
+            LockRequest* nextLockRequest = _locks.at(*nextLockId);
 
             if (nextLockRequest->matches(requestor, mode, store, resId)) {
                 // we're already have this lock, if we're asking, we can't be asleep

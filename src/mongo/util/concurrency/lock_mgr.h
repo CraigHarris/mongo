@@ -37,6 +37,7 @@
 #include <string>
 #include <vector>
 
+#include "mongo/platform/compiler.h"
 #include "mongo/util/timer.h"
 
 /*
@@ -241,13 +242,13 @@ namespace mongo {
 	 /**
 	  * Get the current policy
 	  */
-	 Policy getPolicy();
+	 Policy getPolicy() const;
 
 	 /**
 	  * Who set the current policy.  Of use when the Policy is ReadersOnly
 	  * and we want to find out who is blocking a writer.
 	  */
-	 TxId getPolicySetter();
+	 TxId getPolicySetter() const;
 
         /**
          * Initiate a shutdown, specifying a period of time to quiesce.
@@ -284,7 +285,7 @@ namespace mongo {
          * zero priority uses the LockManager's default Policy
          */
          void setTransactionPriority(const TxId& xid, int priority);
-         int  getTransactionPriority(const TxId& xid);
+         int  getTransactionPriority(const TxId& xid) const;
 
 
         /**
@@ -369,12 +370,12 @@ namespace mongo {
          * possibly called publicly to stop a long transaction
          * also used for testing
          */
-        void abort(const TxId& goner);
+        MONGO_COMPILER_NORETURN void abort(const TxId& goner);
 
         /**
          * returns a copy of the stats that exist at the time of the call
          */
-        LockStats getStats();
+        LockStats getStats() const;
 
 
 
@@ -388,7 +389,7 @@ namespace mongo {
          bool isLocked(const TxId& holder,
                               const unsigned& mode,
                               const ResourceId& parentId,
-                              const ResourceId& resId);
+                              const ResourceId& resId) const;
 
     protected:
 
@@ -467,7 +468,7 @@ namespace mongo {
          * releases all locks acquired by goner, notify's any
          * transactions that were waiting, then throws AbortException
          */
-        void _abortInternal(const TxId& goner);
+        MONGO_COMPILER_NORETURN void _abortInternal(const TxId& goner);
 
         /**
          * main workhorse for acquiring locks on resources, blocking
@@ -512,7 +513,7 @@ namespace mongo {
          */
         bool _comesBeforeUsingPolicy(const TxId& newReqXid,
                                      const unsigned& newReqMode,
-                                     const LockRequest* oldReq);
+                                     const LockRequest* oldReq) const;
 
         /**
          * determine whether a resource request would conflict with an existing lock
@@ -534,13 +535,13 @@ namespace mongo {
                              const unsigned& mode,
                              const ResourceId& parentId,
                              const ResourceId& resId,
-                             LockId* outLid);
+                             LockId* outLid) const;
 
         /**
          * called externally by getTransactionPriority
          * and internally by addLockToQueueUsingPolicy
          */
-        int _getTransactionPriorityInternal(const TxId& xid);
+        int _getTransactionPriorityInternal(const TxId& xid) const;
 
         /**
          * returns true if acquire would return without waiting
@@ -549,7 +550,7 @@ namespace mongo {
         bool _isAvailable(const TxId& requestor,
                           const unsigned& mode,
                           const ResourceId& parentId,
-                          const ResourceId& resId);
+                          const ResourceId& resId) const;
 
         /**
          * called by public ::release and internally by abort.
@@ -584,7 +585,7 @@ namespace mongo {
 	TxId _policySetter;
 
         // synchronizes access to the lock manager, which is shared across threads
-        boost::mutex _guard;
+        mutable boost::mutex _guard;
 
         // for blocking when setting kPolicyReadersOnly or kPolicyWritersOnly policy
         boost::condition_variable _policyLock;
