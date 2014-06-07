@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "mongo/platform/compiler.h"
+#include "mongo/platform/cstdint.h"
 #include "mongo/util/timer.h"
 
 /*
@@ -59,23 +60,23 @@ namespace mongo {
         TxId() : _xid(0) { }
         TxId(size_t xid) : _xid(xid) { }
         bool operator<(const TxId& other) const { return _xid < other._xid; }
-	bool operator==(const TxId& other) const { return _xid == other._xid; }
-	operator size_t() const { return _xid; }
-	
+        bool operator==(const TxId& other) const { return _xid == other._xid; }
+        operator size_t() const { return _xid; }
+        
     private:
-	size_t _xid;
+        size_t _xid;
     };
 
     class ResourceId {
     public:
         ResourceId() : _rid(0) { }
         ResourceId(size_t rid) : _rid(rid) { }
-	bool operator<(const ResourceId& other) const { return _rid < other._rid; }
-	bool operator==(const ResourceId& other) const { return _rid == other._rid; }
-	operator size_t() const { return _rid; }
+        bool operator<(const ResourceId& other) const { return _rid < other._rid; }
+        bool operator==(const ResourceId& other) const { return _rid == other._rid; }
+        operator size_t() const { return _rid; }
 
     private:
-	size_t _rid;
+        size_t _rid;
     };
 #else
     typedef size_t TxId;        // identifies requesting transaction. 0 is reserved
@@ -97,11 +98,11 @@ namespace mongo {
     class LockManager {
     public:
 
-	/**
-	 * thrown primarily when deadlocks are detected, or when LockManager::abort is called.
-	 * also thrown when LockManager requests are made during shutdown.
-	 */
-	class AbortException : public std::exception {
+        /**
+         * thrown primarily when deadlocks are detected, or when LockManager::abort is called.
+         * also thrown when LockManager requests are made during shutdown.
+         */
+        class AbortException : public std::exception {
         public:
             const char* what() const throw ();
         };
@@ -239,16 +240,16 @@ namespace mongo {
          */
          void setPolicy(const TxId& xid, const Policy& policy, Notifier* notifier = NULL);
 
-	 /**
-	  * Get the current policy
-	  */
-	 Policy getPolicy() const;
+         /**
+          * Get the current policy
+          */
+         Policy getPolicy() const;
 
-	 /**
-	  * Who set the current policy.  Of use when the Policy is ReadersOnly
-	  * and we want to find out who is blocking a writer.
-	  */
-	 TxId getPolicySetter() const;
+         /**
+          * Who set the current policy.  Of use when the Policy is ReadersOnly
+          * and we want to find out who is blocking a writer.
+          */
+         TxId getPolicySetter() const;
 
         /**
          * Initiate a shutdown, specifying a period of time to quiesce.
@@ -305,10 +306,10 @@ namespace mongo {
          * reflecting the maximum nesting depth.
          */
          LockId acquire(const TxId& requestor,
-                               const unsigned& mode,
-                               const ResourceId& container,
-                               const ResourceId& resId,
-                               Notifier* notifier = NULL);
+                        const uint32_t& mode,
+                        const ResourceId& container,
+                        const ResourceId& resId,
+                        Notifier* notifier = NULL);
 
         /**
          * acquire a hierarchical resource, locking it and its ancestors in
@@ -327,9 +328,9 @@ namespace mongo {
          * be used for any remaining ancestor locking.
          */
          LockId acquire(const TxId& requestor,
-                               const std::vector<unsigned>& modes,
-                               const std::vector<ResourceId>& resIdPath,
-                               Notifier* notifier = NULL);
+                        const std::vector<unsigned>& modes,
+                        const std::vector<ResourceId>& resIdPath,
+                        Notifier* notifier = NULL);
 
         /**
          * for bulk operations:
@@ -338,10 +339,10 @@ namespace mongo {
          * acquired ResourceId, or -1 if vector was empty
          */
          int acquireOne(const TxId& requestor,
-                               const unsigned& mode,
-                               const ResourceId& container,
-                               const std::vector<ResourceId>& records,
-                               Notifier* notifier = NULL);
+                        const uint32_t& mode,
+                        const ResourceId& container,
+                        const std::vector<ResourceId>& records,
+                        Notifier* notifier = NULL);
 
         /**
          * release a ResourceId in a container.
@@ -350,9 +351,9 @@ namespace mongo {
          * already known
          */
          LockStatus release(const TxId& holder,
-                                   const unsigned& mode,
-                                   const ResourceId& container,
-                                   const ResourceId& resId);
+                            const uint32_t& mode,
+                            const ResourceId& container,
+                            const ResourceId& resId);
 
         /**
          * releases the lock returned by acquire.  should perhaps replace above?
@@ -387,9 +388,9 @@ namespace mongo {
          * test whether a TxId has locked a nested ResourceId in a mode
          */
          bool isLocked(const TxId& holder,
-                              const unsigned& mode,
-                              const ResourceId& parentId,
-                              const ResourceId& resId) const;
+                       const unsigned& mode,
+                       const ResourceId& parentId,
+                       const ResourceId& resId) const;
 
     protected:
 
@@ -582,10 +583,10 @@ namespace mongo {
         // careful choices may not matter much.
         //
         Policy _policy;
-	TxId _policySetter;
+        TxId _policySetter;
 
         // synchronizes access to the lock manager, which is shared across threads
-        mutable boost::mutex _guard;
+        mutable boost::mutex _mutex;
 
         // for blocking when setting kPolicyReadersOnly or kPolicyWritersOnly policy
         boost::condition_variable _policyLock;
@@ -624,10 +625,10 @@ namespace mongo {
         // track transactions that have aborted, and don't accept further 
         // lock requests from them (which shouldn't happen anyway).
         //
-	// XXX: this set can grow without bound in the pathological case.  One way to deal
-	// with it is to track the oldest active transaction (which may or may not be the
-	// smallest TxId value), and flush older values from this set and ignore older values
-	// in new requests without consulting this set.
+        // XXX: this set can grow without bound in the pathological case.  One way to deal
+        // with it is to track the oldest active transaction (which may or may not be the
+        // smallest TxId value), and flush older values from this set and ignore older values
+        // in new requests without consulting this set.
         std::set<TxId> _abortedTxIds;
 
         // transaction priorities:
@@ -648,14 +649,13 @@ namespace mongo {
     public:
         ResourceLock(LockManager& lm,
                      const TxId& requestor,
-                     const unsigned& mode,
+                     const uint32_t& mode,
                      const ResourceId& parentId,
                      const ResourceId& resId,
                      LockManager::Notifier* notifier = NULL);
 
         ~ResourceLock();
     private:
-        // not owned here
         LockManager& _lm;
         LockManager::LockId _lid;
     };

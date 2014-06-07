@@ -158,7 +158,7 @@ namespace mongo {
     boost::mutex LockManager::_getSingletonMutex;
 
     LockManager& LockManager::getSingleton() {
-        unique_lock<boost::mutex> guard(_getSingletonMutex);
+        unique_lock<boost::mutex> lk(_getSingletonMutex);
         if (NULL == _singleton) {
             _singleton = new LockManager();
         }
@@ -167,12 +167,12 @@ namespace mongo {
 
     LockManager::LockManager(const Policy& policy)
         : _policy(policy),
-          _guard(),
+          _mutex(),
           _shuttingDown(false),
           _millisToQuiesce(-1) { }
 
     LockManager::~LockManager() {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         for (map<LockId, LockRequest*>::iterator locks = _locks.begin();
              locks != _locks.end(); ++locks) {
             delete locks->second;
@@ -180,7 +180,7 @@ namespace mongo {
     }
 
     void LockManager::shutdown(const unsigned& millisToQuiesce) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
 
 #ifdef DONT_ALLOW_CHANGE_TO_QUIESCE_PERIOD
         // XXX not sure whether we want to allow multiple shutdowns
@@ -196,19 +196,19 @@ namespace mongo {
     }
 
     LockManager::Policy LockManager::getPolicy() const {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown();
 	return _policy;
     }
 
     TxId LockManager::getPolicySetter() const {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown();
 	return _policySetter;
     }
 
     void LockManager::setPolicy(const TxId& xid, const Policy& policy, Notifier* notifier) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown();
         if (policy == _policy) return;
 
@@ -256,36 +256,36 @@ namespace mongo {
                     (*notifier)(kReservedTxId);
                 }
                 do {
-                    _policyLock.wait(guard);
+                    _policyLock.wait(lk);
                 } while (0 < (_stats.*numBlockers)());
             }
         }
     }
 
     void LockManager::setParent(const ResourceId& container, const ResourceId& parent) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown();
         _containerAncestry[container] = parent;
     }
 
     void LockManager::setTransactionPriority(const TxId& xid, int priority) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(xid);
         _txPriorities[xid] = priority;
     }
 
     int LockManager::getTransactionPriority(const TxId& xid) const {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(xid);
         return _getTransactionPriorityInternal(xid);
     }
 
     LockManager::LockId LockManager::acquire(const TxId& requestor,
-					     const unsigned& mode,
+					     const uint32_t& mode,
 					     const ResourceId& container,
 					     const ResourceId& resId,
 					     Notifier* notifier) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(requestor);
 
         // don't accept requests from aborted transactions
@@ -317,7 +317,7 @@ namespace mongo {
             ResourceId container = (kReservedLockId==parentLock)
 		? kReservedResourceId : _locks[parentLock]->resId;
             LockId res = _acquireInternal(requestor, nextMode, container,
-                                         lineage[nextAncestorIdx], notifier, guard);
+                                         lineage[nextAncestorIdx], notifier, lk);
             _locks[res]->parentLid = parentLock;
             parentLock = res;
             if (0 == nextAncestorIdx--) break;
@@ -330,7 +330,7 @@ namespace mongo {
 					     const std::vector<unsigned>& modes,
 					     const std::vector<ResourceId>& lineage,
 					     Notifier* notifier) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(requestor);
 
         // don't accept requests from aborted transactions
@@ -352,7 +352,7 @@ namespace mongo {
 		? kReservedResourceId : _locks[parentLock]->resId;
 
             LockId res = _acquireInternal(requestor, nextMode, container,
-                                         lineage[nextAncestorIdx], notifier, guard);
+                                         lineage[nextAncestorIdx], notifier, lk);
             _locks[res]->parentLid = parentLock;
             parentLock = res;
             if (0 == nextAncestorIdx--) break;
@@ -362,12 +362,12 @@ namespace mongo {
     }
 
     int LockManager::acquireOne(const TxId& requestor,
-				const unsigned& mode,
+				const uint32_t& mode,
 				const ResourceId& container,
 				const vector<ResourceId>& resources,
 				Notifier* notifier) {
 
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(requestor);
 
         if (resources.empty()) { return -1; }
@@ -399,7 +399,7 @@ namespace mongo {
             ResourceId container = (kReservedLockId==parentLock)
 		? kReservedResourceId : _locks[parentLock]->resId;
             LockId res = _acquireInternal(requestor, nextMode, container,
-                                         lineage[nextAncestorIdx], notifier, guard);
+                                         lineage[nextAncestorIdx], notifier, lk);
             _locks[res]->parentLid = parentLock;
             parentLock = res;
             if (0 == nextAncestorIdx--) break;
@@ -409,20 +409,20 @@ namespace mongo {
         // acquire the first available recordId
         for (unsigned ix=0; ix < resources.size(); ix++) {
             if (_isAvailable(requestor, mode, container, resources[ix])) {
-                _acquireInternal(requestor, mode, container, resources[ix], notifier, guard);
+                _acquireInternal(requestor, mode, container, resources[ix], notifier, lk);
                 isShared(mode) ? _stats.incActiveReads() : _stats.incActiveWrites();
                 return ix;
             }
         }
 
         // sigh. none of the records are currently available. wait on the first.
-        _acquireInternal(requestor, mode, container, resources[0], notifier, guard);
+        _acquireInternal(requestor, mode, container, resources[0], notifier, lk);
         isShared(mode) ? _stats.incActiveReads() : _stats.incActiveWrites();
         return 0;
     }
 
     LockManager::LockStatus LockManager::releaseLock(const LockId& lid) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
 
         LockMap::iterator it = _locks.find(lid);
         if (it != _locks.end()) {
@@ -438,10 +438,10 @@ namespace mongo {
     }
 
     LockManager::LockStatus LockManager::release(const TxId& holder,
-						 const unsigned& mode,
+						 const uint32_t& mode,
 						 const ResourceId& store,
 						 const ResourceId& resId) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(holder);
 
         LockId lid;
@@ -461,7 +461,7 @@ namespace mongo {
      * release all resource acquired by a transaction, returning the count
      */
     size_t LockManager::release(const TxId& holder) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(holder);
 
         TxLockMap::iterator lockIdsHeld = _xaLocks.find(holder);
@@ -484,19 +484,19 @@ namespace mongo {
     }
 
     void LockManager::abort(const TxId& goner) {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(goner);
         _abortInternal(goner);
     }
 
     LockManager::LockStats LockManager::getStats() const {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown();
         return _stats;
     }
 
     string LockManager::toString() const {
-//     unique_lock<boost::mutex> guard(_guard);
+//     unique_lock<boost::mutex> lk(_mutex);
 #ifdef DONT_CARE_ABOUT_DEBUG_EVEN_WHEN_SHUTTING_DOWN
         // seems like we might want to allow toString for debug during shutdown?
         _throwIfShuttingDown();
@@ -582,10 +582,10 @@ namespace mongo {
     }
 
     bool LockManager::isLocked(const TxId& holder,
-			       const unsigned& mode,
+			       const uint32_t& mode,
 			       const ResourceId& store,
 			       const ResourceId& resId) const {
-        unique_lock<boost::mutex> guard(_guard);
+        unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown(holder);
 
         LockId unused;
@@ -634,7 +634,7 @@ namespace mongo {
     }
 
     LockManager::LockId LockManager::_acquireInternal(const TxId& requestor,
-						      const unsigned& mode,
+						      const uint32_t& mode,
 						      const ResourceId& store,
 						      const ResourceId& resId,
 						      Notifier* sleepNotifier,
@@ -1298,7 +1298,7 @@ namespace mongo {
    
     ResourceLock::ResourceLock(LockManager& lm,
                                const TxId& requestor,
-                               const unsigned& mode,
+                               const uint32_t& mode,
                                const ResourceId& store,
                                const ResourceId& resId,
                                LockManager::Notifier* notifier)
