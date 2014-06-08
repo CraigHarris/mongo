@@ -146,6 +146,7 @@ namespace mongo {
             kLockFound,             // found a matching lock request
             kLockReleased,          // released requested lock
             kLockCountDecremented,  // decremented lock count, but didn't release
+	    kLockIdNotFound,        // no locks with this id
             kLockContainerNotFound, // no locks on the container for the resource
             kLockResourceNotFound,  // no locks on the resource
             kLockModeNotFound       // locks on the resource, but not of the specified mode
@@ -193,6 +194,13 @@ namespace mongo {
             void incUpgrades() { _numUpgrades++; }
             void incTimeBlocked(size_t numMillis ) { _numMillisBlocked += numMillis; }
 
+	    void incStatsForMode(const unsigned mode) {
+		0==mode ? incActiveReads() : incActiveWrites();
+	    }
+	    void decStatsForMode(const unsigned mode) {
+		0==mode ? decActiveReads() : decActiveWrites();
+	    }
+
             void incActiveReads() { _numCurrentActiveReadRequests++; }
             void decActiveReads() { _numCurrentActiveReadRequests--; }
             void incActiveWrites() { _numCurrentActiveWriteRequests++; }
@@ -221,15 +229,13 @@ namespace mongo {
             unsigned long _numCurrentActiveWriteRequests;
         };
 
-        /**
-         * Singleton-factory - retrieves a common instance of LockManager.
-         */
-        static LockManager& getSingleton();
+
+    public:
 
         /**
          * It's possibly useful to allow multiple LockManagers for non-overlapping sets
-         * of resources, so the constructor is left public.  But most callers should
-         * use the singleton factory method above to get the one and only LockManager
+         * of resources, so the constructor is left public.  Eventually we may want
+	 * to enforce a singleton pattern.
          */
         explicit LockManager(const Policy& policy=kPolicyFirstCome);
          ~LockManager();
@@ -298,12 +304,10 @@ namespace mongo {
          * the locking mode parameter is a bit vector.  The least significant bit
          * describes whether the resource is locked shared (0) or exclusive (1).
          * the next least significant bit describes the lock mode of the container,
-         * and so on for the container's ancestors.
+         * and so on for the container's ancestors.  
          *
          * can throw AbortException
          *
-         * XXX: if we stick with this API the type of mode should be fixed-width
-         * reflecting the maximum nesting depth.
          */
          LockId acquire(const TxId& requestor,
                         const uint32_t& mode,
@@ -324,8 +328,8 @@ namespace mongo {
          *
          * the first mode specifies whether to acquire the resource shared or
          * exclusive, the next mode in modes is for the resource's container,
-         * and so on.  If modes is shorter thant resIdPath, the last mode will
-         * be used for any remaining ancestor locking.
+         * and so on.  If modes is shorter thant resIdPath, remaining ancestors
+         * are acquired for shared use.
          */
          LockId acquire(const TxId& requestor,
                         const std::vector<unsigned>& modes,
@@ -404,16 +408,16 @@ namespace mongo {
                         const ResourceId& container,
                         const ResourceId& resId);
 
-             ~LockRequest();
+            ~LockRequest();
 
-            bool matches(const TxId& xid,
-                         const unsigned& mode,
-                         const ResourceId& parentId,
-                         const ResourceId& resId) const;
+	    bool matchesResourceAndContainer(const TxId& xid,
+					     const unsigned& mode,
+					     const ResourceId& parentId,
+					     const ResourceId& resId) const;
 
-            bool matches(const TxId& xid,
-                         const unsigned& mode,
-                         const ResourceId& resId) const;
+            bool matchesResourceInQueue(const TxId& xid,
+					const unsigned& mode,
+					const ResourceId& resId) const;
 
             bool isBlocked() const;
             bool shouldAwake();
@@ -448,10 +452,6 @@ namespace mongo {
                                        
             // used for waiting and waking
             boost::condition_variable lock;
-
-        private:
-            // unique id for each request. zero not used
-            static LockId nextLid;
         };
         
         typedef std::multiset<TxId> Waiters;
@@ -567,11 +567,6 @@ namespace mongo {
 
 
     private:
-
-        // Singleton instance
-        // XXX: move to anon namespace in the source file
-        static boost::mutex _getSingletonMutex;
-        static LockManager* _singleton;
 
         // The Policy controls which requests should be honored first.  This is
         // used to guide the position of a request in a list of requests waiting for

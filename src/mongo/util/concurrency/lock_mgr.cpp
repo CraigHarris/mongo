@@ -80,6 +80,9 @@ namespace mongo {
                 LockManager::kResourceUpgradeConflict == status ||
                 LockManager::kResourcePolicyConflict == status;
         }
+
+	// unique id for each LockRequest. zero is reserved
+	static LockManager::LockId nextLid = 1; 
     } // namespace
 
     /*---------- AbortException functions ----------*/
@@ -88,7 +91,6 @@ namespace mongo {
 
     /*---------- LockRequest functions ----------*/
 
-    LockManager::LockId LockManager::LockRequest::nextLid = 1; // a zero parentLid means no parent
 
     LockManager::LockRequest::LockRequest(const TxId& xid,
 					  const unsigned& mode,
@@ -106,19 +108,19 @@ namespace mongo {
 
     LockManager::LockRequest::~LockRequest() { }
 
-    bool LockManager::LockRequest::matches(const TxId& xid,
-					   const unsigned& mode,
-					   const ResourceId& resId) const {
+    bool LockManager::LockRequest::matchesResourceInQueue(const TxId& xid,
+							  const unsigned& mode,
+							  const ResourceId& resId) const {
         return
             this->xid == xid &&
             this->mode == mode &&
             this->resId == resId;
     }
 
-    bool LockManager::LockRequest::matches(const TxId& xid,
-					   const unsigned& mode,
-					   const ResourceId& container,
-					   const ResourceId& resId) const {
+    bool LockManager::LockRequest::matchesResourceAndContainer(const TxId& xid,
+							       const unsigned& mode,
+							       const ResourceId& container,
+							       const ResourceId& resId) const {
         return
             this->xid == xid &&
             this->mode == mode &&
@@ -152,16 +154,6 @@ namespace mongo {
 
     unsigned const LockManager::kShared;
     unsigned const LockManager::kExclusive;
-    LockManager* LockManager::_singleton = NULL;
-    boost::mutex LockManager::_getSingletonMutex;
-
-    LockManager& LockManager::getSingleton() {
-        unique_lock<boost::mutex> lk(_getSingletonMutex);
-        if (NULL == _singleton) {
-            _singleton = new LockManager();
-        }
-        return *_singleton;
-    }
 
     LockManager::LockManager(const Policy& policy)
         : _policy(policy),
@@ -308,10 +300,7 @@ namespace mongo {
         LockId parentLock = kReservedLockId;
         size_t nextAncestorIdx = lineage.size()-1;
         while (true) {
-            // if modes is shorter than lineage, extend with kShared
-            unsigned nextMode = kShared;
-            if (isExclusive(mode,nextAncestorIdx))
-                nextMode = kExclusive;
+            unsigned nextMode = (isExclusive(mode,nextAncestorIdx)) ? kExclusive : kShared;
             ResourceId container = (kReservedLockId==parentLock)
 		? kReservedResourceId : _locks[parentLock]->resId;
             LockId res = _acquireInternal(requestor, nextMode, container,
@@ -320,7 +309,7 @@ namespace mongo {
             parentLock = res;
             if (0 == nextAncestorIdx--) break;
         }
-        isShared(mode) ? _stats.incActiveReads() : _stats.incActiveWrites();
+	_stats.incStatsForMode(mode);
         return parentLock;
     }
 
@@ -355,7 +344,7 @@ namespace mongo {
             parentLock = res;
             if (0 == nextAncestorIdx--) break;
         }
-        isShared(modes[0]) ? _stats.incActiveReads() : _stats.incActiveWrites();
+	_stats.incStatsForMode(modes[0]);
         return parentLock;
     }
 
@@ -390,10 +379,7 @@ namespace mongo {
         LockId parentLock = kReservedLockId;
         size_t nextAncestorIdx = lineage.size()-1;
         while (true) {
-            // if modes is shorter than lineage, extend with kShared
-            unsigned nextMode = kShared;
-            if (nextAncestorIdx < sizeof(unsigned) && isExclusive(mode, nextAncestorIdx+1))
-                nextMode = kExclusive;
+            unsigned nextMode = (isExclusive(mode,nextAncestorIdx)) ? kExclusive : kShared;
             ResourceId container = (kReservedLockId==parentLock)
 		? kReservedResourceId : _locks[parentLock]->resId;
             LockId res = _acquireInternal(requestor, nextMode, container,
@@ -408,14 +394,14 @@ namespace mongo {
         for (unsigned ix=0; ix < resources.size(); ix++) {
             if (_isAvailable(requestor, mode, container, resources[ix])) {
                 _acquireInternal(requestor, mode, container, resources[ix], notifier, lk);
-                isShared(mode) ? _stats.incActiveReads() : _stats.incActiveWrites();
+		_stats.incStatsForMode(mode);
                 return ix;
             }
         }
 
         // sigh. none of the records are currently available. wait on the first.
         _acquireInternal(requestor, mode, container, resources[0], notifier, lk);
-        isShared(mode) ? _stats.incActiveReads() : _stats.incActiveWrites();
+	_stats.incStatsForMode(mode);
         return 0;
     }
 
@@ -426,7 +412,7 @@ namespace mongo {
         if (it != _locks.end()) {
             LockRequest* theLock = it->second;
             _throwIfShuttingDown(theLock->xid);
-            isShared(theLock->mode) ? _stats.decActiveReads() : _stats.decActiveWrites();
+	    _stats.decStatsForMode(theLock->mode);
             if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
                 (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
                 _policyLock.notify_one();
@@ -447,7 +433,7 @@ namespace mongo {
         if (kLockFound != status) {
             return status; // error, resource wasn't acquired in this mode by holder
         }
-        isShared(_locks[lid]->mode) ? _stats.decActiveReads() : _stats.decActiveWrites();
+	_stats.decStatsForMode(_locks[lid]->mode);
         if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
             _policyLock.notify_one();
@@ -469,8 +455,7 @@ namespace mongo {
              nextLockId != lockIdsHeld->second->end(); ++nextLockId) {
             _releaseInternal(*nextLockId);
 
-            isShared(_locks[*nextLockId]->mode)
-                ? _stats.decActiveReads() : _stats.decActiveWrites();
+            _stats.decStatsForMode(_locks[*nextLockId]->mode);
 
             if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
                 (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
@@ -960,7 +945,7 @@ namespace mongo {
 
             LockRequest* nextLockRequest = _locks[*nextLockId];
 
-            if (nextLockRequest->matches(requestor, mode, resId)) {
+            if (nextLockRequest->matchesResourceInQueue(requestor, mode, resId)) {
                 // if we're already on the queue, there's no conflict
                 return kResourceAcquired;
             }
@@ -1152,7 +1137,7 @@ namespace mongo {
 
             LockRequest* nextLockRequest = _locks.at(*nextLockId);
 
-            if (nextLockRequest->matches(requestor, mode, store, resId)) {
+            if (nextLockRequest->matchesResourceAndContainer(requestor, mode, store, resId)) {
                 // we're already have this lock, if we're asking, we can't be asleep
                 invariant(! nextLockRequest->isBlocked());
                 return true;
@@ -1174,9 +1159,11 @@ namespace mongo {
 
     LockManager::LockStatus LockManager::_releaseInternal(const LockId& lid) {
 
-        if (kReservedLockId == lid) { return kLockContainerNotFound; }
+        if (kReservedLockId == lid) { return kLockIdNotFound; }
 
         LockRequest* lr = _locks[lid];
+	if (NULL == lr) { return kLockIdNotFound; }
+
         const TxId holder = lr->xid;
         const unsigned mode = lr->mode;
         const ResourceId resId = lr->resId;
