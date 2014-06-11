@@ -1091,7 +1091,11 @@ namespace mongo {
         }
 
         ///////////////////////////////////////////
+#if 0
         Lock::DBWrite writeLock(txn->lockState(), nsString.ns());
+#else
+        Lock::DBRead readLock(txn->lockState(), nsString.ns());
+#endif
         ///////////////////////////////////////////
 
         if ( !checkShardVersion( &shardingState, *updateItem.getRequest(), result ) )

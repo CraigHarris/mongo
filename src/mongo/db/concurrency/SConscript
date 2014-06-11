@@ -1,0 +1,25 @@
+# -*- mode: python -*-
+
+Import("env")
+
+env.Library(
+    target='lock_mgr',
+    source=[
+        'lock_mgr.cpp',
+    ],
+    LIBDEPS=[
+        '$BUILD_DIR/mongo/base/base',
+        '$BUILD_DIR/third_party/shim_boost',
+        '$BUILD_DIR/mongo/foundation'
+    ],
+)
+
+env.CppUnitTest(
+    target = 'lock_mgr_test',
+    source = [
+        'lock_mgr_test.cpp',
+    ],
+    LIBDEPS = [
+        'lock_mgr'
+    ]
+)

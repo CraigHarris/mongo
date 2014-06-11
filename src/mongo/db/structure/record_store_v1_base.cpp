@@ -31,6 +31,7 @@
 #include "mongo/db/structure/record_store_v1_base.h"
 
 #include "mongo/db/catalog/collection.h"
+#include "mongo/db/concurrency/lock_mgr.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/extent.h"
 #include "mongo/db/storage/extent_manager.h"
@@ -39,6 +40,10 @@
 #include "mongo/util/progress_meter.h"
 #include "mongo/util/timer.h"
 #include "mongo/util/touch_pages.h"
+
+// hack for lock_mgr
+#include "mongo/db/client.h"
+#include "mongo/db/curop.h"
 
 namespace mongo {
 
@@ -101,6 +106,7 @@ namespace mongo {
     }
 
     Record* RecordStoreV1Base::recordFor( const DiskLoc& loc ) const {
+        SharedResourceLock lk((size_t)cc().curop()->opNum(), *(size_t*)&loc);
         return _extentManager->recordForV1( loc );
     }
 
@@ -124,6 +130,7 @@ namespace mongo {
 
 
     DiskLoc RecordStoreV1Base::getNextRecord( const DiskLoc& loc ) const {
+        SharedResourceLock lk((size_t)cc().curop()->opNum(), *(size_t*)&loc);
         DiskLoc next = getNextRecordInExtent( loc );
         if ( !next.isNull() )
             return next;
@@ -325,9 +332,11 @@ namespace mongo {
 
     Status RecordStoreV1Base::updateWithDamages( OperationContext* txn,
                                                  const DiskLoc& loc,
-                                                 const char* damangeSource,
+                                                 const char* damageSource,
                                                  const mutablebson::DamageVector& damages ) {
         _paddingFits( txn );
+
+        ExclusiveResourceLock lk((size_t)txn->getCurOp()->opNum(), *(size_t*)&loc);
 
         Record* rec = recordFor( loc );
         char* root = rec->data();
@@ -336,7 +345,7 @@ namespace mongo {
         mutablebson::DamageVector::const_iterator where = damages.begin();
         const mutablebson::DamageVector::const_iterator end = damages.end();
         for( ; where != end; ++where ) {
-            const char* sourcePtr = damangeSource + where->sourceOffset;
+            const char* sourcePtr = damageSource + where->sourceOffset;
             void* targetPtr = txn->recoveryUnit()->writingPtr(root + where->targetOffset, where->size);
             std::memcpy(targetPtr, sourcePtr, where->size);
         }
