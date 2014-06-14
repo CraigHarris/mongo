@@ -59,8 +59,8 @@ namespace mongo {
 	 * Given a 'hierarchical' resource (e.g. document in collection in database)
 	 * return true if the resource is reqeuested for exclusive access at a given level.
 	 * In the example above, level 0 for document, level 1 for collection, level 2 for DB
-	 * and level 3 for the system as a whole.  
-	 * 
+	 * and level 3 for the system as a whole.
+	 *
 	 * mode is a bit vector, level is the index.
 	 */
         bool isExclusive(unsigned mode, const unsigned level=0) {
@@ -81,8 +81,8 @@ namespace mongo {
                 LockManager::kResourcePolicyConflict == status;
         }
 
-	// unique id for each LockRequest. zero is reserved
-	static LockManager::LockId nextLid = 1; 
+        // unique id for each LockRequest. zero is reserved
+        static LockManager::LockId nextLid = 1;
     } // namespace
 
     /*---------- AbortException functions ----------*/
@@ -404,14 +404,14 @@ namespace mongo {
         for (unsigned ix=0; ix < resources.size(); ix++) {
             if (_isAvailable(requestor, mode, container, resources[ix])) {
                 _acquireInternal(requestor, mode, container, resources[ix], notifier, lk);
-		_stats.incStatsForMode(mode);
+                _stats.incStatsForMode(mode);
                 return ix;
             }
         }
 
         // sigh. none of the records are currently available. wait on the first.
         _acquireInternal(requestor, mode, container, resources[0], notifier, lk);
-	_stats.incStatsForMode(mode);
+        _stats.incStatsForMode(mode);
         return 0;
     }
 
@@ -422,7 +422,7 @@ namespace mongo {
         if (it != _locks.end()) {
             LockRequest* theLock = it->second;
             _throwIfShuttingDown(theLock->xid);
-	    _stats.decStatsForMode(theLock->mode);
+            _stats.decStatsForMode(theLock->mode);
             if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
                 (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
                 _policyLock.notify_one();
@@ -443,7 +443,7 @@ namespace mongo {
         if (kLockFound != status) {
             return status; // error, resource wasn't acquired in this mode by holder
         }
-	_stats.decStatsForMode(_locks[lid]->mode);
+        _stats.decStatsForMode(_locks[lid]->mode);
         if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
             _policyLock.notify_one();
@@ -703,11 +703,15 @@ namespace mongo {
                 if (nextBlockingRequest->xid == requestor) {continue;}
                 if (isCompatible(_locks[*nextBlocker]->mode, lr->mode)) {continue;}
                 _addWaiter(_locks[*nextBlocker]->xid, requestor);
-                ++lr->sleepCount;            
+				if (lr->sleepCount > 1)
+					log() << "implied sleepCount: " << lr->sleepCount << endl;
+				++lr->sleepCount;
             }
             if (kResourcePolicyConflict == resourceStatus) {
                 // to facilitate waking once the policy reverts, add requestor to system's waiters
                 _addWaiter(kReservedTxId, requestor);
+				if (lr->sleepCount > 1)
+					log() << "sleepCount: " << lr->sleepCount << endl;
                 ++lr->sleepCount;
             }
 
@@ -739,7 +743,7 @@ namespace mongo {
             queue->insert(position, lr->lid);
             return;
         }
-    
+
         // use lock request's transaction's priority if specified
         int txPriority = _getTransactionPriorityInternal(lr->xid);
         if (txPriority > 0) {
@@ -783,7 +787,7 @@ namespace mongo {
 
                     // set remaining incompatible requests as lr's waiters
                     _addWaiters(lr, position, queue->end());
-                
+
                     return;
                 }
             }
@@ -858,6 +862,8 @@ namespace mongo {
         for (; nextLockId != lastLockId; ++nextLockId) {
             LockRequest* nextLockRequest = _locks[*nextLockId];
             if (! isCompatible(blocker->mode, nextLockRequest->mode)) {
+				if (nextLockRequest->sleepCount > 0)
+					log() << "_addWaiters: " << nextLockRequest->sleepCount << endl;
                 nextLockRequest->sleepCount++;
                 _addWaiter(blocker->xid, nextLockRequest->xid);
             }
@@ -1022,7 +1028,7 @@ namespace mongo {
                 return kResourceAvailable;
             }
             else if (firstConflict != queue->end()) {
-                // restore first conflict position 
+                // restore first conflict position
                 nextLockId = firstConflict;
                 nextLockRequest = _locks[*nextLockId];
             }
@@ -1174,7 +1180,7 @@ namespace mongo {
         if (kReservedLockId == lid) { return kLockIdNotFound; }
 
         LockRequest* lr = _locks[lid];
-	if (NULL == lr) { return kLockIdNotFound; }
+        if (NULL == lr) { return kLockIdNotFound; }
 
         const TxId holder = lr->xid;
         const unsigned mode = lr->mode;
@@ -1199,7 +1205,7 @@ namespace mongo {
 
         bool foundLock = false;
         bool foundResource = false;
-    
+
         list<LockId>* queue = recordLocks->second;
         list<LockId>::iterator nextLockId = queue->begin();
 
@@ -1257,8 +1263,8 @@ namespace mongo {
 
             Waiters::iterator holdersWaiters = _waiters[holder]->find(nextSleeper->xid);
             if (holdersWaiters != _waiters[holder]->end()) {
-                // every sleeper should be among holders waiters, but a previous sleeper might have 
-                // had the nextSleeper as a dependent as well, in which case nextSleeer was removed 
+                // every sleeper should be among holders waiters, but a previous sleeper might have
+                // had the nextSleeper as a dependent as well, in which case nextSleeper was removed
                 // previously, hence the test for finding nextSleeper among holder's waiters
                 //
                 _waiters[holder]->erase(holdersWaiters);
@@ -1276,7 +1282,7 @@ namespace mongo {
                 nextSleeper->lock.notify_one();
             }
         }
-        
+
         // call recursively to release ancestors' locks
         _releaseInternal(parentLid);
 
@@ -1286,13 +1292,13 @@ namespace mongo {
     void LockManager::_throwIfShuttingDown(const TxId& xid) const {
         if (_shuttingDown && (_timer.millis() >= _millisToQuiesce ||
                               _xaLocks.find(xid) == _xaLocks.end())) {
-         
+
             throw AbortException(); // XXX should this be something else? ShutdownException?
         }
     }
 
     /*---------- ResourceLock functions ----------*/
-   
+
     ResourceLock::ResourceLock(LockManager& lm,
                                const TxId& requestor,
                                const uint32_t& mode,

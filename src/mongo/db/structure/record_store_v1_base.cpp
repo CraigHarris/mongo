@@ -106,7 +106,6 @@ namespace mongo {
     }
 
     Record* RecordStoreV1Base::recordFor( const DiskLoc& loc ) const {
-        SharedResourceLock lk((size_t)cc().curop()->opNum(), *(size_t*)&loc);
         return _extentManager->recordForV1( loc );
     }
 
@@ -130,7 +129,6 @@ namespace mongo {
 
 
     DiskLoc RecordStoreV1Base::getNextRecord( const DiskLoc& loc ) const {
-        SharedResourceLock lk((size_t)cc().curop()->opNum(), *(size_t*)&loc);
         DiskLoc next = getNextRecordInExtent( loc );
         if ( !next.isNull() )
             return next;

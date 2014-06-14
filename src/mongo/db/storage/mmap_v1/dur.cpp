@@ -481,9 +481,10 @@ namespace mongo {
             static unsigned long long lastRemap;
 
             LOG(4) << "journal REMAPPRIVATEVIEW" << endl;
-
+#if 0
             verify( Lock::isW() );
             verify( !commitJob.hasWritten() );
+#endif
 
             // we want to remap all private views about every 2 seconds.  there could be ~1000 views so
             // we do a little each pass; beyond the remap time, more significantly, there will be copy on write

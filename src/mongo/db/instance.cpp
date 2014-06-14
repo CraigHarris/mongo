@@ -602,9 +602,11 @@ namespace mongo {
         request.setLifecycle(&updateLifecycle);
         UpdateExecutor executor(&request, &op.debug());
         uassertStatusOK(executor.prepare());
-
+#if 0
         Lock::DBWrite lk(txn->lockState(), ns.ns());
-
+#else
+		Lock::DBRead lk(txn->lockState(), ns.ns());
+#endif
         // if this ever moves to outside of lock, need to adjust check
         // Client::Context::_finishInit
         if ( ! broadcast && handlePossibleShardedMessage( m , 0 ) )
