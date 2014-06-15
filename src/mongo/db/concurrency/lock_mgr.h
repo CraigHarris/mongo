@@ -80,7 +80,7 @@ namespace mongo {
     };
 #else
     typedef size_t TxId;        // identifies requesting transaction. 0 is reserved
-    typedef size_t ResourceId;  // identifies requested resource or container. 0 is reserved
+    typedef size_t ResourceId;  // identifies requested resource. 0 is reserved
 #endif
     static const TxId kReservedTxId = 0;
     static const ResourceId kReservedResourceId = 0;
@@ -146,7 +146,6 @@ namespace mongo {
             kLockReleased,          // released requested lock
             kLockCountDecremented,  // decremented lock count, but didn't release
             kLockIdNotFound,        // no locks with this id
-            kLockContainerNotFound, // no locks on the container for the resource
             kLockResourceNotFound,  // no locks on the resource
             kLockModeNotFound       // locks on the resource, but not of the specified mode
         };
@@ -177,6 +176,7 @@ namespace mongo {
             LockStats()
                 : _numRequests(0)
                 , _numPreexistingRequests(0)
+				, _numSameRequests(0)
                 , _numBlocks(0)
                 , _numDeadlocks(0)
                 , _numDowngrades(0)
@@ -187,6 +187,7 @@ namespace mongo {
 
             void incRequests() { _numRequests++; }
             void incPreexisting() { _numPreexistingRequests++; }
+            void incSame() { _numSameRequests++; }
             void incBlocks() { _numBlocks++; }
             void incDeadlocks() { _numDeadlocks++; }
             void incDowngrades() { _numDowngrades++; }
@@ -210,15 +211,19 @@ namespace mongo {
 
             size_t getNumRequests() const { return _numRequests; }
             size_t getNumPreexistingRequests() const { return _numPreexistingRequests; }
+            size_t getNumSameRequests() const { return _numSameRequests; }
             size_t getNumBlocks() const { return _numBlocks; }
             size_t getNumDeadlocks() const { return _numDeadlocks; }
             size_t getNumDowngrades() const { return _numDowngrades; }
             size_t getNumUpgrades() const { return _numUpgrades; }
             size_t getNumMillisBlocked() const { return _numMillisBlocked; }
 
+			std::string toString() const;
+
         private:
             size_t _numRequests;
             size_t _numPreexistingRequests;
+            size_t _numSameRequests;
             size_t _numBlocks;
             size_t _numDeadlocks;
             size_t _numDowngrades;
@@ -271,18 +276,6 @@ namespace mongo {
          */
         void shutdown(const unsigned& millisToQuiesce = 1000);
 
-        /**
-         * For multi-level resource container hierarchies, the caller can optionally
-         * identify the ancestry relationships.  For example, if database resources
-         * contained collection resources, which contained document resources, this
-         * API could be used to relate a specific collection to its parent database.
-         *
-         * Once this is done, a call to acquire a document in a particular collection
-         * could also be used to lock the containing database, without supplying the
-         * resourceId for the database.
-         */
-        void setParent(const ResourceId& container, const ResourceId& parent);
-
 
         /**
          * override default LockManager's default Policy for a transaction.
@@ -300,44 +293,12 @@ namespace mongo {
 
 
         /**
-         * acquire a resource nested in a container, in a mode.
-         *
-         * If setParent was previously called to relate container to its parent,
-         * then both the container and its identified ancestors will be locked.
-         *
-         * the locking mode parameter is a bit vector.  The least significant bit
-         * describes whether the resource is locked shared (0) or exclusive (1).
-         * the next least significant bit describes the lock mode of the container,
-         * and so on for the container's ancestors.
-         *
+         * acquire a resource in a mode.
          * can throw AbortException
-         *
          */
         LockId acquire(const TxId& requestor,
                        const uint32_t& mode,
-                       const ResourceId& container,
                        const ResourceId& resId,
-                       Notifier* notifier = NULL);
-
-        /**
-         * acquire a hierarchical resource, locking it and its ancestors in
-         * specified modes.
-         *
-         * functionally equivalent to the previous call, without needing calls
-         * to setParent of ancestral containers.
-         *
-         * the first ResourceId in the resIdPath is the resource requested,
-         * the next ResourceId in the resIdPath is the resource's container,
-         * followed by the container's parent, etc.
-         *
-         * the first mode specifies whether to acquire the resource shared or
-         * exclusive, the next mode in modes is for the resource's container,
-         * and so on.  If modes is shorter thant resIdPath, remaining ancestors
-         * are acquired for shared use.
-         */
-        LockId acquire(const TxId& requestor,
-                       const std::vector<unsigned>& modes,
-                       const std::vector<ResourceId>& resIdPath,
                        Notifier* notifier = NULL);
 
         /**
@@ -348,19 +309,15 @@ namespace mongo {
          */
         int acquireOne(const TxId& requestor,
                        const uint32_t& mode,
-                       const ResourceId& container,
                        const std::vector<ResourceId>& records,
                        Notifier* notifier = NULL);
 
         /**
-         * release a ResourceId in a container.
+         * release a ResourceId.
          * The mode here is just the mode that applies to the resId
-         * The modes that applied to the ancestor containers are
-         * already known
          */
         LockStatus release(const TxId& holder,
                            const uint32_t& mode,
-                           const ResourceId& container,
                            const ResourceId& resId);
 
         /**
@@ -393,11 +350,10 @@ namespace mongo {
         std::string toString() const;
 
         /**
-         * test whether a TxId has locked a nested ResourceId in a mode
+         * test whether a TxId has locked a ResourceId in a mode
          */
         bool isLocked(const TxId& holder,
                       const unsigned& mode,
-                      const ResourceId& parentId,
                       const ResourceId& resId) const;
 
     protected:
@@ -409,19 +365,13 @@ namespace mongo {
         public:
             LockRequest(const TxId& xid,
                         const unsigned& mode,
-                        const ResourceId& container,
                         const ResourceId& resId);
 
             ~LockRequest();
 
-	    bool matchesResourceAndContainer(const TxId& xid,
-					     const unsigned& mode,
-					     const ResourceId& parentId,
-					     const ResourceId& resId) const;
-
-            bool matchesResourceInQueue(const TxId& xid,
-					const unsigned& mode,
-					const ResourceId& resId) const;
+            bool matches(const TxId& xid,
+                         const unsigned& mode,
+                         const ResourceId& resId) const;
 
             bool isBlocked() const;
             bool shouldAwake();
@@ -431,17 +381,11 @@ namespace mongo {
             // uniquely identifies a LockRequest
             const LockId lid;
 
-            // identifies the parent of this resource, or zero
-            LockId parentLid;
-
             // transaction that made this request
             const TxId xid;
 
             // shared or exclusive use
             const unsigned mode;
-
-            // container of the resource, or 0 if top-level
-            const ResourceId container;
 
             // resource requested
             const ResourceId resId;
@@ -459,12 +403,11 @@ namespace mongo {
         };
 
         typedef std::multiset<TxId> Waiters;
-        typedef std::map<TxId, Waiters*> WaitersMap;
-        typedef std::map<TxId, std::set<LockId>*> TxLocks;
-        typedef std::map<ResourceId, std::list<LockId>*> ResourceLocks;
-        typedef std::map<ResourceId, ResourceLocks > ContainerLocks;
+        typedef std::map<TxId, Waiters > WaitersMap;
+        typedef std::map<TxId, std::set<LockId> > TxLocks;
+        typedef std::map<ResourceId, std::list<LockId> > ResourceLocks;
         typedef std::map<LockId, LockRequest*> LockMap;
-        typedef std::map<TxId, std::set<LockId>*> TxLockMap;
+        typedef std::map<TxId, std::set<LockId> > TxLockMap;
 
     private: // alphabetical
 
@@ -484,7 +427,6 @@ namespace mongo {
          */
         LockId _acquireInternal(const TxId& requestor,
                                 const unsigned& mode,
-                                const ResourceId& containerLid,
                                 const ResourceId& resId,
                                 Notifier* notifier,
                                 boost::unique_lock<boost::mutex>& guard);
@@ -494,7 +436,7 @@ namespace mongo {
          * using the Policy.  Called by acquireInternal
          */
         void _addLockToQueueUsingPolicy(LockRequest* lr,
-                                        std::list<LockId>* queue,
+                                        std::list<LockId>& queue,
                                         std::list<LockId>::iterator& position);
 
         /**
@@ -528,7 +470,7 @@ namespace mongo {
         ResourceStatus _conflictExists(const TxId& requestor,
                                        const unsigned& mode,
                                        const ResourceId& resId,
-                                       std::list<LockId>* queue,
+                                       std::list<LockId>& queue,
                                        std::list<LockId>::iterator& position /* in/out */);
 
         /**
@@ -538,7 +480,6 @@ namespace mongo {
          */
         LockStatus _findLock(const TxId& requestor,
                              const unsigned& mode,
-                             const ResourceId& parentId,
                              const ResourceId& resId,
                              LockId* outLid) const;
 
@@ -554,7 +495,6 @@ namespace mongo {
          */
         bool _isAvailable(const TxId& requestor,
                           const unsigned& mode,
-                          const ResourceId& parentId,
                           const ResourceId& resId) const;
 
         /**
@@ -578,7 +518,7 @@ namespace mongo {
 
         // The Policy controls which requests should be honored first.  This is
         // used to guide the position of a request in a list of requests waiting for
-        // a resource or resource container.
+        // a resource.
         //
         // XXX At some point, we may want this to also guide the decision of which
         // transaction to abort in case of deadlock.  For now, the transaction whose
@@ -602,11 +542,7 @@ namespace mongo {
         // owns the LockRequest*
         std::map<LockId, LockRequest*> _locks;
 
-        // maps containerId -> parentId
-        std::map<ResourceId, ResourceId> _containerAncestry;
-
         // Lists of lock requests associated with a resource,
-        // map lowest-level-container to (map of resourceId to list of lock requests)
         //
         // The lock-request lists have two sections.  Some number (at least one) of requests
         // at the front of a list are "active".  All remaining lock requests are blocked by
@@ -614,16 +550,16 @@ namespace mongo {
         // of lock request in the waiting section is determined by the LockPolicty.
         // The order of lock request in the active/front portion of the list is irrelevant.
         //
-        std::map<ResourceId, std::map<ResourceId, std::list<LockId>*> > _resourceLocks;
+        std::map<ResourceId, std::list<LockId> > _resourceLocks;
 
         // For cleanup and abort processing, references all LockRequests made by a transaction
-        std::map<TxId, std::set<LockId>*> _xaLocks;
+        std::map<TxId, std::set<LockId> > _xaLocks;
 
         // For deadlock detection: the set of transactions blocked by another transaction
         // NB: a transaction can only be directly waiting for a single resource/transaction
         // but to facilitate deadlock detection, if T1 is waiting for T2 and T2 is waiting
         // for T3, then both T1 and T2 are listed as T3's waiters.
-        std::map<TxId, std::multiset<TxId>*> _waiters;
+        std::map<TxId, std::multiset<TxId> > _waiters;
 
         // track transactions that have aborted, and don't accept further
         // lock requests from them (which shouldn't happen anyway).
@@ -653,7 +589,6 @@ namespace mongo {
         ResourceLock(LockManager& lm,
                      const TxId& requestor,
                      const uint32_t& mode,
-                     const ResourceId& parentId,
                      const ResourceId& resId,
                      LockManager::Notifier* notifier = NULL);
 
@@ -669,13 +604,11 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            LockManager::kShared,
-                           kReservedResourceId,
                            (size_t)resource) { }
         SharedResourceLock(const TxId& requestor, size_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            LockManager::kShared,
-                           kReservedResourceId,
                            resource) { }
     };
 
@@ -685,13 +618,11 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            LockManager::kExclusive,
-                           kReservedResourceId,
                            (size_t)resource) { }
         ExclusiveResourceLock(const TxId& requestor, size_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            LockManager::kExclusive,
-                           kReservedResourceId,
                            resource) { }
     };
 } // namespace mongo
