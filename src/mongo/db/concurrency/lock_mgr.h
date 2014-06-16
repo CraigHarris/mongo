@@ -402,7 +402,7 @@ namespace mongo {
             boost::condition_variable lock;
         };
 
-        typedef std::multiset<TxId> Waiters;
+        typedef std::set<TxId> Waiters;
         typedef std::map<TxId, Waiters > WaitersMap;
         typedef std::map<TxId, std::set<LockId> > TxLocks;
         typedef std::map<ResourceId, std::list<LockId> > ResourceLocks;
@@ -559,7 +559,7 @@ namespace mongo {
         // NB: a transaction can only be directly waiting for a single resource/transaction
         // but to facilitate deadlock detection, if T1 is waiting for T2 and T2 is waiting
         // for T3, then both T1 and T2 are listed as T3's waiters.
-        std::map<TxId, std::multiset<TxId> > _waiters;
+        std::map<TxId, std::set<TxId> > _waiters;
 
         // track transactions that have aborted, and don't accept further
         // lock requests from them (which shouldn't happen anyway).

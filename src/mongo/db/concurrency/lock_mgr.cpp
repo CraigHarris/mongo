@@ -43,7 +43,6 @@ using std::endl;
 using std::exception;
 using std::list;
 using std::map;
-using std::multiset;
 using std::set;
 using std::string;
 using std::stringstream;
@@ -455,11 +454,11 @@ namespace mongo {
 		result << "}" << endl;
 
         result << "\t_waiters:" << endl;
-        for (map<TxId, multiset<TxId> >::const_iterator txWaiters = _waiters.begin();
+        for (map<TxId, set<TxId> >::const_iterator txWaiters = _waiters.begin();
              txWaiters != _waiters.end(); ++txWaiters) {
             bool firstTime=true;
             result << "\t\t" << txWaiters->first << ": {";
-            for (multiset<TxId>::const_iterator nextWaiter = txWaiters->second.begin();
+            for (set<TxId>::const_iterator nextWaiter = txWaiters->second.begin();
                  nextWaiter != txWaiters->second.end(); ++nextWaiter) {
                 if (firstTime) firstTime=false;
                 else result << ", ";
@@ -537,21 +536,21 @@ namespace mongo {
                                                       const ResourceId& resId,
                                                       Notifier* sleepNotifier,
                                                       unique_lock<boost::mutex>& guard) {
-
-		static unsigned long funCount = 0;
-		if (0 == ++funCount % 1000) {
-			log() << _stats.toString();
-		}
-
+#if 0
+        static unsigned long funCount = 0;
+        if (0 == ++funCount % 10000) {
+            log() << _stats.toString();
+        }
+#endif
         list<LockId>& queue = _resourceLocks[resId];
 		if (!queue.empty()) { _stats.incPreexisting(); }
-        list<LockId>::iterator insertPosition = queue.begin();
+        list<LockId>::iterator conflictPosition = queue.begin();
         ResourceStatus resourceStatus = _conflictExists(requestor, mode, resId,
-                                                        queue, insertPosition);
+                                                        queue, conflictPosition);
         if (kResourceAcquired == resourceStatus) {
 			_stats.incSame();
-            ++_locks[*insertPosition]->count;
-            return *insertPosition;
+            ++_locks[*conflictPosition]->count;
+            return *conflictPosition;
         }
 
         // create the lock request and add to TxId's set of lock requests
@@ -564,33 +563,34 @@ namespace mongo {
 		_xaLocks[requestor].insert(lr->lid);
 
         if (kResourceAvailable == resourceStatus) {
-            queue.insert(insertPosition, lr->lid);
-            _addWaiters(lr, insertPosition, queue.end());
+            queue.insert(conflictPosition, lr->lid);
+            _addWaiters(lr, conflictPosition, queue.end());
             return lr->lid;
         }
 
-		verify(insertPosition != queue.end());
-		++insertPosition;
+        // some type of conflict, insert after confictPosition
 
-        // some type of conflict
+        verify(conflictPosition != queue.end());
+        ++conflictPosition;
+
         if (kResourceUpgradeConflict == resourceStatus) {
-            queue.insert(insertPosition, lr->lid);
+            queue.insert(conflictPosition, lr->lid);
         }
         else {
-            _addLockToQueueUsingPolicy(lr, queue, insertPosition);
+            _addLockToQueueUsingPolicy(lr, queue, conflictPosition);
         }
-
-		if (isExclusive(mode)) {
-			for (list<LockId>::iterator followers = insertPosition;
-				 followers != queue.end(); ++followers) {
-				LockRequest* nextLockRequest = _locks[*followers];
-				if (nextLockRequest->xid == requestor) continue;
-				verify(nextLockRequest->isBlocked());
-			}
-		}
-
-		// set remaining incompatible requests as lr's waiters
-		_addWaiters(lr, insertPosition, queue.end());
+#if 0
+        if (isExclusive(mode)) {
+            for (list<LockId>::iterator followers = conflictPosition;
+                 followers != queue.end(); ++followers) {
+                LockRequest* nextLockRequest = _locks[*followers];
+                if (nextLockRequest->xid == requestor) continue;
+                verify(nextLockRequest->isBlocked());
+            }
+        }
+#endif
+        // set remaining incompatible requests as lr's waiters
+        _addWaiters(lr, conflictPosition, queue.end());
 
 
         // call the sleep notification function once
@@ -606,13 +606,13 @@ namespace mongo {
             // set up for future deadlock detection add requestor to blockers' waiters
             //
             for (list<LockId>::iterator nextBlocker = queue.begin();
-                 nextBlocker != insertPosition; ++nextBlocker) {
+                 nextBlocker != conflictPosition; ++nextBlocker) {
                 LockRequest* nextBlockingRequest = _locks[*nextBlocker];
                 if (nextBlockingRequest->lid == lr->lid) {break;}
                 if (nextBlockingRequest->xid == requestor) {continue;}
                 if (isCompatible(_locks[*nextBlocker]->mode, lr->mode)) {continue;}
                 _addWaiter(_locks[*nextBlocker]->xid, requestor);
-				++lr->sleepCount;
+                ++lr->sleepCount;
             }
             if (kResourcePolicyConflict == resourceStatus) {
                 // to facilitate waking once the policy reverts, add requestor to system's waiters
@@ -627,8 +627,8 @@ namespace mongo {
                 _stats.incTimeBlocked(timer.millis());
             }
 
-            insertPosition = queue.begin();
-            resourceStatus = _conflictExists(lr->xid, lr->mode, lr->resId, queue, insertPosition);
+            conflictPosition = queue.begin();
+            resourceStatus = _conflictExists(lr->xid, lr->mode, lr->resId, queue, conflictPosition);
         } while (hasConflict(resourceStatus));
 
         return lr->lid;
@@ -675,10 +675,12 @@ namespace mongo {
         switch (_policy) {
         case kPolicyFirstCome:
             queue.push_back(lr->lid);
+	    position = queue.end();
             return;
         case kPolicyReadersFirst:
             if (isExclusive(lr->mode)) {
                 queue.push_back(lr->lid);
+                position = queue.end();
                 return;
             }
             for (; position != queue.end(); ++position) {
@@ -722,6 +724,7 @@ namespace mongo {
         }
 
         queue.push_back(lr->lid);
+	position = queue.end();
     }
 
     void LockManager::_addWaiter(const TxId& blocker, const TxId& requestor) {
@@ -743,9 +746,10 @@ namespace mongo {
         for (; nextLockId != lastLockId; ++nextLockId) {
             LockRequest* nextLockRequest = _locks[*nextLockId];
             if (! isCompatible(blocker->mode, nextLockRequest->mode)) {
-				if (nextLockRequest->sleepCount > 0)
-                _addWaiter(blocker->xid, nextLockRequest->xid);
-                ++nextLockRequest->sleepCount;
+                if (nextLockRequest->sleepCount > 0) {
+		    _addWaiter(blocker->xid, nextLockRequest->xid);
+		    ++nextLockRequest->sleepCount;
+		}
             }
         }
     }
@@ -773,13 +777,13 @@ namespace mongo {
         case kPolicyOldestTxFirst:
             return requestor < oldRequest->xid;
         case kPolicyBlockersFirst: {
-            map<TxId,multiset<TxId> >::const_iterator newReqWaiters = _waiters.find(requestor);
+            map<TxId,set<TxId> >::const_iterator newReqWaiters = _waiters.find(requestor);
             if (newReqWaiters == _waiters.end()) {
                 // new request isn't blocking anything, can't come first
                 return false;
             }
 
-            map<TxId,multiset<TxId> >::const_iterator oldReqWaiters = _waiters.find(oldRequest->xid);
+            map<TxId,set<TxId> >::const_iterator oldReqWaiters = _waiters.find(oldRequest->xid);
             if (oldReqWaiters == _waiters.end()) {
                 // old request isn't blocking anything, so new request comes first
                 return true;
@@ -1139,14 +1143,19 @@ namespace mongo {
                 nextSleeper->lock.notify_one();
             }
         }
+#if 0
+        // verify stuff
+        if (_xaLocks[holder].empty()) {
+            for (WaitersMap::iterator dependencies = _waiters.begin();
+                 dependencies != _waiters.end(); ++dependencies) {
+                verify( dependencies->second.find(holder) == dependencies->second.end());
+            }
+        }
 
-		if (_xaLocks[holder].empty()) {
-			for (WaitersMap::iterator dependencies = _waiters.begin();
-				 dependencies != _waiters.end(); ++dependencies) {
-				verify( dependencies->second.find(holder) == dependencies->second.end());
-			}
-		}
-
+	if (!queue.empty()) {
+	    verify(! _locks[queue.front()]->isBlocked());
+	}
+#endif
         return kLockReleased;
     }
 
