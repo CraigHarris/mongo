@@ -146,8 +146,10 @@ namespace mongo {
 
     class Transaction {
     public:
-        Transaction(unsigned txId, int priority=0);
+        Transaction(unsigned txId=0, int priority=0);
         ~Transaction();
+
+        Transaction* setTxIdOnce(unsigned txId);
 
         /**
          * override default LockManager's default Policy for a transaction.
@@ -160,8 +162,8 @@ namespace mongo {
          *
          * zero priority uses the LockManager's default Policy
          */
-        int getPriority() const;
         void setPriority(int newPriority);
+        int getPriority() const;
 
         void removeLock(LockRequest* lr);
 
@@ -176,6 +178,7 @@ namespace mongo {
         void _addWaiter(Transaction* waiter);
 
         enum TxState {
+            kInvalid,
             kActive,
             kCompleted
         };
@@ -451,17 +454,7 @@ namespace mongo {
          */
         LockStats getStats() const;
 
-        void removeFromResourceQueue(LockRequest* lr) {
-            if (lr->nextOnResource) {
-                lr->nextOnResource->prevOnResource = lr->prevOnResource;
-            }
-            if (lr->prevOnResource) {
-                lr->prevOnResource->nextOnResource = lr->nextOnResource;
-            }
-            else {
-                _resourceLocks[lr->resSlice][lr->resId] = lr->nextOnResource;
-            }
-        }
+        void removeFromResourceQueue(LockRequest* lr);
 
         void insert(LockRequest* position, LockRequest* lr);
         void push_back(LockRequest* lr);

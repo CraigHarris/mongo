@@ -121,11 +121,18 @@ namespace mongo {
         : _txId(txId)
         , _txSlice(LockManager::partitionTransaction(txId))
         , _priority(priority)
-        , _state(Transaction::kActive)
+        , _state((0==txId) ? kInvalid : kActive)
         , _locks(NULL) { }
 
     Transaction::~Transaction() {
         
+    }
+
+    Transaction* Transaction::setTxIdOnce(unsigned txId) {
+        if (0 == _txId) {
+            _txId = txId;
+        }
+        return this;
     }
 
     bool Transaction::operator<(const Transaction& other) {
@@ -145,6 +152,8 @@ namespace mongo {
         else {
             _locks = lr->nextOfTransaction;
         }
+        lr->nextOfTransaction = NULL;
+        lr->prevOfTransaction = NULL;
         if (lr->heapAllocated) delete lr;
     }
 
@@ -624,6 +633,20 @@ namespace mongo {
         nextLock->append(lr);
     }
 
+    void LockManager::removeFromResourceQueue(LockRequest* lr) {
+        if (lr->nextOnResource) {
+            lr->nextOnResource->prevOnResource = lr->prevOnResource;
+        }
+        if (lr->prevOnResource) {
+            lr->prevOnResource->nextOnResource = lr->nextOnResource;
+        }
+        else {
+            _resourceLocks[lr->resSlice][lr->resId] = lr->nextOnResource;
+        }
+        lr->nextOnResource = NULL;
+        lr->prevOnResource = NULL;
+    }
+
     /*---------- LockManager private functions (alphabetical) ----------*/
 
     /*
@@ -732,7 +755,7 @@ namespace mongo {
                 if (nextBlocker == lr) {break;}
                 if (nextBlocker->requestor == lr->requestor) {continue;}
                 if (isCompatible(nextBlocker->mode, lr->mode)) {continue;}
-                _addWaiter(nextBlocker->requestor, lr->requestor);
+                nextBlocker->requestor->_addWaiter(lr->requestor);
                 ++lr->sleepCount;
             }
             if (kResourcePolicyConflict == resourceStatus) {

@@ -334,7 +334,7 @@ namespace mongo {
                                                  const mutablebson::DamageVector& damages ) {
         _paddingFits( txn );
 
-        ExclusiveResourceLock lk((size_t)txn->getCurOp()->opNum(), *(size_t*)&loc);
+        ExclusiveResourceLock lk(txn->getTransaction(), *(size_t*)&loc);
 
         Record* rec = recordFor( loc );
         char* root = rec->data();
