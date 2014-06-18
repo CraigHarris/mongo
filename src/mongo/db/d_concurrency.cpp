@@ -546,8 +546,8 @@ namespace mongo {
         lockDB( _what );
     }
 
-    Lock::DBRead::DBRead(LockState* lockState, const StringData& ns)
-        : ScopedLock(lockState, 'r' ), _what(ns.toString()), _nested(false) {
+    Lock::DBRead::DBRead(LockState* lockState, const StringData& ns, bool writeIntent)
+        : ScopedLock(lockState, writeIntent?'w':'r' ), _what(ns.toString()), _nested(false) {
         lockDB( _what );
     }
 

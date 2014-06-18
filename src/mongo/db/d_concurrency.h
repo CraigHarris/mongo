@@ -213,7 +213,7 @@ namespace mongo {
             void _relock();
 
         public:
-            DBRead(LockState* lockState, const StringData& dbOrNs);
+            DBRead(LockState* lockState, const StringData& dbOrNs, bool writeIntent=false);
             virtual ~DBRead();
 
         private:
