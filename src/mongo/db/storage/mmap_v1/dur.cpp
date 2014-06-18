@@ -858,7 +858,7 @@ namespace mongo {
                 return;
 
 #ifdef DBReadHackDoesntWork
-            uassert(0, "Can't have locking with journaling yet", !isDocumentLockingEnabled() );
+            uassert(18507, "Can't have locking with journaling yet", !isDocumentLockingEnabled() );
 #endif
 
 #if defined(_DURABLEDEFAULTON)
