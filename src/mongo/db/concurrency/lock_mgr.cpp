@@ -387,9 +387,9 @@ namespace mongo {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown();
         }
-        unique_lock<boost::mutex> lkRes(_resourceMutexes[lr->resSlice]);
+        unique_lock<boost::mutex> lk(_resourceMutexes[lr->resSlice]);
 
-        _acquireInternal(lr, notifier, lkRes);
+        _acquireInternal(lr, notifier, lk);
     }
 #if 0
     void LockManager::acquire(Transaction* requestor,
@@ -452,7 +452,7 @@ namespace mongo {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown(lr->requestor);
         }
-        unique_lock<boost::mutex> lkRes(_resourceMutexes[lr->resSlice]);
+        unique_lock<boost::mutex> lk(_resourceMutexes[lr->resSlice]);
 
         return _releaseInternal(lr);
     }
@@ -706,7 +706,7 @@ namespace mongo {
         }
 
         // add lock request to requesting transaction's list
-	lr->requestor->addLock(lr);
+        lr->requestor->addLock(lr);
 
         if (kResourceAvailable == resourceStatus) {
             if (!conflictPosition)
@@ -782,7 +782,7 @@ namespace mongo {
                 _stats[lr->resSlice].incTimeBlocked(timer.millis());
             }
 
-            conflictPosition = queue;
+            queue = conflictPosition = _resourceLocks[lr->resSlice][lr->resId];
             resourceStatus = _conflictExists(lr->requestor, lr->mode, lr->resId, lr->resSlice, queue, conflictPosition);
         } while (hasConflict(resourceStatus));
     }
@@ -798,7 +798,7 @@ namespace mongo {
                                        Notifier* sleepNotifier,
                                        unique_lock<boost::mutex>& guard) {
         LockRequest* queue = _resourceLocks[resSlice][resId];
-        if (!queue.empty()) { _stats[txSlice].incPreexisting(); }
+        if (NULL == queue) { _stats[txSlice].incPreexisting(); }
         list<LockId>::iterator conflictPosition = queue.begin();
         ResourceStatus resourceStatus = _conflictExists(requestor, mode, resId,
                                                         queue, conflictPosition);
