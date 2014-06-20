@@ -166,6 +166,7 @@ namespace mongo {
         int getPriority() const;
 
         void removeLock(LockRequest* lr);
+	void addLock(LockRequest* lr);
 
         bool operator<(const Transaction& other);
 

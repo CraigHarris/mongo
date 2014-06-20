@@ -62,12 +62,12 @@ namespace mongo {
 	 *
 	 * mode is a bit vector, level is the index.
 	 */
-        bool isExclusive(unsigned mode, const unsigned level=0) {
-            return 0 != (mode & (0x1 << level));
+        bool isExclusive(unsigned mode) {
+            return 0 != mode;
         }
 
-        bool isShared(unsigned mode, const unsigned level=0) {
-            return 0 == (mode & (0x1 << level));
+        bool isShared(unsigned mode) {
+            return 0 == mode;
         }
 
         bool isCompatible(unsigned mode1, unsigned mode2) {
@@ -155,6 +155,15 @@ namespace mongo {
         lr->nextOfTransaction = NULL;
         lr->prevOfTransaction = NULL;
         if (lr->heapAllocated) delete lr;
+    }
+
+    void Transaction::addLock(LockRequest* lr) {
+        lr->nextOfTransaction = _locks;
+
+	if (_locks) {
+	    _locks->prevOfTransaction = lr;
+	}
+        _locks = lr;
     }
 
     void Transaction::_addWaiter(Transaction* waiter) {
@@ -640,7 +649,10 @@ namespace mongo {
         if (lr->prevOnResource) {
             lr->prevOnResource->nextOnResource = lr->nextOnResource;
         }
-        else {
+        else if (NULL == lr->nextOnResource) {
+            _resourceLocks[lr->resSlice].erase(lr->resId);
+	}
+	else {
             _resourceLocks[lr->resSlice][lr->resId] = lr->nextOnResource;
         }
         lr->nextOnResource = NULL;
@@ -694,8 +706,7 @@ namespace mongo {
         }
 
         // add lock request to requesting transaction's list
-        lr->nextOfTransaction = lr->requestor->_locks;
-        lr->requestor->_locks = lr;
+	lr->requestor->addLock(lr);
 
         if (kResourceAvailable == resourceStatus) {
             if (!conflictPosition)
@@ -1268,10 +1279,6 @@ namespace mongo {
                 // this is our lock.
                 if (0 < --nextLock->count) { return kLockCountDecremented; }
 
-                // release the lock
-                removeFromResourceQueue(nextLock);
-                holder->removeLock(nextLock);
-
                 foundLock = true;
                 break; // don't increment nextLock again
             }
@@ -1336,6 +1343,11 @@ namespace mongo {
 	    verify(!queue->isBlocked());
 	}
 #endif
+
+	// release the lock
+	removeFromResourceQueue(lr);
+	holder->removeLock(lr);
+
         return kLockReleased;
     }
 
