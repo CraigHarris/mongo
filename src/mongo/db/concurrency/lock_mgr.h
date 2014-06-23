@@ -41,6 +41,8 @@
 #include "mongo/platform/cstdint.h"
 #include "mongo/util/timer.h"
 
+#include "mongo/bson/util/atomic_int.h"
+
 /*
  * LockManager controls access to resources through two functions: acquire and release
  *
@@ -56,18 +58,6 @@
 namespace mongo {
 
 #if 1
-    class TxId {
-    public:
-    TxId() : _xid(0) { }
-    TxId(size_t xid) : _xid(xid) { }
-        bool operator<(const TxId& other) const { return _xid < other._xid; }
-        bool operator==(const TxId& other) const { return _xid == other._xid; }
-        operator size_t() const { return _xid; }
-
-    private:
-        size_t _xid;
-    };
-
     class ResourceId {
     public:
     ResourceId() : _rid(0) { }
@@ -80,10 +70,8 @@ namespace mongo {
         size_t _rid;
     };
 #else
-    typedef size_t TxId;        // identifies requesting transaction. 0 is reserved
     typedef size_t ResourceId;  // identifies requested resource. 0 is reserved
 #endif
-    static const TxId kReservedTxId = 0;
     static const ResourceId kReservedResourceId = 0;
 
     class Transaction;
@@ -121,7 +109,7 @@ namespace mongo {
 
         // resource requested
         const ResourceId resId;
-        unsigned resSlice;
+        unsigned slice;
 
         // number of times xid requested this resource in this mode
         // request will be deleted when count goes to 0
@@ -301,15 +289,13 @@ namespace mongo {
         public:
         LockStats()
             : _numRequests(0)
-                , _numPreexistingRequests(0)
-                , _numSameRequests(0)
-                , _numBlocks(0)
-                , _numDeadlocks(0)
-                , _numDowngrades(0)
-                , _numUpgrades(0)
-                , _numMillisBlocked(0)
-                , _numCurrentActiveReadRequests(0)
-                , _numCurrentActiveWriteRequests(0) { }
+            , _numPreexistingRequests(0)
+            , _numSameRequests(0)
+            , _numBlocks(0)
+            , _numDeadlocks(0)
+            , _numDowngrades(0)
+            , _numUpgrades(0)
+            , _numMillisBlocked(0) { }
 
             void incRequests() { _numRequests++; }
             void incPreexisting() { _numPreexistingRequests++; }
@@ -319,21 +305,6 @@ namespace mongo {
             void incDowngrades() { _numDowngrades++; }
             void incUpgrades() { _numUpgrades++; }
             void incTimeBlocked(size_t numMillis ) { _numMillisBlocked += numMillis; }
-
-            void incStatsForMode(const unsigned mode) {
-                0==mode ? incActiveReads() : incActiveWrites();
-            }
-            void decStatsForMode(const unsigned mode) {
-                0==mode ? decActiveReads() : decActiveWrites();
-            }
-
-            void incActiveReads() { _numCurrentActiveReadRequests++; }
-            void decActiveReads() { _numCurrentActiveReadRequests--; }
-            void incActiveWrites() { _numCurrentActiveWriteRequests++; }
-            void decActiveWrites() { _numCurrentActiveWriteRequests--; }
-
-            unsigned numActiveReads() const { return _numCurrentActiveReadRequests; }
-            unsigned numActiveWrites() const { return _numCurrentActiveWriteRequests; }
 
             size_t getNumRequests() const { return _numRequests; }
             size_t getNumPreexistingRequests() const { return _numPreexistingRequests; }
@@ -356,8 +327,6 @@ namespace mongo {
             size_t _numDowngrades;
             size_t _numUpgrades;
             size_t _numMillisBlocked;
-            unsigned long _numCurrentActiveReadRequests;
-            unsigned long _numCurrentActiveWriteRequests;
         };
 
 
@@ -464,7 +433,7 @@ namespace mongo {
         void push_back(LockRequest* lr);
 
         static unsigned partitionResource(const ResourceId& resId);
-        static unsigned partitionTransaction(const TxId& txId);
+        static unsigned partitionTransaction(unsigned txId);
 
 
 
@@ -478,8 +447,6 @@ namespace mongo {
         bool isLocked(const Transaction* holder,
                       const unsigned& mode,
                       const ResourceId& resId) const;
-
-    protected:
 
     private: // alphabetical
 
@@ -512,11 +479,6 @@ namespace mongo {
                                         LockRequest*& position);
 
         /**
-         * set up for future deadlock detection, called from acquire
-         */
-        void _addWaiter(Transaction* blocker, Transaction* waiter);
-
-        /**
          * when inserting a new lock request into the middle of a queue,
          * add any remaining incompatible requests in the queue to the
          * new lock request's set of waiters... for future deadlock detection
@@ -542,7 +504,7 @@ namespace mongo {
         ResourceStatus _conflictExists(Transaction* requestor,
                                        const unsigned& mode,
                                        const ResourceId& resId,
-                                       unsigned resSlice,
+                                       unsigned slice,
                                        LockRequest* queue,
                                        LockRequest*& position /* in/out */);
 
@@ -554,7 +516,7 @@ namespace mongo {
         LockStatus _findLock(const Transaction* requestor,
                              const unsigned& mode,
                              const ResourceId& resId,
-                             unsigned resSlice,
+                             unsigned slice,
                              LockRequest*& outLock) const;
 
 	/**
@@ -575,7 +537,8 @@ namespace mongo {
          */
         bool _isAvailable(const Transaction* requestor,
                           const unsigned& mode,
-                          const ResourceId& resId) const;
+                          const ResourceId& resId,
+                          unsigned slice) const;
 
         /**
          * called by public ::release and internally by abort.
@@ -588,6 +551,20 @@ namespace mongo {
          * if quiescing period has expired, or if xid is new
          */
         void _throwIfShuttingDown(const Transaction* tx=NULL) const;
+
+
+    private:
+        // support functions for changing policy to/from read/write only
+
+        void _incStatsForMode(const unsigned mode) {
+            kShared==mode ? _numCurrentActiveReadRequests++ : _numCurrentActiveWriteRequests++;
+        }
+        void _decStatsForMode(const unsigned mode) {
+            kShared==mode ? _numCurrentActiveReadRequests-- : _numCurrentActiveWriteRequests--;
+        }
+
+        unsigned _numActiveReads() const { return _numCurrentActiveReadRequests; }
+        unsigned _numActiveWrites() const { return _numCurrentActiveWriteRequests; }
 
 
     private:
@@ -640,6 +617,10 @@ namespace mongo {
 
         // stats, but also used internally
         LockStats _stats[kNumTransactionPartitions];
+
+        // used when changing policy to/from Readers/Writers Only
+        AtomicUInt _numCurrentActiveReadRequests;
+        AtomicUInt _numCurrentActiveWriteRequests;
     };
 
     /**
