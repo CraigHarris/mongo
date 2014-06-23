@@ -698,9 +698,12 @@ namespace mongo {
         // release all resources acquired by this transaction
         // notifying any waiters that they can continue
         //
-        for (LockRequest* nextLock = goner->_locks;
-             nextLock; nextLock=nextLock->nextOfTransaction) {
+        LockRequest* nextLock = goner->_locks;
+        while (nextLock) {
+            // releaseInternal deletes nextLock, so get the next ptr here
+            LockRequest* newNextLock = nextLock->nextOfTransaction;
             _releaseInternal(nextLock);
+            nextLock = newNextLock;
         }
 
         // erase aborted transaction's waiters
