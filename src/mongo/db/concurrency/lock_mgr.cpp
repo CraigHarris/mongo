@@ -41,8 +41,8 @@ using boost::unique_lock;
 
 using std::endl;
 using std::exception;
-using std::list;
 using std::map;
+using std::multiset;
 using std::set;
 using std::string;
 using std::stringstream;
@@ -168,6 +168,7 @@ namespace mongo {
 
     void Transaction::_addWaiter(Transaction* waiter) {
         _waiters.insert(waiter);
+        _waiters.insert(waiter->_waiters.begin(), waiter->_waiters.end());
     }
 
     string Transaction::toString() const {
@@ -188,7 +189,8 @@ namespace mongo {
 
         result << ">,waiters: {";
         bool firstWaiter=true;
-        for (set<Transaction*>::const_iterator nextWaiter = _waiters.begin(); nextWaiter != _waiters.end(); ++nextWaiter) {
+        for (multiset<Transaction*>::const_iterator nextWaiter = _waiters.begin();
+             nextWaiter != _waiters.end(); ++nextWaiter) {
             if (firstWaiter) firstWaiter=false;
             else result << ",";
             result << (*nextWaiter)->_txId;
@@ -257,10 +259,10 @@ namespace mongo {
         lr->prevOnResource = this->prevOnResource;
         lr->nextOnResource = this;
 
-        this->prevOnResource = lr;
         if (this->prevOnResource) {
             this->prevOnResource->nextOnResource = lr;
         }
+        this->prevOnResource = lr;
     }
 
     void LockRequest::append(LockRequest* lr) {
@@ -290,12 +292,14 @@ namespace mongo {
         , _mutex()
         , _shuttingDown(false)
         , _millisToQuiesce(-1)
-        , _systemTransaction(0)
+        , _systemTransaction(new Transaction(0))
         , _numCurrentActiveReadRequests(0)
         , _numCurrentActiveWriteRequests(0)
     { }
 
-    LockManager::~LockManager() { }
+    LockManager::~LockManager() {
+        delete _systemTransaction;
+    }
 
     void LockManager::shutdown(const unsigned& millisToQuiesce) {
         unique_lock<boost::mutex> lk(_mutex);
@@ -342,7 +346,7 @@ namespace mongo {
             // Awaken requests that were blocked on the old policy.
             // iterate over TxIds blocked on kReservedTxId (these are blocked on policy)
 
-            for (set<Transaction*>::iterator nextWaiter = _systemTransaction->_waiters.begin();
+            for (multiset<Transaction*>::iterator nextWaiter = _systemTransaction->_waiters.begin();
                  nextWaiter != _systemTransaction->_waiters.end(); ++nextWaiter) {
 
                 // iterate over the locks acquired by the blocked transactions
@@ -399,6 +403,7 @@ namespace mongo {
         lr->requestor->addLock(lr);
 
         _acquireInternal(lr, queue, conflictPosition, status, notifier, lk);
+        _incStatsForMode(lr->mode);
     }
 
     void LockManager::acquire(Transaction* requestor,
@@ -429,6 +434,7 @@ namespace mongo {
         lr->requestor->addLock(lr);
 
         _acquireInternal(lr, queue, conflictPosition, status, notifier, lk);
+        _incStatsForMode(mode);
     }
 
     int LockManager::acquireOne(Transaction* requestor,
@@ -474,7 +480,7 @@ namespace mongo {
             _throwIfShuttingDown(lr->requestor);
         }
         unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
-
+        _decStatsForMode(lr->mode);
         return _releaseInternal(lr);
     }
 
@@ -493,6 +499,7 @@ namespace mongo {
         if (kLockFound != status) {
             return status; // error, resource wasn't acquired in this mode by holder
         }
+        _decStatsForMode(mode);
         return _releaseInternal(lr);
     }
 
@@ -719,7 +726,6 @@ namespace mongo {
                                                               LockRequest* queue,
                                                               LockRequest*& conflictPosition) {
         _stats[slice].incRequests();
-        _incStatsForMode(mode);
 
         if (queue) { _stats[slice].incPreexisting(); }
 
@@ -758,8 +764,10 @@ namespace mongo {
 
         // some type of conflict, insert after confictPosition
 
-        verify(conflictPosition);
-        conflictPosition = conflictPosition->nextOnResource;
+        verify(conflictPosition || kResourcePolicyConflict == resourceStatus);
+        if (conflictPosition) {
+            conflictPosition = conflictPosition->nextOnResource;
+        }
 
         if (kResourceUpgradeConflict == resourceStatus) {
             conflictPosition->insert(lr);
@@ -1176,7 +1184,6 @@ namespace mongo {
         Transaction* holder = lr->requestor;
         unsigned mode = lr->mode;
 
-        _decStatsForMode(lr->mode);
         if ((kPolicyWritersOnly == _policy && 0 == _numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _numActiveWrites())) {
             _policyLock.notify_one();
@@ -1243,7 +1250,7 @@ namespace mongo {
                 //
                 Transaction* sleepersTx = nextSleeper->requestor;
                 holder->_waiters.erase(sleepersTx);
-                for (set<Transaction*>::iterator nextSleepersWaiter = sleepersTx->_waiters.begin();
+                for (multiset<Transaction*>::iterator nextSleepersWaiter = sleepersTx->_waiters.begin();
                      nextSleepersWaiter != sleepersTx->_waiters.end(); ++nextSleepersWaiter) {
                     holder->_waiters.erase(*nextSleepersWaiter);
                 }

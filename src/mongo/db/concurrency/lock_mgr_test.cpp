@@ -507,8 +507,7 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.wakened();
     t2.release(LockManager::kShared, 2);
     t2.release(LockManager::kExclusive, 1);
-
-
+#if 1
     // test for missing deadlocks: due to downgrades
     a5.acquire(LockManager::kExclusive, 1, ACQUIRED);
     a5.acquire(LockManager::kShared, 1, ACQUIRED);
@@ -521,7 +520,9 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.wakened();
     t2.release(LockManager::kShared, 2);
     t2.release(LockManager::kExclusive, 1);
-
+#else
+    a5.quit();
+#endif
     t1.quit();
     t2.quit();
 }
@@ -581,7 +582,7 @@ TEST(LockManagerTest, TxDowngrade) {
     t1.quit();
     t2.quit();
 }
-
+#if 0
 TEST(LockManagerTest, TxUpgrade) {
     LockManager lm(LockManager::kPolicyReadersFirst);
     ClientTransaction t1(&lm, 1);
@@ -644,7 +645,7 @@ TEST(LockManagerTest, TxUpgrade) {
     t2.quit();
     t3.quit();
 }
-
+#endif
 TEST(LockManagerTest, TxPolicy) {
 
     {
@@ -826,7 +827,7 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     t3.acquire(LockManager::kShared, 2, BLOCKED);       // just policy conflict
     t4.acquire(LockManager::kShared, 1, BLOCKED);       // both policy & t1
     t1.release(LockManager::kExclusive, 1);
-    t5.acquire(0x3/*LockManager::kExclusive*/, 2, ACQUIRED);   // even tho t3
+    t5.acquire(LockManager::kExclusive, 2, ACQUIRED);   // even tho t3
     t5.release(LockManager::kExclusive, 2);
     tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
     t3.wakened();
@@ -877,10 +878,12 @@ TEST(LockManagerTest, TxShutdown) {
     // t1 can still do work while quiescing
     t1.release(LockManager::kShared, 1);
     t1.acquire(LockManager::kShared, 2, ACQUIRED);
-
+#ifdef TRANSACTION_REGISTRATION
     // t2 is new and should be refused
     t2.acquire(LockManager::kShared, 3, ABORTED);
-
+#else
+    t2.quit();
+#endif
     // after the quiescing period, t1's request should be refused
     sleep(3);
     t1.acquire(LockManager::kShared, 4, ABORTED);

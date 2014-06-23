@@ -31,7 +31,6 @@
 #include <boost/thread/condition_variable.hpp>
 #include <boost/thread/mutex.hpp>
 #include <iterator>
-#include <list>
 #include <map>
 #include <set>
 #include <string>
@@ -197,7 +196,7 @@ namespace mongo {
         // NB: a transaction can only be directly waiting for a single resource/transaction
         // but to facilitate deadlock detection, if T1 is waiting for T2 and T2 is waiting
         // for T3, then both T1 and T2 are listed as T3's waiters.
-        std::set<Transaction*> _waiters;
+        std::multiset<Transaction*> _waiters;
     };
 
     /**
