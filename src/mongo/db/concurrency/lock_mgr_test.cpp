@@ -507,7 +507,7 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.wakened();
     t2.release(LockManager::kShared, 2);
     t2.release(LockManager::kExclusive, 1);
-#if 1
+
     // test for missing deadlocks: due to downgrades
     a5.acquire(LockManager::kExclusive, 1, ACQUIRED);
     a5.acquire(LockManager::kShared, 1, ACQUIRED);
@@ -520,9 +520,7 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.wakened();
     t2.release(LockManager::kShared, 2);
     t2.release(LockManager::kExclusive, 1);
-#else
-    a5.quit();
-#endif
+
     t1.quit();
     t2.quit();
 }
@@ -582,7 +580,7 @@ TEST(LockManagerTest, TxDowngrade) {
     t1.quit();
     t2.quit();
 }
-#if 0
+
 TEST(LockManagerTest, TxUpgrade) {
     LockManager lm(LockManager::kPolicyReadersFirst);
     ClientTransaction t1(&lm, 1);
@@ -645,7 +643,7 @@ TEST(LockManagerTest, TxUpgrade) {
     t2.quit();
     t3.quit();
 }
-#endif
+
 TEST(LockManagerTest, TxPolicy) {
 
     {

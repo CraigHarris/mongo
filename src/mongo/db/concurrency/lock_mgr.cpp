@@ -764,13 +764,19 @@ namespace mongo {
 
         // some type of conflict, insert after confictPosition
 
-        verify(conflictPosition || kResourcePolicyConflict == resourceStatus);
+        verify(conflictPosition ||
+               kResourcePolicyConflict == resourceStatus ||
+               kResourceUpgradeConflict == resourceStatus);
+
         if (conflictPosition) {
             conflictPosition = conflictPosition->nextOnResource;
         }
 
         if (kResourceUpgradeConflict == resourceStatus) {
-            conflictPosition->insert(lr);
+            if (conflictPosition)
+                conflictPosition->insert(lr);
+            else
+                push_back(lr);
         }
         else {
             _addLockToQueueUsingPolicy(lr, queue, conflictPosition);
@@ -1249,7 +1255,7 @@ namespace mongo {
                 // previously, hence the test for finding nextSleeper among holder's waiters
                 //
                 Transaction* sleepersTx = nextSleeper->requestor;
-                holder->_waiters.erase(sleepersTx);
+                holder->_waiters.erase(holder->_waiters.find(sleepersTx));
                 for (multiset<Transaction*>::iterator nextSleepersWaiter = sleepersTx->_waiters.begin();
                      nextSleepersWaiter != sleepersTx->_waiters.end(); ++nextSleepersWaiter) {
                     holder->_waiters.erase(*nextSleepersWaiter);
