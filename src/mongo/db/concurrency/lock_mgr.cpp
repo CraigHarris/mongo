@@ -36,6 +36,7 @@
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
+#include "mongo/base/init.h"
 
 using boost::unique_lock;
 
@@ -277,13 +278,14 @@ namespace mongo {
 
     /*---------- LockManager public functions (mutex guarded) ---------*/
 
-    LockManager* LockManager::_singleton = NULL;
-    boost::mutex LockManager::_getSingletonMutex;
+    static LockManager* _singleton = NULL;
+
+    MONGO_INITIALIZER(InstantiateLockManager)(InitializerContext* context) {
+        _singleton = new LockManager();
+        return Status::OK();
+    }
+
     LockManager& LockManager::getSingleton() {
-        unique_lock<boost::mutex> lk(_getSingletonMutex);
-        if (NULL == _singleton) {
-            _singleton = new LockManager();
-        }
         return *_singleton;
     }
 

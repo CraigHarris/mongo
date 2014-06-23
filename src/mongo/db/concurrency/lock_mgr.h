@@ -569,10 +569,6 @@ namespace mongo {
 
     private:
 
-        // Singleton instance
-        static boost::mutex _getSingletonMutex;
-        static LockManager* _singleton;
-
         // The Policy controls which requests should be honored first.  This is
         // used to guide the position of a request in a list of requests waiting for
         // a resource.
