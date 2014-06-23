@@ -138,6 +138,7 @@ namespace mongo {
         ~Transaction();
 
         Transaction* setTxIdOnce(unsigned txId);
+        unsigned getTxId() const { return _txId; }
 
         /**
          * override default LockManager's default Policy for a transaction.
@@ -261,7 +262,7 @@ namespace mongo {
             kLockFound,             // found a matching lock request
             kLockReleased,          // released requested lock
             kLockCountDecremented,  // decremented lock count, but didn't release
-            kLockNotFound,          // no locks with this id
+            kLockNotFound,          // specific lock not found
             kLockResourceNotFound,  // no locks on the resource
             kLockModeNotFound       // locks on the resource, but not of the specified mode
         };

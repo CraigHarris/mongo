@@ -42,6 +42,7 @@
  * before waiting for a response.
  */
 
+#include <boost/scoped_ptr.hpp>
 #include <boost/thread/thread.hpp>
 #include "mongo/unittest/unittest.h"
 #include "mongo/db/concurrency/lock_mgr.h"
@@ -70,7 +71,7 @@ namespace mongo {
     class TxResponse {
     public:
         TxRsp rspCode;
-        TxId xid;
+        unsigned xid;
         unsigned mode;
         ResourceId resId;
     };
@@ -78,7 +79,7 @@ namespace mongo {
     class TxRequest {
     public:
         TxCmd cmd;
-        TxId xid;
+        unsigned xid;
         unsigned mode;
         ResourceId resId;
         LockManager::Policy policy;
@@ -125,7 +126,7 @@ public:
     TxCommandBuffer() : _count(0), _readPos(0), _writePos(0) { }
 
     void post(const TxCmd& cmd,
-              const TxId& xid = 0,
+              const unsigned& xid = 0,
               const unsigned& mode = 0,
               const ResourceId& resId = 0,
               const LockManager::Policy& policy = LockManager::kPolicyFirstCome) {
@@ -169,23 +170,23 @@ class ClientTransaction : public LockManager::Notifier {
 public:
     // these are called in the main driver program
     
-    ClientTransaction(LockManager* lm, const TxId& xid) : _lm(lm), _xid(xid), _thr(&ClientTransaction::processCmd, this) { }
+    ClientTransaction(LockManager* lm, const unsigned& xid) : _lm(lm), _tx(xid), _thr(&ClientTransaction::processCmd, this) { }
     virtual ~ClientTransaction() { _thr.join(); }
 
     void acquire(const unsigned& mode, const ResourceId resId, const TxRsp& rspCode) {
-        _cmd.post(ACQUIRE, _xid, mode, 1, resId);
+        _cmd.post(ACQUIRE, _tx.getTxId(), mode, resId);
         TxResponse* rsp = _rsp.consume();
         ASSERT(rspCode == rsp->rspCode);
     }
 
     void release(const unsigned& mode, const ResourceId resId) {
-        _cmd.post(RELEASE, _xid, mode, 1, resId);
+        _cmd.post(RELEASE, _tx.getTxId(), mode, resId);
         TxResponse* rsp = _rsp.consume();
         ASSERT(RELEASED == rsp->rspCode);
     }
 
     void abort() {
-        _cmd.post(ABORT, _xid);
+        _cmd.post(ABORT, _tx.getTxId());
         TxResponse* rsp = _rsp.consume();
         ASSERT(ABORTED == rsp->rspCode);
     }
@@ -196,7 +197,7 @@ public:
     }
 
     void setPolicy(const LockManager::Policy& policy, const TxRsp& rspCode) {
-        _cmd.post(POLICY, _xid, 0, 0, 0, policy);
+        _cmd.post(POLICY, _tx.getTxId(), 0, 0, policy);
         TxResponse* rsp = _rsp.consume();
         ASSERT(rspCode == rsp->rspCode);
     }
@@ -213,28 +214,28 @@ public:
             switch (req->cmd) {
             case ACQUIRE:
                 try {
-                    _lm->acquire(_xid, req->mode, req->resId, this);
+                    _lm->acquire(&_tx, req->mode, req->resId, this);
                     _rsp.post(ACQUIRED);
                 } catch (const LockManager::AbortException& err) {
                     _rsp.post(ABORTED);
-//          log() << "t" << _xid << ": aborted, ending" << endl;
+//          log() << "t" << _tx._txId << ": aborted, ending" << endl;
                     return;
                 }
                 break;
             case RELEASE:
-                _lm->release(_xid, req->mode, req->resId);
+                _lm->release(&_tx, req->mode, req->resId);
                 _rsp.post(RELEASED);
                 break;
             case ABORT:
                 try {
-                    _lm->abort(_xid);
+                    _lm->abort(&_tx);
                 } catch (const LockManager::AbortException& err) {
                     _rsp.post(ABORTED);
                 }
                 break;
             case POLICY:
                 try {
-                    _lm->setPolicy(_xid, req->policy, this);
+                    _lm->setPolicy(&_tx, req->policy, this);
                     _rsp.post(ACQUIRED);
                 } catch( const LockManager::AbortException& err) {
                     _rsp.post(ABORTED);
@@ -249,7 +250,7 @@ public:
     }
 
     // inherited from Notifier, used by LockManager::acquire
-    virtual void operator()(const TxId& blocker) {
+    virtual void operator()(const Transaction* blocker) {
         _rsp.post(BLOCKED);
     }
 
@@ -257,7 +258,7 @@ private:
     TxCommandBuffer _cmd;
     TxResponseBuffer _rsp;
     LockManager* _lm;
-    TxId _xid;
+    Transaction _tx;
     boost::thread _thr;
     
 };
@@ -265,42 +266,34 @@ private:
 TEST(LockManagerTest, TxError) {
     LockManager lm;
     LockManager::LockStatus status;
+    Transaction tx(1);
 
-    // release a lock on a container we haven't locked
-    lm.release(1, LockManager::kShared, 0, 1);
-
-
-    // release a lock on a record we haven't locked
-    status = lm.release(1, LockManager::kShared, 0, 1);
-    ASSERT(LockManager::kLockContainerNotFound == status);
-
-
-    // release a lock on a record we haven't locked in a store we have locked
-    lm.acquire(1, LockManager::kShared, 0, 2);
-    status = lm.release(1, LockManager::kShared, 0, 1); // this is in error
+    // release a lock on a resource we haven't locked
+    lm.acquire(&tx, LockManager::kShared, 2);
+    status = lm.release(&tx, LockManager::kShared, 1); // this is in error
     ASSERT(LockManager::kLockResourceNotFound == status);
-    status = lm.release(1, LockManager::kShared, 0, 2);
+    status = lm.release(&tx, LockManager::kShared, 2);
     ASSERT(LockManager::kLockReleased == status);
 
     // release a record we've locked in a different mode
-    lm.acquire(1, LockManager::kShared, 0, 1);
-    status = lm.release(1, LockManager::kExclusive, 0, 1); // this is in error
+    lm.acquire(&tx, LockManager::kShared, 1);
+    status = lm.release(&tx, LockManager::kExclusive, 1); // this is in error
     ASSERT(LockManager::kLockModeNotFound == status);
-    status = lm.release(1, LockManager::kShared, 0, 1);
+    status = lm.release(&tx, LockManager::kShared, 1);
     ASSERT(LockManager::kLockReleased == status);
 
-    lm.acquire(1, LockManager::kExclusive, 0, 1);
-    status = lm.release(1, LockManager::kShared, 0, 1); // this is in error
+    lm.acquire(&tx, LockManager::kExclusive, 1);
+    status = lm.release(&tx, LockManager::kShared, 1); // this is in error
     ASSERT(LockManager::kLockModeNotFound == status);
-    status = lm.release(1, LockManager::kExclusive, 0, 1);
+    status = lm.release(&tx, LockManager::kExclusive, 1);
     ASSERT(LockManager::kLockReleased == status);
 
     // attempt to acquire on a transaction that aborted
     try {
-        lm.abort(1);
+        lm.abort(&tx);
     } catch (const LockManager::AbortException& err) { }
     try {
-        lm.acquire(1, LockManager::kShared, 0, 1); // error
+        lm.acquire(&tx, LockManager::kShared, 1); // error
         ASSERT(false);
     } catch (const LockManager::AbortException& error) {
     }
@@ -308,88 +301,87 @@ TEST(LockManagerTest, TxError) {
 
 TEST(LockManagerTest, SingleTx) {
     LockManager lm;
-    ResourceId store = 1;
-    TxId t1 = 1;
+    Transaction t1(1);
     ResourceId r1 = 1;
     LockManager::LockStatus status;
 
     // acquire a shared record lock
-    ASSERT(! lm.isLocked(t1, LockManager::kShared, store, r1));
-    lm.acquire(t1, LockManager::kShared, store, r1);
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
+    ASSERT(! lm.isLocked(&t1, LockManager::kShared, r1));
+    lm.acquire(&t1, LockManager::kShared, r1);
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
 
     // release a shared record lock
-    lm.release(t1, LockManager::kShared, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kShared, store, r1));
+    lm.release(&t1, LockManager::kShared, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kShared, r1));
 
     // acquire a shared record lock twice, on same ResourceId
-    lm.acquire(t1, LockManager::kShared, store, r1);
-    lm.acquire(t1, LockManager::kShared, store, r1);
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
+    lm.acquire(&t1, LockManager::kShared, r1);
+    lm.acquire(&t1, LockManager::kShared, r1);
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
 
     // release the twice-acquired lock, once.  Still locked
-    status = lm.release(t1, LockManager::kShared, store, r1);
+    status = lm.release(&t1, LockManager::kShared, r1);
     ASSERT(LockManager::kLockCountDecremented == status);
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
 
     // after 2nd release, it's not locked
-    status = lm.release(t1, LockManager::kShared, store, r1);
+    status = lm.release(&t1, LockManager::kShared, r1);
     ASSERT(LockManager::kLockReleased == status);
-    ASSERT(!lm.isLocked(t1, LockManager::kShared, store, r1));
+    ASSERT(!lm.isLocked(&t1, LockManager::kShared, r1));
 
 
 
     // --- test downgrade and release ---
 
     // acquire an exclusive then a shared lock, on the same ResourceId
-    lm.acquire(t1, LockManager::kExclusive, store, r1);
-    ASSERT(lm.isLocked(t1, LockManager::kExclusive, store, r1));
-    lm.acquire(t1, LockManager::kShared, store, r1);
-    ASSERT(lm.isLocked(t1, LockManager::kExclusive, store, r1));
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
+    lm.acquire(&t1, LockManager::kExclusive, r1);
+    ASSERT(lm.isLocked(&t1, LockManager::kExclusive, r1));
+    lm.acquire(&t1, LockManager::kShared, r1);
+    ASSERT(lm.isLocked(&t1, LockManager::kExclusive, r1));
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
 
     // release shared first, then exclusive
-    lm.release(t1, LockManager::kShared, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kShared, store, r1));
-    ASSERT(lm.isLocked(t1, LockManager::kExclusive, store, r1));
-    lm.release(t1, LockManager::kExclusive, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kExclusive, store, r1));
+    lm.release(&t1, LockManager::kShared, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kShared, r1));
+    ASSERT(lm.isLocked(&t1, LockManager::kExclusive, r1));
+    lm.release(&t1, LockManager::kExclusive, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kExclusive, r1));
 
     // release exclusive first, then shared
-    lm.acquire(t1, LockManager::kExclusive, store, r1);
-    lm.acquire(t1, LockManager::kShared, store, r1);
-    lm.release(t1, LockManager::kExclusive, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kExclusive, store, r1));
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
-    lm.release(t1, LockManager::kShared, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kShared, store, r1));
+    lm.acquire(&t1, LockManager::kExclusive, r1);
+    lm.acquire(&t1, LockManager::kShared, r1);
+    lm.release(&t1, LockManager::kExclusive, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kExclusive, r1));
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
+    lm.release(&t1, LockManager::kShared, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kShared, r1));
 
 
 
     // --- test upgrade and release ---
 
     // acquire a shared, then an exclusive lock on the same ResourceId
-    lm.acquire(t1, LockManager::kShared, store, r1);
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
-    lm.acquire(t1, LockManager::kExclusive, store, r1);
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
-    ASSERT(lm.isLocked(t1, LockManager::kExclusive, store, r1));
+    lm.acquire(&t1, LockManager::kShared, r1);
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
+    lm.acquire(&t1, LockManager::kExclusive, r1);
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
+    ASSERT(lm.isLocked(&t1, LockManager::kExclusive, r1));
 
     // release exclusive first, then shared
-    lm.release(t1, LockManager::kExclusive, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kExclusive, store, r1));
-    ASSERT(lm.isLocked(t1, LockManager::kShared, store, r1));
-    lm.release(t1, LockManager::kShared, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kShared, store, r1));
+    lm.release(&t1, LockManager::kExclusive, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kExclusive, r1));
+    ASSERT(lm.isLocked(&t1, LockManager::kShared, r1));
+    lm.release(&t1, LockManager::kShared, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kShared, r1));
 
     // release shared first, then exclusive
-    lm.acquire(t1, LockManager::kShared, store, r1);
-    lm.acquire(t1, LockManager::kExclusive, store, r1);
-    lm.release(t1, LockManager::kShared, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kShared, store, r1));
-    ASSERT(lm.isLocked(t1, LockManager::kExclusive, store, r1));
-    lm.release(t1, LockManager::kExclusive, store, r1);
-    ASSERT(! lm.isLocked(t1, LockManager::kExclusive, store, r1));
+    lm.acquire(&t1, LockManager::kShared, r1);
+    lm.acquire(&t1, LockManager::kExclusive, r1);
+    lm.release(&t1, LockManager::kShared, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kShared, r1));
+    ASSERT(lm.isLocked(&t1, LockManager::kExclusive, r1));
+    lm.release(&t1, LockManager::kExclusive, r1);
+    ASSERT(! lm.isLocked(&t1, LockManager::kExclusive, r1));
 }
 
 TEST(LockManagerTest, TxConflict) {
