@@ -76,12 +76,23 @@ namespace mongo {
     class Transaction;
 
     /**
+     * LockModes: shared and exclusive
+     */
+    enum LockMode {
+        kShared = 0,
+        kExclusive = 1,
+        kUpgrade = 2,
+        kExclusiveIntent = 3,
+        kInvalid
+    };
+
+    /**
      * Data structure used to record a resource acquisition request
      */
     class LockRequest {
     public:
         LockRequest(const ResourceId& resId,
-                    const unsigned& mode,
+                    const LockMode& mode,
                     Transaction* requestor,
                     bool heapAllocated = false);
 
@@ -89,7 +100,7 @@ namespace mongo {
         ~LockRequest();
 
         bool matches(const Transaction* tx,
-                     const unsigned& mode,
+                     const LockMode& mode,
                      const ResourceId& resId) const;
 
         bool isBlocked() const;
@@ -104,7 +115,7 @@ namespace mongo {
         Transaction* requestor;
 
         // shared or exclusive use
-        const unsigned mode;
+        const LockMode mode;
 
         // resource requested
         const ResourceId resId;
@@ -175,9 +186,10 @@ namespace mongo {
 
         // uniquely identify the transaction
         unsigned _txId;
-
+#ifdef REGISTER_TRANSACTIONS
         // for mutex parallelism in LockManager
         unsigned _txSlice;
+#endif
 
         // transaction priorities:
         //     0 => neutral, use LockManager's default _policy
@@ -218,14 +230,6 @@ namespace mongo {
         class AbortException : public std::exception {
         public:
             const char* what() const throw ();
-        };
-
-        /**
-         * LockModes: shared and exclusive
-         */
-        enum LockMode {
-            kShared = 0x0,
-            kExclusive = 0x1,
         };
 
         /**
@@ -378,7 +382,7 @@ namespace mongo {
          * can throw AbortException
          */
         void acquire(Transaction* requestor,
-                     const uint32_t& mode,
+                     const LockMode& mode,
                      const ResourceId& resId,
                      Notifier* notifier = NULL);
 
@@ -392,7 +396,7 @@ namespace mongo {
          * acquired ResourceId, or -1 if vector was empty
          */
         int acquireOne(Transaction* requestor,
-                       const uint32_t& mode,
+                       const LockMode& mode,
                        const std::vector<ResourceId>& records,
                        Notifier* notifier = NULL);
 
@@ -401,7 +405,7 @@ namespace mongo {
          * The mode here is just the mode that applies to the resId
          */
         LockStatus release(const Transaction* holder,
-                           const uint32_t& mode,
+                           const LockMode& mode,
                            const ResourceId& resId);
 
         /**
@@ -445,7 +449,7 @@ namespace mongo {
          * test whether a Transaction has locked a ResourceId in a mode
          */
         bool isLocked(const Transaction* holder,
-                      const unsigned& mode,
+                      const LockMode& mode,
                       const ResourceId& resId) const;
 
     private: // alphabetical
@@ -493,7 +497,7 @@ namespace mongo {
          * conflicts with a previous upgrade-to-exclusive request that is blocked.
          */
         bool _comesBeforeUsingPolicy(const Transaction* newReqTx,
-                                     const unsigned& newReqMode,
+                                     const LockMode& newReqMode,
                                      const LockRequest* oldReq) const;
 
         /**
@@ -502,7 +506,7 @@ namespace mongo {
          * the position of the first conflict, or the end of the queue, or to an existing lock
          */
         ResourceStatus _conflictExists(Transaction* requestor,
-                                       const unsigned& mode,
+                                       const LockMode& mode,
                                        const ResourceId& resId,
                                        unsigned slice,
                                        LockRequest* queue,
@@ -514,7 +518,7 @@ namespace mongo {
          * sets outLock to the LockRequest that matches and returns kLockFound
          */
         LockStatus _findLock(const Transaction* requestor,
-                             const unsigned& mode,
+                             const LockMode& mode,
                              const ResourceId& resId,
                              unsigned slice,
                              LockRequest*& outLock) const;
@@ -525,7 +529,7 @@ namespace mongo {
 	 * update several status variables
 	 */
 	ResourceStatus _getConflictInfo(Transaction* requestor,
-					unsigned mode,
+					const LockMode& mode,
 					const ResourceId& resId,
 					unsigned slice,
 					LockRequest* queue,
@@ -536,7 +540,7 @@ namespace mongo {
          * used by acquireOne
          */
         bool _isAvailable(const Transaction* requestor,
-                          const unsigned& mode,
+                          const LockMode& mode,
                           const ResourceId& resId,
                           unsigned slice) const;
 
@@ -556,10 +560,10 @@ namespace mongo {
     private:
         // support functions for changing policy to/from read/write only
 
-        void _incStatsForMode(const unsigned mode) {
+        void _incStatsForMode(const LockMode& mode) {
             kShared==mode ? _numCurrentActiveReadRequests++ : _numCurrentActiveWriteRequests++;
         }
-        void _decStatsForMode(const unsigned mode) {
+        void _decStatsForMode(const LockMode& mode) {
             kShared==mode ? _numCurrentActiveReadRequests-- : _numCurrentActiveWriteRequests--;
         }
 
@@ -585,9 +589,12 @@ namespace mongo {
 
         // synchronizes access to the lock manager, which is shared across threads
         static const unsigned kNumResourcePartitions = 16;
-        static const unsigned kNumTransactionPartitions = 16;
         mutable boost::mutex _resourceMutexes[kNumResourcePartitions];
+
+#ifdef REGISTER_TRANSACTIONS
+        static const unsigned kNumTransactionPartitions = 16;
         mutable boost::mutex _transactionMutexes[kNumTransactionPartitions];
+#endif
         mutable boost::mutex _mutex;
 
         // for blocking when setting kPolicyReadersOnly or kPolicyWritersOnly policy
@@ -607,12 +614,13 @@ namespace mongo {
         // The order of lock request in the active/front portion of the list is irrelevant.
         //
         std::map<ResourceId, LockRequest*> _resourceLocks[kNumResourcePartitions];
-
+#ifdef REGISTER_TRANSACTIONS
         std::set<Transaction*> _activeTransactions[kNumTransactionPartitions];
+#endif
         Transaction* _systemTransaction;
 
         // stats, but also used internally
-        LockStats _stats[kNumTransactionPartitions];
+        LockStats _stats[kNumResourcePartitions];
 
         // used when changing policy to/from Readers/Writers Only
         AtomicUInt _numCurrentActiveReadRequests;
@@ -626,7 +634,7 @@ namespace mongo {
     public:
         ResourceLock(LockManager& lm,
                      Transaction* requestor,
-                     const uint32_t& mode,
+                     const LockMode& mode,
                      const ResourceId& resId,
                      LockManager::Notifier* notifier = NULL);
 
@@ -641,12 +649,12 @@ namespace mongo {
     SharedResourceLock(Transaction* requestor, void* resource)
         : ResourceLock(LockManager::getSingleton(),
                        requestor,
-                       LockManager::kShared,
+                       kShared,
                        (size_t)resource) { }
     SharedResourceLock(Transaction* requestor, size_t resource)
         : ResourceLock(LockManager::getSingleton(),
                        requestor,
-                       LockManager::kShared,
+                       kShared,
                        resource) { }
     };
 
@@ -655,12 +663,12 @@ namespace mongo {
     ExclusiveResourceLock(Transaction* requestor, void* resource)
         : ResourceLock(LockManager::getSingleton(),
                        requestor,
-                       LockManager::kExclusive,
+                       kExclusive,
                        (size_t)resource) { }
     ExclusiveResourceLock(Transaction* requestor, size_t resource)
         : ResourceLock(LockManager::getSingleton(),
                        requestor,
-                       LockManager::kExclusive,
+                       kExclusive,
                        resource) { }
     };
 } // namespace mongo

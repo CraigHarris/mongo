@@ -55,23 +55,15 @@ namespace mongo {
 
     namespace {
 
-        /*
-         * Given a 'hierarchical' resource (e.g. document in collection in database)
-         * return true if the resource is reqeuested for exclusive access at a given level.
-         * In the example above, level 0 for document, level 1 for collection, level 2 for DB
-         * and level 3 for the system as a whole.
-         *
-         * mode is a bit vector, level is the index.
-         */
-        bool isExclusive(unsigned mode) {
-            return 0 != mode;
+        bool isExclusive(const LockMode& mode) {
+            return kExclusive == mode;
         }
 
-        bool isShared(unsigned mode) {
-            return 0 == mode;
+        bool isShared(const LockMode& mode) {
+            return kShared == mode;
         }
 
-        bool isCompatible(unsigned mode1, unsigned mode2) {
+        bool isCompatible(const LockMode& mode1, const LockMode& mode2) {
             return mode1==mode2 && (isShared(mode1) || isShared(mode1));
         }
 
@@ -118,7 +110,9 @@ namespace mongo {
     /*---------- Transaction functions ----------*/
     Transaction::Transaction(unsigned txId, int priority)
         : _txId(txId)
+#ifdef REGISTER_TRANSACTION
         , _txSlice(LockManager::partitionTransaction(txId))
+#endif
         , _priority(priority)
         , _state((0==txId) ? kInvalid : kActive)
         , _locks(NULL) { }
@@ -175,7 +169,9 @@ namespace mongo {
     string Transaction::toString() const {
         stringstream result;
         result << "<xid:" << _txId
+#ifdef REGISTER_TRANSACTIONS
                << ",slice:" << _txSlice
+#endif
                << ",priority:" << _priority
                << ",state:" << ((kActive == _state) ? "active" : "completed");
 
@@ -205,7 +201,7 @@ namespace mongo {
 
 
     LockRequest::LockRequest(const ResourceId& resId,
-                             const unsigned& mode,
+                             const LockMode& mode,
                              Transaction* tx,
                              bool heapAllocated)
         : requestor(tx)
@@ -229,7 +225,7 @@ namespace mongo {
     }
 
     bool LockRequest::matches(const Transaction* tx,
-                              const unsigned& mode,
+                              const LockMode& mode,
                               const ResourceId& resId) const {
         return
             this->requestor == tx &&
@@ -409,7 +405,7 @@ namespace mongo {
     }
 
     void LockManager::acquire(Transaction* requestor,
-                              const uint32_t& mode,
+                              const LockMode& mode,
                               const ResourceId& resId,
                               Notifier* notifier) {
         {
@@ -440,7 +436,7 @@ namespace mongo {
     }
 
     int LockManager::acquireOne(Transaction* requestor,
-                                const uint32_t& mode,
+                                const LockMode& mode,
                                 const vector<ResourceId>& resources,
                                 Notifier* notifier) {
         {
@@ -487,7 +483,7 @@ namespace mongo {
     }
 
     LockManager::LockStatus LockManager::release(const Transaction* holder,
-                                                 const uint32_t& mode,
+                                                 const LockMode& mode,
                                                  const ResourceId& resId) {
         {
             unique_lock<boost::mutex> lk(_mutex);
@@ -605,7 +601,7 @@ namespace mongo {
             }
         }
         result << "}" << endl;
-
+#ifdef REGISTER_TRANSACTIONS
         result << "\tTransactions:" << endl;
         bool firstTx=true;
         for (unsigned jx=0; jx < kNumTransactionPartitions; ++jx) {
@@ -616,12 +612,12 @@ namespace mongo {
                 result << "\t\t" << (*nextTx)->toString();
             }
         }
-
+#endif
         return result.str();
     }
 
     bool LockManager::isLocked(const Transaction* holder,
-                               const uint32_t& mode,
+                               const LockMode& mode,
                                const ResourceId& resId) const {
         {
             unique_lock<boost::mutex> lk(_mutex);
@@ -643,11 +639,11 @@ namespace mongo {
         }
         return resIdHash % kNumResourcePartitions;
     }
-
+#ifdef REGISTER_TRANSACTIONS
     unsigned LockManager::partitionTransaction(unsigned xid) {
         return xid % kNumTransactionPartitions;
     }
-
+#endif
     void LockManager::insert(LockRequest* position, LockRequest* lr) {
         if (_resourceLocks[lr->slice][lr->resId] == position) {
             _resourceLocks[lr->slice][lr->resId] = lr;
@@ -722,7 +718,7 @@ namespace mongo {
     }
 
     LockManager::ResourceStatus LockManager::_getConflictInfo(Transaction* requestor,
-                                                              unsigned mode,
+                                                              const LockMode& mode,
                                                               const ResourceId& resId,
                                                               unsigned slice,
                                                               LockRequest* queue,
@@ -935,7 +931,7 @@ namespace mongo {
     }
 
     bool LockManager::_comesBeforeUsingPolicy(const Transaction* requestor,
-                                              const unsigned& mode,
+                                              const LockMode& mode,
                                               const LockRequest* oldRequest) const {
 
         // handle special policies
@@ -965,7 +961,7 @@ namespace mongo {
     }
 
     LockManager::ResourceStatus LockManager::_conflictExists(Transaction* requestor,
-                                                             const unsigned& mode,
+                                                             const LockMode& mode,
                                                              const ResourceId& resId,
                                                              unsigned slice,
                                                              LockRequest* queue,
@@ -1126,7 +1122,7 @@ namespace mongo {
     }
 
     LockManager::LockStatus LockManager::_findLock(const Transaction* holder,
-                                                   const unsigned& mode,
+                                                   const LockMode& mode,
                                                    const ResourceId& resId,
                                                    unsigned slice,
                                                    LockRequest*& outLock) const {
@@ -1153,7 +1149,7 @@ namespace mongo {
      * XXX: there's overlap between this, _conflictExists and _findLock
      */
     bool LockManager::_isAvailable(const Transaction* requestor,
-                                   const unsigned& mode,
+                                   const LockMode& mode,
                                    const ResourceId& resId,
                                    unsigned slice) const {
 
@@ -1190,7 +1186,7 @@ namespace mongo {
 
     LockManager::LockStatus LockManager::_releaseInternal(LockRequest* lr) {
         Transaction* holder = lr->requestor;
-        unsigned mode = lr->mode;
+        const LockMode& mode = lr->mode;
 
         if ((kPolicyWritersOnly == _policy && 0 == _numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _numActiveWrites())) {
@@ -1308,7 +1304,7 @@ namespace mongo {
 
     ResourceLock::ResourceLock(LockManager& lm,
                                Transaction* requestor,
-                               const uint32_t& mode,
+                               const LockMode& mode,
                                const ResourceId& resId,
                                LockManager::Notifier* notifier)
         : _lm(lm)
