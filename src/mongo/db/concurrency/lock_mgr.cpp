@@ -131,7 +131,9 @@ namespace mongo {
     Transaction* Transaction::setTxIdOnce(unsigned txId) {
         if (0 == _txId) {
             _txId = txId;
+	    _state = kActive;
         }
+
         return this;
     }
 
@@ -384,11 +386,25 @@ namespace mongo {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown();
         }
+
+        // don't accept requests from aborted transactions
+	if (Transaction::kAborted == lr->requestor->_state) {
+	    throw AbortException();
+	}
         unique_lock<boost::mutex> lk(_resourceMutexes[lr->resSlice]);
 
-        _acquireInternal(lr, notifier, lk);
+	LockRequest* queue = _resourceLocks[lr->resSlice][lr->resId];
+	LockRequest* conflictPosition = queue;
+	ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId, lr->resSlice,
+						 queue, conflictPosition);
+        if (kResourceAcquired == status) { return; }
+
+        // add lock request to requesting transaction's list
+        lr->requestor->addLock(lr);
+
+        _acquireInternal(lr, queue, conflictPosition, status, notifier, lk);
     }
-#if 0
+
     void LockManager::acquire(Transaction* requestor,
                               const uint32_t& mode,
                               const ResourceId& resId,
@@ -397,19 +413,28 @@ namespace mongo {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown();
         }
-        unsigned resSlice = partitionByResource(resId);
-        unsigned txSlice = partitionByTransaction(requestor);
-        unique_lock<boost::mutex> lkRes(_resourceMutexes[resSlice]);
-        unique_lock<boost::mutex> lkTx(_transactionMutexes[txSlice]);
 
         // don't accept requests from aborted transactions
-        if (_abortedTxIds[txSlice].find(requestor) != _abortedTxIds[txSlice].end()) {
-            throw AbortException();
-        }
+	if (Transaction::kAborted == requestor->_state) {
+	    throw AbortException();
+	}
+        unsigned resSlice = partitionResource(resId);
+        unique_lock<boost::mutex> lk(_resourceMutexes[resSlice]);
 
-        return _acquireInternal(requestor, txSlice, mode, resId, resSlice, notifier, lkTx);
+	LockRequest* queue = _resourceLocks[resSlice][resId];
+	LockRequest* conflictPosition = queue;
+	ResourceStatus status = _getConflictInfo(requestor, mode, resId, resSlice,
+						 queue, conflictPosition);
+        if (kResourceAcquired == status) { return; }
+
+	LockRequest* lr = new LockRequest(resId, mode, requestor, true);
+
+        // add lock request to requesting transaction's list
+        lr->requestor->addLock(lr);
+
+        return _acquireInternal(lr, queue, conflictPosition, status, notifier, lk);
     }
-#endif
+
 #if 0
     int LockManager::acquireOne(const TxId& requestor,
                                 const uint32_t& mode,
@@ -665,6 +690,8 @@ namespace mongo {
      */
     void LockManager::_abortInternal(Transaction* goner) {
 
+	goner->_state = Transaction::kAborted;
+
         if (NULL == goner->_locks) {
             // unusual, but possible to abort a transaction with no locks
             throw AbortException();
@@ -684,26 +711,32 @@ namespace mongo {
         throw AbortException();
     }
 
+    LockManager::ResourceStatus LockManager::_getConflictInfo(Transaction* requestor,
+							      unsigned mode,
+							      const ResourceId& resId,
+							      unsigned resSlice,
+							      LockRequest* queue,
+							      LockRequest*& conflictPosition) {
+        _stats[resSlice].incRequests();
+        _stats[resSlice].incStatsForMode(mode);
+
+        if (queue) { _stats[resSlice].incPreexisting(); }
+
+        ResourceStatus resourceStatus = _conflictExists(requestor, mode, resId,
+                                                        resSlice, queue, conflictPosition);
+        if (kResourceAcquired == resourceStatus) {
+            _stats[resSlice].incSame();
+            ++conflictPosition->count;
+        }
+	return resourceStatus;
+    }
+
     void LockManager::_acquireInternal(LockRequest* lr,
+				       LockRequest* queue,
+				       LockRequest* conflictPosition,
+				       ResourceStatus resourceStatus,
                                        Notifier* sleepNotifier,
                                        unique_lock<boost::mutex>& guard) {
-
-        _stats[lr->resSlice].incRequests();
-        _stats[lr->resSlice].incStatsForMode(lr->mode);
-
-        LockRequest* queue = _resourceLocks[lr->resSlice][lr->resId];
-        if (queue) { _stats[lr->resSlice].incPreexisting(); }
-        LockRequest* conflictPosition = queue;
-        ResourceStatus resourceStatus = _conflictExists(lr->requestor, lr->mode, lr->resId,
-                                                        lr->resSlice, queue, conflictPosition);
-        if (kResourceAcquired == resourceStatus) {
-            _stats[lr->resSlice].incSame();
-            ++conflictPosition->count;
-            return;
-        }
-
-        // add lock request to requesting transaction's list
-        lr->requestor->addLock(lr);
 
         if (kResourceAvailable == resourceStatus) {
             if (!conflictPosition)
@@ -788,7 +821,6 @@ namespace mongo {
     // create the lock request and add to Transaction's set of lock requests
 #if 0
     void LockManager::_acquireInternal(const TxId& requestor,
-                                       const unsigned txSlice,
                                        const uint32_t& mode,
                                        const ResourceId& resId,
                                        const unsigned resSlice,

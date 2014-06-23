@@ -181,7 +181,8 @@ namespace mongo {
         enum TxState {
             kInvalid,
             kActive,
-            kCompleted
+	    kAborted,
+            kCommitted
         };
 
         // uniquely identify the transaction
@@ -234,9 +235,9 @@ namespace mongo {
         /**
          * LockModes: shared and exclusive
          */
-        enum LockModes {
+        enum LockMode {
             kShared = 0x0,
-            kExclusive = 0x1
+            kExclusive = 0x1,
         };
 
         /**
@@ -407,9 +408,9 @@ namespace mongo {
          * acquire a resource in a mode.
          * can throw AbortException
          */
-        void acquire(const ResourceId& resId,
+        void acquire(Transaction* requestor,
                      const uint32_t& mode,
-                     Transaction* requestor,
+                     const ResourceId& resId,
                      Notifier* notifier = NULL);
 
         void acquireLock(LockRequest* request,
@@ -490,21 +491,15 @@ namespace mongo {
         MONGO_COMPILER_NORETURN void _abortInternal(Transaction* goner);
 
         /**
-         *
-         */
-        void _acquireInternal(LockRequest* lr,
-                              Notifier* notifier,
-                              boost::unique_lock<boost::mutex>& guard);
-
-        /**
          * main workhorse for acquiring locks on resources, blocking
          * or aborting on conflict
          *
          * throws AbortException on deadlock
          */
-        void _acquireInternal(Transaction* requestor,
-                              const unsigned& mode,
-                              const ResourceId& resId,
+        void _acquireInternal(LockRequest* lr,
+			      LockRequest* queue,
+			      LockRequest* conflictPosition,
+			      ResourceStatus resourceStatus,
                               Notifier* notifier,
                               boost::unique_lock<boost::mutex>& guard);
 
@@ -561,6 +556,18 @@ namespace mongo {
                              const ResourceId& resId,
                              unsigned resSlice,
                              LockRequest*& outLock) const;
+
+	/**
+	 * @return status of requested resource id
+	 * set conflictPosition on output if conflict
+	 * update several status variables
+	 */
+	ResourceStatus _getConflictInfo(Transaction* requestor,
+					unsigned mode,
+					const ResourceId& resId,
+					unsigned slice,
+					LockRequest* queue,
+					LockRequest*& conflictPosition);
 
         /**
          * returns true if acquire would return without waiting
