@@ -380,7 +380,7 @@ namespace mongo {
          * Change the current Policy.  For READERS/kPolicyWritersOnly, this
          * call may block until all current writers/readers have released their locks.
          */
-        void setPolicy(const Transaction* tx, const Policy& policy, Notifier* notifier = NULL);
+        void setPolicy(Transaction* tx, const Policy& policy, Notifier* notifier = NULL);
 
         /**
          * Get the current policy

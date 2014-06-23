@@ -325,12 +325,13 @@ namespace mongo {
 	return _policySetter;
     }
 #if 0
-    void LockManager::setPolicy(const Transaction* tx, const Policy& policy, Notifier* notifier) {
+    void LockManager::setPolicy(Transaction* tx, const Policy& policy, Notifier* notifier) {
         unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown();
+        
         if (policy == _policy) return;
 
-        _policySetter = xid;
+        _policySetter = tx;
         Policy oldPolicy = _policy;
         _policy = policy;
 
@@ -341,27 +342,23 @@ namespace mongo {
             // Awaken requests that were blocked on the old policy.
             // iterate over TxIds blocked on kReservedTxId (these are blocked on policy)
 
-            WaitersMap::iterator policyWaiters = _waiters.find(kReservedTxId);
-            if (policyWaiters != _waiters.end()) {
-                for (Waiters::iterator nextWaiter = policyWaiters->second.begin();
-                     nextWaiter != policyWaiters->second.end(); ++nextWaiter) {
+            for (set<Transaction*>::iterator nextWaiter = _systemTransaction->_waiters.begin();
+                 nextWaiter != _systemTransaction->_waiters.end(); ++nextWaiter) {
 
-                    // iterate over the locks acquired by the blocked transactions
-                    for (set<LockId>::iterator nextLockId = _xaLocks[*nextWaiter].begin();
-                         nextLockId != _xaLocks[*nextWaiter].end(); ++nextLockId) {
+                // iterate over the locks acquired by the blocked transactions
+                for (LockRequest* nextLock = (*nextWaiter)->_locks; nextLock;
+                     nextLock = nextLock->nextOfTransaction) {
+                    if (nextLock->isBlocked() && nextLock->shouldAwake()) {
 
-                        LockRequest* nextLock = _locks[*nextLockId];
-                        if (nextLock->isBlocked() && nextLock->shouldAwake()) {
-
-                            // each transaction can only be blocked by one request at time
-                            // this one must be due to policy that's now changed
-                            nextLock->lock.notify_one();
-                        }
+                        // each transaction can only be blocked by one request at time
+                        // this one must be due to policy that's now changed
+                        nextLock->lock.notify_one();
                     }
                 }
-                policyWaiters->second.clear();
             }
+            _systemTransaction->_waiters.clear();
         }
+
 
         // if moving to {READERS,WRITERS}_ONLY, block until no incompatible locks
         if (kPolicyReadersOnly == policy || kPolicyWritersOnly == policy) {
@@ -371,7 +368,7 @@ namespace mongo {
 
             if (0 < (_stats.*numBlockers)()) {
                 if (notifier) {
-                    (*notifier)(kReservedTxId);
+                    (*notifier)(_systemTransaction);
                 }
                 do {
                     _policyLock.wait(lk);
@@ -478,26 +475,25 @@ namespace mongo {
 
         return _releaseInternal(lr);
     }
-#if 0
-    LockManager::LockStatus LockManager::release(const TxId& holder,
+
+    LockManager::LockStatus LockManager::release(const Transaction* holder,
                                                  const uint32_t& mode,
                                                  const ResourceId& resId) {
-        unique_lock<boost::mutex> lk(_mutex);
-        _throwIfShuttingDown(holder);
+        {
+            unique_lock<boost::mutex> lk(_mutex);
+            _throwIfShuttingDown(holder);
+        }
+        unsigned resSlice = partitionResource(resId);
+        unique_lock<boost::mutex> lk(_resourceMutexes[lr->resSlice]);
 
-        LockId lid;
-        LockStatus status = _findLock(holder, mode, resId, &lid);
+        LockRequest* lr;
+        LockStatus status = _findLock(holder, mode, resId, resSlice, lr);
         if (kLockFound != status) {
             return status; // error, resource wasn't acquired in this mode by holder
         }
-        _stats.decStatsForMode(_locks[lid]->mode);
-        if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
-            (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
-            _policyLock.notify_one();
-        }
-        return _releaseInternal(lid);
+        return _releaseInternal(lr);
     }
-#endif
+
 #if 0
     /*
      * release all resource acquired by a transaction, returning the count
