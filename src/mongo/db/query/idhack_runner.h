@@ -50,10 +50,14 @@ namespace mongo {
     class IDHackRunner : public Runner {
     public:
 
-        /** Takes ownership of all the arguments -collection. */
-        IDHackRunner(const Collection* collection, CanonicalQuery* query);
+        /** Takes ownership of all the arguments -txn, -collection. */
+        IDHackRunner(OperationContext* txn,
+                     const Collection* collection,
+                     CanonicalQuery* query);
 
-        IDHackRunner(Collection* collection, const BSONObj& key);
+        IDHackRunner(OperationContext* txn,
+                     Collection* collection,
+                     const BSONObj& key);
 
         virtual ~IDHackRunner();
 
@@ -87,6 +91,9 @@ namespace mongo {
          * '_query->getProj()' must be non-NULL.
          */
         BSONObj applyProjection(const BSONObj& docObj) const;
+
+        // transactional context for read locks. Not owned by us
+        OperationContext* _txn;
 
         // Not owned here.
         const Collection* _collection;

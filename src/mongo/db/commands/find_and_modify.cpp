@@ -153,7 +153,7 @@ namespace mongo {
 
                 Runner* rawRunner;
                 massert(17384, "Could not get runner for query " + queryOriginal.toString(),
-                        getRunner(collection, cq, &rawRunner, QueryPlannerParams::DEFAULT).isOK());
+                        getRunner(txn, collection, cq, &rawRunner, QueryPlannerParams::DEFAULT).isOK());
 
                 auto_ptr<Runner> runner(rawRunner);
 

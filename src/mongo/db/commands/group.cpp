@@ -147,7 +147,7 @@ namespace mongo {
                 }
 
                 Runner* rawRunner;
-                if (!getRunner(collection, cq, &rawRunner).isOK()) {
+                if (!getRunner(txn,collection, cq, &rawRunner).isOK()) {
                     uasserted(17213, "Can't get runner for query " + query.toString());
                     return 0;
                 }

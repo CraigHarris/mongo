@@ -42,9 +42,11 @@ namespace mongo {
     class IDHackStage : public PlanStage {
     public:
         /** Takes ownership of all the arguments -collection. */
-        IDHackStage(const Collection* collection, CanonicalQuery* query, WorkingSet* ws);
+        IDHackStage(OperationContext* txn, const Collection* collection,
+                    CanonicalQuery* query, WorkingSet* ws);
 
-        IDHackStage(Collection* collection, const BSONObj& key, WorkingSet* ws);
+        IDHackStage(OperationContext* txn, Collection* collection,
+                    const BSONObj& key, WorkingSet* ws);
 
         virtual ~IDHackStage();
 
@@ -69,6 +71,9 @@ namespace mongo {
         static const char* kStageType;
 
     private:
+        // transactional context for read locks. Not owned by us
+        OperationContext* _txn;
+
         // Not owned here.
         const Collection* _collection;
 

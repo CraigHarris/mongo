@@ -35,8 +35,12 @@
 namespace mongo {
 
     // Does not take ownership.
-    OplogStart::OplogStart(const Collection* collection, MatchExpression* filter, WorkingSet* ws)
-        : _needInit(true),
+    OplogStart::OplogStart(OperationContext* txn,
+                           const Collection* collection,
+                           MatchExpression* filter,
+                           WorkingSet* ws)
+        : _txn(txn),
+          _needInit(true),
           _backwardsScanning(false),
           _extentHopping(false),
           _done(false),
@@ -52,7 +56,7 @@ namespace mongo {
             CollectionScanParams params;
             params.collection = _collection;
             params.direction = CollectionScanParams::BACKWARD;
-            _cs.reset(new CollectionScan(params, _workingSet, NULL));
+            _cs.reset(new CollectionScan(_txn, params, _workingSet, NULL));
             _needInit = false;
             _backwardsScanning = true;
             _timer.reset();
@@ -105,7 +109,7 @@ namespace mongo {
         _cs.reset();
 
         // Set up our extent hopping state.
-        _subIterators = _collection->getManyIterators();
+        _subIterators = _collection->getManyIterators(_txn);
     }
 
     PlanStage::StageState OplogStart::workBackwardsScan(WorkingSetID* out) {

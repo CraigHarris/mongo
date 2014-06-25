@@ -51,9 +51,12 @@ namespace mongo {
     // static
     const char* IndexScan::kStageType = "IXSCAN";
 
-    IndexScan::IndexScan(const IndexScanParams& params, WorkingSet* workingSet,
+    IndexScan::IndexScan(OperationContext* txn,
+                         const IndexScanParams& params,
+                         WorkingSet* workingSet,
                          const MatchExpression* filter)
-        : _workingSet(workingSet),
+        : _txn(txn),
+          _workingSet(workingSet),
           _hitEnd(false),
           _filter(filter), 
           _shouldDedup(true),
@@ -90,7 +93,7 @@ namespace mongo {
         }
 
         IndexCursor *cursor;
-        Status s = _iam->newCursor(cursorOptions, &cursor);
+        Status s = _iam->newCursor(_txn, cursorOptions, &cursor);
         verify(s.isOK());
         _indexCursor.reset(cursor);
 

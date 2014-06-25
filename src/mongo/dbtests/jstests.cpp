@@ -2010,7 +2010,6 @@ namespace JSTests {
 
             OperationContextImpl txn;
             DBDirectClient client(&txn);
-
             client.update( "test.system.js" , query.obj() , update.obj() , true /* upsert */ );
 
             scoped_ptr<Scope> s( globalScriptEngine->newScope() );

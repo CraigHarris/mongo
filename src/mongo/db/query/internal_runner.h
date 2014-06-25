@@ -39,11 +39,12 @@ namespace mongo {
     class BSONObj;
     class CanonicalQuery;
     class DiskLoc;
+    class OperationContext;
     class PlanExecutor;
+    struct PlanInfo;
     class PlanStage;
     struct QuerySolution;
     class TypeExplain;
-    struct PlanInfo;
     class WorkingSet;
 
     /**

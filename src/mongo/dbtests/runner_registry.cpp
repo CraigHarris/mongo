@@ -75,7 +75,7 @@ namespace RunnerRegistry {
             params.collection = collection();
             params.direction = CollectionScanParams::FORWARD;
             params.tailable = false;
-            auto_ptr<CollectionScan> scan(new CollectionScan(params, ws.get(), NULL));
+            auto_ptr<CollectionScan> scan(new CollectionScan(&_opCtx, params, ws.get(), NULL));
 
             // Create a runner to hold it
             CanonicalQuery* cq;

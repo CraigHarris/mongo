@@ -366,7 +366,7 @@ namespace mongo {
 
                 const string systemIndexes = ctx.db()->name() + ".system.indexes";
                 Collection* coll = ctx.db()->getCollection( &txn, systemIndexes );
-                auto_ptr<Runner> runner(InternalPlanner::collectionScan(systemIndexes,coll));
+                auto_ptr<Runner> runner(InternalPlanner::collectionScan(&txn, systemIndexes,coll));
                 BSONObj index;
                 Runner::RunnerState state;
                 while (Runner::RUNNER_ADVANCED == (state = runner->getNext(&index, NULL))) {

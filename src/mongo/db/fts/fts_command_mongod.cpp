@@ -113,7 +113,7 @@ namespace mongo {
             }
 
             Runner* rawRunner;
-            Status getRunnerStatus = getRunner(ctx.ctx().db()->getCollection(txn, ns), cq, &rawRunner);
+            Status getRunnerStatus = getRunner(txn, ctx.ctx().db()->getCollection(txn, ns), cq, &rawRunner);
             if (!getRunnerStatus.isOK()) {
                 errmsg = getRunnerStatus.reason();
                 return false;

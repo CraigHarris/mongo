@@ -150,7 +150,8 @@ namespace mongo {
             Collection* collection = ctx.ctx().db()->getCollection( txn, nss.ns() );
             massert( 13417, "captrunc collection not found or empty", collection);
 
-            boost::scoped_ptr<Runner> runner(InternalPlanner::collectionScan(nss.ns(),
+            boost::scoped_ptr<Runner> runner(InternalPlanner::collectionScan(txn,
+                                                                             nss.ns(),
                                                                              collection,
                                                                              InternalPlanner::BACKWARD));
             DiskLoc end;

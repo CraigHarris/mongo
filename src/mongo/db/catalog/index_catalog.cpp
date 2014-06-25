@@ -222,7 +222,8 @@ namespace mongo {
         }
 
         auto_ptr<Runner> runner(
-            InternalPlanner::collectionScan(db->_indexesName,
+            InternalPlanner::collectionScan(txn,
+                                            db->_indexesName,
                                             db->getCollection(txn, db->_indexesName)));
 
         BSONObj index;
@@ -691,7 +692,7 @@ namespace mongo {
                 EqualityMatchExpression expr;
                 BSONObj nsBSON = BSON( "ns" << _collection->ns() );
                 invariant( expr.init( "ns", nsBSON.firstElement() ).isOK() );
-                numSystemIndexesEntries = systemIndexes->countTableScan( &expr );
+                numSystemIndexesEntries = systemIndexes->countTableScan( txn, &expr );
             }
             else {
                 // this is ok, 0 is the right number
@@ -1078,7 +1079,7 @@ namespace mongo {
         }
     }
 
-    Status IndexCatalog::checkNoIndexConflicts( const BSONObj &obj ) {
+    Status IndexCatalog::checkNoIndexConflicts( OperationContext* txn, const BSONObj &obj ) {
         IndexIterator ii = getIndexIterator( true );
         while ( ii.more() ) {
             IndexDescriptor* descriptor = ii.next();
@@ -1096,7 +1097,7 @@ namespace mongo {
             options.dupsAllowed = false;
 
             UpdateTicket ticket;
-            Status ret = iam->validateUpdate(BSONObj(), obj, DiskLoc(), options, &ticket);
+            Status ret = iam->validateUpdate(txn, BSONObj(), obj, DiskLoc(), options, &ticket);
             if ( !ret.isOK() )
                 return ret;
         }

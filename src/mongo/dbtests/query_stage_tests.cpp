@@ -83,7 +83,7 @@ namespace QueryStageTests {
 
             WorkingSet* ws = new WorkingSet();
             PlanExecutor runner(ws, 
-                                new IndexScan(params, ws, filterExpr.get()), 
+                                new IndexScan(&_txn, params, ws, filterExpr.get()), 
                                 ctx.ctx().db()->getCollection(&_txn, ns()));
 
             int count = 0;

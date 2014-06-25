@@ -41,10 +41,12 @@ namespace mongo {
     // static
     const char* TextStage::kStageType = "TEXT";
 
-    TextStage::TextStage(const TextStageParams& params,
+    TextStage::TextStage(OperationContext* txn,
+                         const TextStageParams& params,
                          WorkingSet* ws,
                          const MatchExpression* filter)
-        : _params(params),
+        : _txn(txn),
+          _params(params),
           _ftsMatcher(params.query, params.spec),
           _ws(ws),
           _filter(filter),
@@ -180,7 +182,7 @@ namespace mongo {
             params.bounds.isSimpleRange = true;
             params.descriptor = _params.index;
             params.direction = -1;
-            _scanners.mutableVector().push_back(new IndexScan(params, _ws, NULL));
+            _scanners.mutableVector().push_back(new IndexScan(_txn, params, _ws, NULL));
         }
 
         // If we have no terms we go right to EOF.
