@@ -142,7 +142,7 @@ namespace QueryStageDistinct {
             params.bounds.fields.push_back(oil);
 
             WorkingSet ws;
-            DistinctScan* distinct = new DistinctScan(params, &ws);
+            DistinctScan* distinct = new DistinctScan(&_txn, params, &ws);
 
             WorkingSetID wsid;
             // Get our first result.
@@ -207,7 +207,7 @@ namespace QueryStageDistinct {
             params.bounds.fields.push_back(oil);
 
             WorkingSet ws;
-            DistinctScan* distinct = new DistinctScan(params, &ws);
+            DistinctScan* distinct = new DistinctScan(&_txn, params, &ws);
 
             // We should see each number in the range [1, 6] exactly once.
             std::set<int> seen;

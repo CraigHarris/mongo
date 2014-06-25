@@ -91,7 +91,7 @@ namespace QuerySingleSolutionRunner {
             verify(swme.isOK());
             auto_ptr<MatchExpression> filter(swme.getValue());
             // Make the stage.
-            auto_ptr<PlanStage> root(new CollectionScan(csparams, ws.get(), filter.release()));
+            auto_ptr<PlanStage> root(new CollectionScan(&_txn, csparams, ws.get(), filter.release()));
 
             CanonicalQuery* cq;
             verify(CanonicalQuery::canonicalize(ns(), filterObj, &cq).isOK());
@@ -133,7 +133,7 @@ namespace QuerySingleSolutionRunner {
             const Collection* coll = context.db()->getCollection(&_txn, ns());
 
             auto_ptr<WorkingSet> ws(new WorkingSet());
-            IndexScan* ix = new IndexScan(ixparams, ws.get(), NULL);
+            IndexScan* ix = new IndexScan(&_txn, ixparams, ws.get(), NULL);
             auto_ptr<PlanStage> root(new FetchStage(ws.get(), ix, NULL, coll));
 
             CanonicalQuery* cq;

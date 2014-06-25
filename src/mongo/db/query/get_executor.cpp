@@ -157,7 +157,8 @@ namespace mongo {
         plannerParams->options |= QueryPlannerParams::SPLIT_LIMITED_SORT;
     }
 
-    Status getExecutorIDHack(Collection* collection,
+    Status getExecutorIDHack(OperationContext* txn,
+                             Collection* collection,
                              CanonicalQuery* query,
                              const QueryPlannerParams& plannerParams,
                              PlanExecutor** out) {
@@ -165,7 +166,7 @@ namespace mongo {
 
         LOG(2) << "Using idhack: " << query->toStringShort();
         WorkingSet* ws = new WorkingSet();
-        PlanStage* root = new IDHackStage(collection, query, ws);
+        PlanStage* root = new IDHackStage(txn, collection, query, ws);
 
         // Might have to filter out orphaned docs.
         if (plannerParams.options & QueryPlannerParams::INCLUDE_SHARD_FILTER) {
@@ -196,7 +197,8 @@ namespace mongo {
         return Status::OK();
     }
 
-    Status getExecutor(Collection* collection,
+    Status getExecutor(OperationContext* txn,
+                      Collection* collection,
                       CanonicalQuery* canonicalQuery,
                       PlanExecutor** out,
                       size_t plannerOptions) {
@@ -221,7 +223,7 @@ namespace mongo {
         // If we have an _id index we can use the idhack runner.
         if (IDHackStage::supportsQuery(*canonicalQuery) &&
             collection->getIndexCatalog()->findIdIndex()) {
-            return getExecutorIDHack(collection, canonicalQuery, plannerParams, out);
+            return getExecutorIDHack(txn, collection, canonicalQuery, plannerParams, out);
         }
 
         // Tailable: If the query requests tailable the collection must be capped.
@@ -262,7 +264,7 @@ namespace mongo {
                 WorkingSet* sharedWs = new WorkingSet();
 
                 PlanStage *root, *backupRoot=NULL;
-                verify(StageBuilder::build(collection, *qs, sharedWs, &root));
+                verify(StageBuilder::build(txn, collection, *qs, sharedWs, &root));
                 if ((plannerParams.options & QueryPlannerParams::PRIVATE_IS_COUNT)
                     && turnIxscanIntoCount(qs)) {
                     LOG(2) << "Using fast count: " << canonicalQuery->toStringShort()
@@ -273,7 +275,7 @@ namespace mongo {
                     }
                 }
                 else if (NULL != backupQs) {
-                    verify(StageBuilder::build(collection, *backupQs, sharedWs, &backupRoot));
+                    verify(StageBuilder::build(txn, collection, *backupQs, sharedWs, &backupRoot));
                 }
 
                 // add a CachedPlanStage on top of the previous root
@@ -293,7 +295,7 @@ namespace mongo {
             auto_ptr<WorkingSet> ws(new WorkingSet());
 
             SubplanStage* subplan;
-            Status runnerStatus = SubplanStage::make(collection, ws.get(), plannerParams,
+            Status runnerStatus = SubplanStage::make(txn, collection, ws.get(), plannerParams,
                                                      canonicalQuery, &subplan);
             if (!runnerStatus.isOK()) {
                 return runnerStatus;
@@ -303,10 +305,11 @@ namespace mongo {
             return Status::OK();
         }
 
-        return getExecutorAlwaysPlan(collection, canonicalQuery, plannerParams, out);
+        return getExecutorAlwaysPlan(txn, collection, canonicalQuery, plannerParams, out);
     }
 
-    Status getExecutorAlwaysPlan(Collection* collection,
+    Status getExecutorAlwaysPlan(OperationContext* txn,
+                                 Collection* collection,
                                  CanonicalQuery* canonicalQuery,
                                  const QueryPlannerParams& plannerParams,
                                  PlanExecutor** execOut) {
@@ -350,7 +353,8 @@ namespace mongo {
                     // We're not going to cache anything that's fast count.
                     WorkingSet* ws = new WorkingSet();
                     PlanStage* root;
-                    verify(StageBuilder::build(collection, *solutions[i], ws, &root));
+
+                    verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
 
                     *execOut = new PlanExecutor(ws, root, solutions[i], collection);
                     return Status::OK();
@@ -366,7 +370,8 @@ namespace mongo {
             // Only one possible plan.  Run it.  Build the stages from the solution.
             WorkingSet* ws = new WorkingSet();
             PlanStage* root;
-            verify(StageBuilder::build(collection, *solutions[0], ws, &root));
+
+            verify(StageBuilder::build(txn, collection, *solutions[0], ws, &root));
 
             *execOut = new PlanExecutor(ws, root, solutions[0], collection);
             return Status::OK();
@@ -386,7 +391,7 @@ namespace mongo {
 
                 // version of StageBuild::build when WorkingSet is shared
                 PlanStage* nextPlanRoot;
-                verify(StageBuilder::build(collection, *solutions[ix],
+                verify(StageBuilder::build(txn, collection, *solutions[ix],
                                            sharedWorkingSet, &nextPlanRoot));
 
                 // Owns none of the arguments
@@ -576,7 +581,8 @@ namespace mongo {
 
     }  // namespace
 
-    Status getExecutorCount(Collection* collection,
+    Status getExecutorCount(OperationContext* txn,
+                            Collection* collection,
                             const BSONObj& query,
                             const BSONObj& hintObj,
                             PlanExecutor** execOut) {
@@ -597,7 +603,7 @@ namespace mongo {
 
         scoped_ptr<CanonicalQuery> cleanupCq(cq);
 
-        return getExecutor(collection, cq, execOut, QueryPlannerParams::PRIVATE_IS_COUNT);
+        return getExecutor(txn, collection, cq, execOut, QueryPlannerParams::PRIVATE_IS_COUNT);
     }
 
     //
@@ -653,7 +659,8 @@ namespace mongo {
         return false;
     }
 
-    Status getExecutorDistinct(Collection* collection,
+    Status getExecutorDistinct(OperationContext* txn,
+                               Collection* collection,
                                const BSONObj& query,
                                const std::string& field,
                                PlanExecutor** out) {
@@ -704,7 +711,7 @@ namespace mongo {
             scoped_ptr<CanonicalQuery> cleanupCq(cq);
 
             // Does not take ownership of its args.
-            return getExecutor(collection, cq, out);
+            return getExecutor(txn, collection, cq, out);
         }
 
         //
@@ -753,7 +760,7 @@ namespace mongo {
 
             WorkingSet* ws = new WorkingSet();
             PlanStage* root;
-            verify(StageBuilder::build(collection, *soln, ws, &root));
+            verify(StageBuilder::build(txn, collection, *soln, ws, &root));
             // Takes ownership of 'ws', 'root', and 'soln'.
             *out = new PlanExecutor(ws, root, soln, collection);
             return Status::OK();
@@ -763,7 +770,7 @@ namespace mongo {
         vector<QuerySolution*> solutions;
         status = QueryPlanner::plan(*cq, plannerParams, &solutions);
         if (!status.isOK()) {
-            return getExecutor(collection, cq, out);
+            return getExecutor(txn, collection, cq, out);
         }
 
         // We look for a solution that has an ixscan we can turn into a distinctixscan
@@ -782,7 +789,7 @@ namespace mongo {
                 // Build and return the SSR over solutions[i].
                 WorkingSet* ws = new WorkingSet();
                 PlanStage* root;
-                verify(StageBuilder::build(collection, *solutions[i], ws, &root));
+                verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
                 // Takes ownership of 'ws', 'root', and 'solutions[i]'.
                 *out = new PlanExecutor(ws, root, solutions[i], collection);
                 return Status::OK();
@@ -805,7 +812,7 @@ namespace mongo {
         cleanupCq.reset(cq);
 
         // Does not take ownership.
-        return getExecutor(collection, cq, out);
+        return getExecutor(txn, collection, cq, out);
     }
 
 }  // namespace mongo

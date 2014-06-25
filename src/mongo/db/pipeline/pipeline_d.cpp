@@ -75,6 +75,7 @@ namespace {
 }
 
     boost::shared_ptr<Runner> PipelineD::prepareCursorSource(
+            OperationContext* txn,
             Collection* collection,
             const intrusive_ptr<Pipeline>& pPipeline,
             const intrusive_ptr<ExpressionContext>& pExpCtx) {
@@ -178,7 +179,7 @@ namespace {
                                              &cq,
                                              whereCallback);
             Runner* rawRunner;
-            if (status.isOK() && getRunner(collection, cq, &rawRunner, runnerOptions).isOK()) {
+            if (status.isOK() && getRunner(txn, collection, cq, &rawRunner, runnerOptions).isOK()) {
                 // success: The Runner will handle sorting for us using an index.
                 runner.reset(rawRunner);
                 sortInRunner = true;
@@ -203,7 +204,7 @@ namespace {
                                              whereCallback));
 
             Runner* rawRunner;
-            uassertStatusOK(getRunner(collection, cq, &rawRunner, runnerOptions));
+            uassertStatusOK(getRunner(txn, collection, cq, &rawRunner, runnerOptions));
             runner.reset(rawRunner);
         }
 

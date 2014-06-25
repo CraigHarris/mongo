@@ -168,7 +168,7 @@ namespace mongo {
         {
             Collection* coll = getCollection( txn, _namespacesName );
             if ( coll ) {
-                scoped_ptr<RecordIterator> it( coll->getIterator() );
+                scoped_ptr<RecordIterator> it( coll->getIterator(txn) );
                 DiskLoc next;
                 while ( !( next = it->getNext() ).isNull() ) {
                     BSONObj nsObj = coll->docFor( next );
@@ -274,7 +274,7 @@ namespace mongo {
             size += collection->dataSize();
 
             BSONObjBuilder temp;
-            storageSize += collection->getRecordStore()->storageSize( &temp );
+            storageSize += collection->getRecordStore()->storageSize( opCtx, &temp );
             numExtents += temp.obj()["numExtents"].numberInt(); // XXX
 
             indexes += collection->getIndexCatalog()->numIndexesTotal();

@@ -247,7 +247,7 @@ namespace mongo {
          * checks all unique indexes and checks for conflicts
          * should not throw
          */
-        Status checkNoIndexConflicts( const BSONObj& obj );
+        Status checkNoIndexConflicts( OperationContext* txn, const BSONObj& obj );
 
         // ------- temp internal -------
 

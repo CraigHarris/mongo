@@ -72,8 +72,8 @@ namespace QueryStageAnd {
         }
 
         void getLocs(set<DiskLoc>* out, Collection* coll) {
-            RecordIterator* it = coll->getIterator(DiskLoc(), false,
-                                                       CollectionScanParams::FORWARD);
+            RecordIterator* it = coll->getIterator(&_txn, DiskLoc(), false,
+                                                   CollectionScanParams::FORWARD);
             while (!it->isEOF()) {
                 DiskLoc nextLoc = it->getNext();
                 out->insert(nextLoc);
@@ -154,7 +154,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar >= 10
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -162,7 +162,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // ah reads the first child into its hash table.
             // ah should read foo=20, foo=19, ..., foo=0 in that order.
@@ -257,12 +257,12 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar <= 19 (descending)
             params.descriptor = getIndex(BSON("bar" << 1), coll);
             params.bounds.startKey = BSON("" << 19);
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // First call to work reads the first result from the children.
             // The first result is for the first scan over foo is {foo: 20, bar: 20, baz: 20}.
@@ -342,7 +342,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar >= 10
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -350,7 +350,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // foo == bar == baz, and foo<=20, bar>=10, so our values are:
             // foo == 10, 11, 12, 13, 14, 15. 16, 17, 18, 19, 20
@@ -396,7 +396,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar >= 10
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -404,7 +404,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Stage execution should fail.
             ASSERT_EQUALS(-1, countResults(ah.get()));
@@ -448,7 +448,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar >= 10
             params.descriptor = getIndex(BSON("bar" << 1 << "big" << 1), coll);
@@ -456,7 +456,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // foo == bar == baz, and foo<=20, bar>=10, so our values are:
             // foo == 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20.
@@ -495,7 +495,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar >= 10
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -503,7 +503,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // 5 <= baz <= 15
             params.descriptor = getIndex(BSON("baz" << 1), coll);
@@ -511,7 +511,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 15);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // foo == bar == baz, and foo<=20, bar>=10, 5<=baz<=15, so our values are:
             // foo == 10, 11, 12, 13, 14, 15.
@@ -561,7 +561,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar >= 10
             params.descriptor = getIndex(BSON("bar" << 1 << "big" << 1), coll);
@@ -569,7 +569,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // 5 <= baz <= 15
             params.descriptor = getIndex(BSON("baz" << 1), coll);
@@ -577,7 +577,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 15);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Stage execution should fail.
             ASSERT_EQUALS(-1, countResults(ah.get()));
@@ -614,7 +614,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar == 5.  Index scan should be eof.
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -622,7 +622,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 5);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             int count = 0;
             int works = 0;
@@ -674,7 +674,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar <= 100
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -685,7 +685,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << "");
             params.bounds.endKeyInclusive = false;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             ASSERT_EQUALS(0, countResults(ah.get()));
         }
@@ -725,7 +725,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = -1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar >= 95
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -733,7 +733,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSONObj();
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar == 97
             ASSERT_EQUALS(1, countResults(ah.get()));
@@ -777,11 +777,11 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 1);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Scan over bar == 1
             params.descriptor = getIndex(BSON("bar" << 1), coll);
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Get the set of disklocs in our collection to use later.
             set<DiskLoc> data;
@@ -903,15 +903,15 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 1);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // bar == 1
             params.descriptor = getIndex(BSON("bar" << 1), coll);
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // baz == 1
             params.descriptor = getIndex(BSON("baz" << 1), coll);
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             ASSERT_EQUALS(50, countResults(ah.get()));
         }
@@ -948,7 +948,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 7);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Bar == 20, not EOF.
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -956,7 +956,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 20);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             ASSERT_EQUALS(0, countResults(ah.get()));
         }
@@ -996,7 +996,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 7);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // bar == 20.
             params.descriptor = getIndex(BSON("bar" << 1), coll);
@@ -1004,7 +1004,7 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 20);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             ASSERT_EQUALS(0, countResults(ah.get()));
         }
@@ -1044,11 +1044,11 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 1);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // bar == 1
             params.descriptor = getIndex(BSON("bar" << 1), coll);
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Filter drops everything.
             ASSERT_EQUALS(0, countResults(ah.get()));
@@ -1085,13 +1085,13 @@ namespace QueryStageAnd {
             params.bounds.endKey = BSON("" << 1);
             params.bounds.endKeyInclusive = true;
             params.direction = 1;
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             // Intersect with 7 <= bar < 10000
             params.descriptor = getIndex(BSON("bar" << 1), coll);
             params.bounds.startKey = BSON("" << 7);
             params.bounds.endKey = BSON("" << 10000);
-            ah->addChild(new IndexScan(params, &ws, NULL));
+            ah->addChild(new IndexScan(&_txn, params, &ws, NULL));
 
             WorkingSetID lastId = WorkingSet::INVALID_ID;
 

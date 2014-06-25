@@ -39,8 +39,9 @@
 #include "mongo/platform/compiler.h"
 #include "mongo/platform/cstdint.h"
 #include "mongo/util/timer.h"
-
 #include "mongo/bson/util/atomic_int.h"
+#include "mongo/db/diskloc.h"
+#include "mongo/db/structure/btree/btree_ondisk.h"
 
 /*
  * LockManager controls access to resources through two functions: acquire and release
@@ -60,10 +61,15 @@
 
 namespace mongo {
 
+    // Defined in lock_mgr.cpp
+    extern bool useExperimentalDocLocking;
+
     class ResourceId {
     public:
         ResourceId() : _rid(0) { }
         ResourceId(size_t rid) : _rid(rid) { }
+        ResourceId(const DiskLoc& loc) : _rid(*(size_t*)&loc) { }
+        ResourceId(const DiskLoc56Bit& loc) : _rid(*(size_t*)&loc) { }
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
         bool operator==(const ResourceId& other) const { return _rid == other._rid; }
         operator size_t() const { return _rid; }
@@ -706,29 +712,39 @@ namespace mongo {
 
     class SharedResourceLock : public ResourceLock {
     public:
-    SharedResourceLock(Transaction* requestor, void* resource)
-        : ResourceLock(LockManager::getSingleton(),
-                       requestor,
-                       kShared,
-                       (size_t)resource) { }
-    SharedResourceLock(Transaction* requestor, size_t resource)
-        : ResourceLock(LockManager::getSingleton(),
-                       requestor,
-                       kShared,
-                       resource) { }
+        SharedResourceLock(Transaction* requestor, void* resource)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kShared,
+                           (size_t)resource) { }
+        SharedResourceLock(Transaction* requestor, size_t resource)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kShared,
+                           resource) { }
+        SharedResourceLock(Transaction* requestor, const DiskLoc& loc)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kShared,
+                           *(size_t*)&loc) { }
     };
 
     class ExclusiveResourceLock : public ResourceLock {
     public:
-    ExclusiveResourceLock(Transaction* requestor, void* resource)
-        : ResourceLock(LockManager::getSingleton(),
-                       requestor,
-                       kExclusive,
-                       (size_t)resource) { }
-    ExclusiveResourceLock(Transaction* requestor, size_t resource)
-        : ResourceLock(LockManager::getSingleton(),
-                       requestor,
-                       kExclusive,
-                       resource) { }
+        ExclusiveResourceLock(Transaction* requestor, void* resource)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kExclusive,
+                           (size_t)resource) { }
+        ExclusiveResourceLock(Transaction* requestor, size_t resource)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kExclusive,
+                           resource) { }
+        ExclusiveResourceLock(Transaction* requestor, const DiskLoc& loc)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kExclusive,
+                           *(size_t*)&loc) { }
     };
 } // namespace mongo

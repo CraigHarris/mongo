@@ -34,6 +34,7 @@ namespace mongo {
     class Collection;
     class DocumentSourceCursor;
     struct ExpressionContext;
+    class OperationContext;
     class Pipeline;
     class Runner;
 
@@ -71,6 +72,7 @@ namespace mongo {
          * @param pExpCtx the expression context for this pipeline
          */
         static boost::shared_ptr<Runner> prepareCursorSource(
+            OperationContext* txn,
             Collection* collection,
             const intrusive_ptr<Pipeline> &pPipeline,
             const intrusive_ptr<ExpressionContext> &pExpCtx);

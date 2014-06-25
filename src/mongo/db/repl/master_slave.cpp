@@ -245,7 +245,8 @@ namespace repl {
             // add if missing
             int n = 0;
             auto_ptr<Runner> runner(
-                InternalPlanner::collectionScan(localSources,
+                InternalPlanner::collectionScan(txn,
+                                                localSources,
                                                 ctx.db()->getCollection(txn, localSources)));
             BSONObj obj;
             Runner::RunnerState state;
@@ -289,7 +290,8 @@ namespace repl {
         }
 
         auto_ptr<Runner> runner(
-            InternalPlanner::collectionScan(localSources,
+            InternalPlanner::collectionScan(txn,
+                                            localSources,
                                             ctx.db()->getCollection(txn, localSources)));
         BSONObj obj;
         Runner::RunnerState state;
