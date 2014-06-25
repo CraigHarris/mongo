@@ -1,7 +1,7 @@
 // data_file.cpp
 
 /**
-*    Copyright (C) 2013 10gen Inc.
+*    Copyright (C) 2013-2014 MongoDB Inc.
 *
 *    This program is free software: you can redistribute it and/or  modify
 *    it under the terms of the GNU Affero General Public License, version 3,
@@ -170,6 +170,7 @@ namespace mongo {
 
         DataFileHeader *h = header();
         *txn->recoveryUnit()->writing(&h->unused) = DiskLoc( fileNo, offset + size );
+
         txn->recoveryUnit()->writingInt(h->unusedLength) = h->unusedLength - size;
 
         return DiskLoc( fileNo, offset );
@@ -224,7 +225,9 @@ namespace mongo {
         if ( freeListStart == minDiskLoc ) {
             // we are upgrading from 2.4 to 2.6
             invariant( freeListEnd == minDiskLoc ); // both start and end should be (0,0) or real
+
             *txn->recoveryUnit()->writing( &freeListStart ) = DiskLoc();
+
             *txn->recoveryUnit()->writing( &freeListEnd ) = DiskLoc();
         }
     }

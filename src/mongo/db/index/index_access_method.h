@@ -181,7 +181,8 @@ namespace mongo {
          * @param dups - if NULL, error out on dups if not allowed
          *               if not NULL, put the bad DiskLocs there
          */
-        virtual Status commitBulk( IndexAccessMethod* bulk,
+        virtual Status commitBulk( OperationContext* txn,
+                                   IndexAccessMethod* bulk,
                                    bool mayInterrupt,
                                    std::set<DiskLoc>* dups ) = 0;
     };

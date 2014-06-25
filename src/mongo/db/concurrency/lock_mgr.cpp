@@ -117,7 +117,14 @@ namespace mongo {
         , _locks(NULL) { }
 
     Transaction::~Transaction() {
-        
+        bool firstTime = true;
+        for (LockRequest* nextLock = _locks; nextLock; nextLock=nextLock->nextOfTransaction) {
+            if (true == firstTime)
+                log() << "tx:" << _txId << " has locks left at dtor:" << endl << toString() << endl;
+            else
+                firstTime = false;
+            log() << "file/line:" << nextLock->file << "/" << nextLock->line << endl;
+        }
     }
 
     Transaction* Transaction::setTxIdOnce(unsigned txId) {
@@ -202,6 +209,8 @@ namespace mongo {
     LockRequest::LockRequest(const ResourceId& resId,
                              const LockMode& mode,
                              Transaction* tx,
+                             const char* file,
+                             int line,
                              bool heapAllocated)
         : requestor(tx)
         , mode(mode)
@@ -209,6 +218,8 @@ namespace mongo {
         , slice(LockManager::partitionResource(resId))
         , count(1)
         , sleepCount(0)
+        , file(file)
+        , line(line)
         , heapAllocated(heapAllocated)
         , nextOnResource(NULL)
         , prevOnResource(NULL)
@@ -276,7 +287,7 @@ namespace mongo {
 
     // This startup parameter enables experimental document-level locking features
     // It should be removed once full document-level locking is checked-in.
-    MONGO_EXPORT_STARTUP_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
+    MONGO_EXPORT_STARTUP_SERVER_PARAMETER(useExperimentalDocLocking, bool, true);
 
     static LockManager* _singleton = NULL;
 
@@ -416,6 +427,8 @@ namespace mongo {
     void LockManager::acquire(Transaction* requestor,
                               const LockMode& mode,
                               const ResourceId& resId,
+                              const char* file,
+                              int line,
                               Notifier* notifier) {
         if (kReservedResourceId == resId || !useExperimentalDocLocking) {
             return;
@@ -439,7 +452,7 @@ namespace mongo {
                                                  queue, conflictPosition);
         if (kResourceAcquired == status) { return; }
 
-        LockRequest* lr = new LockRequest(resId, mode, requestor, true);
+        LockRequest* lr = new LockRequest(resId, mode, requestor, file, line, true);
 
         // add lock request to requesting transaction's list
         lr->requestor->addLock(lr);
@@ -474,13 +487,13 @@ namespace mongo {
                 isAvailable = _isAvailable(requestor, mode, resId, slice);
             }
             if (isAvailable) {
-                acquire(requestor, mode, resId, notifier);
+                acquire(requestor, mode, resId, NULL, 0, notifier);
                 return ix;
             }
         }
 
         // sigh. none of the records are currently available. wait on the first.
-        acquire(requestor, mode, resources[0], notifier);
+        acquire(requestor, mode, resources[0], NULL, 0, notifier);
         return 0;
     }
 
@@ -1320,9 +1333,11 @@ namespace mongo {
                                Transaction* requestor,
                                const LockMode& mode,
                                const ResourceId& resId,
+                               const char* file,
+                               int line,
                                LockManager::Notifier* notifier)
         : _lm(lm)
-        , _lr(resId, mode, requestor)
+        , _lr(resId, mode, requestor, file, line)
     {
         _lm.acquireLock(&_lr, notifier);
     }

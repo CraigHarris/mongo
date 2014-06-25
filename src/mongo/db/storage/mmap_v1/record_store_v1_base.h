@@ -47,13 +47,13 @@ namespace mongo {
     public:
         virtual ~RecordStoreV1MetaData(){}
 
-        virtual const DiskLoc& capExtent() const = 0;
+        virtual const DiskLoc& capExtent( OperationContext* txn ) const = 0;
         virtual void setCapExtent( OperationContext* txn, const DiskLoc& loc ) = 0;
 
-        virtual const DiskLoc& capFirstNewRecord() const = 0;
+        virtual const DiskLoc& capFirstNewRecord( OperationContext* txn ) const = 0;
         virtual void setCapFirstNewRecord( OperationContext* txn, const DiskLoc& loc ) = 0;
 
-        bool capLooped() const { return capFirstNewRecord().isValid(); }
+        bool capLooped( OperationContext* txn ) const { return capFirstNewRecord(txn).isValid(); }
 
         virtual long long dataSize() const = 0;
         virtual long long numRecords() const = 0;
@@ -66,7 +66,7 @@ namespace mongo {
                                long long dataSizeIncrement,
                                long long numRecordsIncrement ) = 0;
 
-        virtual const DiskLoc& deletedListEntry( int bucket ) const = 0;
+        virtual const DiskLoc& deletedListEntry( OperationContext* txn, int bucket ) const = 0;
         virtual void setDeletedListEntry( OperationContext* txn,
                                           int bucket,
                                           const DiskLoc& loc ) = 0;

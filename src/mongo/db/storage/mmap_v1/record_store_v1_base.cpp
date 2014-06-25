@@ -82,6 +82,7 @@ namespace mongo {
 
         DiskLoc cur = _details->firstExtent(txn);
 
+
         while ( !cur.isNull() ) {
             Extent* e = _extentManager->getExtent( cur );
 
@@ -91,6 +92,7 @@ namespace mongo {
             if ( extraInfo && level > 0 ) {
                 extentInfo.append( BSON( "len" << e->length << "loc: " << e->myLoc.toBSONObj() ) );
             }
+
             cur = e->xnext;            
         }
 
@@ -126,7 +128,8 @@ namespace mongo {
     }
 
     DiskLoc RecordStoreV1Base::_getExtentLocForRecord( OperationContext* txn, const DiskLoc& loc ) const {
-        return _extentManager->extentLocForV1( loc );
+        DiskLoc result = _extentManager->extentLocForV1( txn, loc );
+        return result;
     }
 
 
@@ -167,7 +170,8 @@ namespace mongo {
                 break;
             // entire extent could be empty, keep looking
         }
-        return e->lastRecord;
+        DiskLoc result = e->lastRecord;
+        return result;
 
     }
 
@@ -357,6 +361,7 @@ namespace mongo {
 
     void RecordStoreV1Base::deleteRecord( OperationContext* txn, const DiskLoc& dl ) {
 
+
         Record* todelete = recordFor( dl );
         invariant( todelete->netLength() >= 4 ); // this is required for defensive code
 
@@ -486,6 +491,7 @@ namespace mongo {
                                         ValidateAdaptor* adaptor,
                                         ValidateResults* results, BSONObjBuilder* output ) const {
 
+
         // 1) basic status that require no iteration
         // 2) extent level info
         // 3) check extent start and end
@@ -505,19 +511,24 @@ namespace mongo {
         output->appendNumber("lastExtentSize", _details->lastExtentSize(txn));
         output->appendNumber("padding", _details->paddingFactor());
 
-        if ( _details->firstExtent(txn).isNull() )
+        DiskLoc firstExtentLoc = _details->firstExtent(txn);
+        if ( firstExtentLoc.isNull() )
             output->append( "firstExtent", "null" );
-        else
+        else {
             output->append( "firstExtent",
-                            str::stream() << _details->firstExtent(txn).toString()
+                            str::stream() << firstExtentLoc.toString()
                             << " ns:"
-                            << _getExtent( txn, _details->firstExtent(txn) )->nsDiagnostic.toString());
-        if ( _details->lastExtent(txn).isNull() )
+                            << _getExtent( txn, firstExtentLoc )->nsDiagnostic.toString());
+        }
+
+        DiskLoc lastExtentLoc = _details->lastExtent(txn);
+        if ( lastExtentLoc.isNull() )
             output->append( "lastExtent", "null" );
-        else
-            output->append( "lastExtent", str::stream() << _details->lastExtent(txn).toString()
+        else {
+            output->append( "lastExtent", str::stream() << lastExtentLoc.toString()
                             << " ns:"
-                            << _getExtent( txn, _details->lastExtent(txn) )->nsDiagnostic.toString());
+                            << _getExtent( txn, lastExtentLoc )->nsDiagnostic.toString());
+        }
 
         // 22222222222222222222222222
         { // validate extent basics
@@ -525,12 +536,17 @@ namespace mongo {
             int extentCount = 0;
             DiskLoc extentDiskLoc;
             try {
-                if ( !_details->firstExtent(txn).isNull() ) {
-                    _getExtent( txn, _details->firstExtent(txn) )->assertOk();
-                    _getExtent( txn, _details->lastExtent(txn) )->assertOk();
+                DiskLoc firstDiskLoc = _details->firstExtent(txn);
+
+                DiskLoc lastDiskLoc = _details->lastExtent(txn);
+
+                if ( !extentDiskLoc.isNull() ) {
+                    _getExtent( txn, firstDiskLoc )->assertOk();
+                    _getExtent( txn, lastDiskLoc )->assertOk();
                 }
 
-                extentDiskLoc = _details->firstExtent(txn);
+                extentDiskLoc = firstDiskLoc;
+
                 while (!extentDiskLoc.isNull()) {
                     Extent* thisExtent = _getExtent( txn, extentDiskLoc );
                     if (full) {
@@ -690,7 +706,7 @@ namespace mongo {
                     }
                 }
 
-                if ( isCapped() && !_details->capLooped() ) {
+                if ( isCapped() && !_details->capLooped(txn) ) {
                     output->append("cappedOutOfOrder", outOfOrder);
                     if ( outOfOrder > 1 ) {
                         results->valid = false;
@@ -716,7 +732,7 @@ namespace mongo {
             // 55555555555555555555555555
             BSONArrayBuilder deletedListArray;
             for ( int i = 0; i < Buckets; i++ ) {
-                deletedListArray << _details->deletedListEntry(i).isNull();
+                deletedListArray << _details->deletedListEntry(txn, i).isNull();
             }
 
             int ndel = 0;
@@ -724,7 +740,7 @@ namespace mongo {
             BSONArrayBuilder delBucketSizes;
             int incorrect = 0;
             for ( int i = 0; i < Buckets; i++ ) {
-                DiskLoc loc = _details->deletedListEntry(i);
+                DiskLoc loc = _details->deletedListEntry(txn, i);
                 try {
                     int k = 0;
                     while ( !loc.isNull() ) {

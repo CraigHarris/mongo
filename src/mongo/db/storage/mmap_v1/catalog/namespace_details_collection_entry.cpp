@@ -118,7 +118,8 @@ namespace mongo {
         return true;
     }
 
-    DiskLoc NamespaceDetailsCollectionCatalogEntry::getIndexHead( const StringData& idxName ) const {
+    DiskLoc NamespaceDetailsCollectionCatalogEntry::getIndexHead( OperationContext* txn,
+                                                                  const StringData& idxName ) const {
         int idxNo = _findIndexNumber( idxName );
         invariant( idxNo >= 0 );
         return _details->idx( idxNo ).head;
@@ -250,6 +251,7 @@ namespace mongo {
         }
 
         *txn->recoveryUnit()->writing( &id->info ) = systemIndexesEntry.getValue();
+
         *txn->recoveryUnit()->writing( &id->head ) = DiskLoc();
 
         txn->recoveryUnit()->writingInt( _details->indexBuildsInProgress ) += 1;
@@ -278,7 +280,9 @@ namespace mongo {
 
             // flip main meta data
             IndexDetails temp = _details->idx(idxNo);
+
             *txn->recoveryUnit()->writing(&_details->idx(idxNo)) = _details->idx(toIdxNo);
+
             *txn->recoveryUnit()->writing(&_details->idx(toIdxNo)) = temp;
 
             // flip multi key bits
@@ -291,6 +295,7 @@ namespace mongo {
         }
 
         txn->recoveryUnit()->writingInt( _details->indexBuildsInProgress ) -= 1;
+
         txn->recoveryUnit()->writingInt( _details->nIndexes ) += 1;
 
         invariant( isIndexReady( indexName ) );

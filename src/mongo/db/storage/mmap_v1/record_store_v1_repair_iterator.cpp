@@ -129,7 +129,8 @@ namespace mongo {
                 // checks here.
                 //
                 const Extent* e = em->getExtent(_currExtent, false);
-                _currExtent = (FORWARD_SCAN == _stage ? e->xnext : e->xprev);
+                DiskLoc newExtentLoc = (FORWARD_SCAN == _stage ? e->xnext : e->xprev);
+                _currExtent = newExtentLoc;
             }
 
             bool hasNextExtent = !_currExtent.isNull();

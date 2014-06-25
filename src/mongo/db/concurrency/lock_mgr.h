@@ -40,6 +40,8 @@
 #include "mongo/platform/cstdint.h"
 #include "mongo/util/timer.h"
 #include "mongo/bson/util/atomic_int.h"
+#include "mongo/db/diskloc.h"
+#include "mongo/db/storage/mmap_v1/btree/btree_ondisk.h"
 
 /*
  * LockManager controls access to resources through two functions: acquire and release
@@ -65,15 +67,18 @@ namespace mongo {
     class ResourceId {
     public:
         ResourceId() : _rid(0) { }
-        ResourceId(size_t rid) : _rid(rid) { }
+//        ResourceId(uint64_t rid) : _rid(rid) { }
+        ResourceId(const DiskLoc& loc) : _rid(*reinterpret_cast<const uint64_t*>(&loc)) { }
+        ResourceId(const DiskLoc56Bit& loc) : _rid(*reinterpret_cast<const uint64_t*>(&loc)) { }
+        ResourceId(const void* loc) : _rid(reinterpret_cast<uint64_t>(loc)) { }
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
         bool operator==(const ResourceId& other) const { return _rid == other._rid; }
-        operator size_t() const { return _rid; }
+        operator uint64_t() const { return _rid; }
 
     private:
         uint64_t _rid;
     };
-    static const ResourceId kReservedResourceId = 0;
+    static const ResourceId kReservedResourceId;
 
 
     /**
@@ -96,7 +101,10 @@ namespace mongo {
         LockRequest(const ResourceId& resId,
                     const LockMode& mode,
                     Transaction* requestor,
-                    bool heapAllocated = false);
+                    const char* file = NULL,
+                    int line = 0,
+                    bool heapAllocated = false
+        );
 
 
         ~LockRequest();
@@ -135,6 +143,9 @@ namespace mongo {
         // usually preceding requests on the queue, but also policy
         size_t sleepCount;
 
+        const char* file;
+        int line;
+
         // ResourceLock classes (see below) using the RAII pattern
         // allocate LockRequests on the stack.
         bool heapAllocated;
@@ -142,6 +153,8 @@ namespace mongo {
         // lock requests are chained by their resource
         LockRequest* nextOnResource;
         LockRequest* prevOnResource;
+
+        
 
         // lock requests are also chained by their requesting transaction
         LockRequest* nextOfTransaction;
@@ -432,6 +445,8 @@ namespace mongo {
         void acquire(Transaction* requestor,
                      const LockMode& mode,
                      const ResourceId& resId,
+                     const char* file = NULL,
+                     int line = 0,
                      Notifier* notifier = NULL);
 
         /**
@@ -689,6 +704,13 @@ namespace mongo {
         AtomicUInt _numCurrentActiveWriteRequests;
     };
 
+
+#define ACQUIRE_LOCK(tx, mode, resId) \
+        LockManager::getSingleton().acquire(tx, mode, resId, __FILE__, __LINE__);
+
+#define LM_ACQUIRE_LOCK(tx, mode, resId) \
+        lm.acquire(tx, mode, resId, __FILE__, __LINE__);
+
     /**
      * RAII wrapper around LockManager, for scoped locking
      */
@@ -698,6 +720,8 @@ namespace mongo {
                      Transaction* requestor,
                      const LockMode& mode,
                      const ResourceId& resId,
+                     const char* file = NULL,
+                     int line = 0,
                      LockManager::Notifier* notifier = NULL);
 
         ~ResourceLock();
@@ -708,16 +732,25 @@ namespace mongo {
 
     class SharedResourceLock : public ResourceLock {
     public:
-        SharedResourceLock(Transaction* requestor, void* resource)
+        inline SharedResourceLock(Transaction* requestor, void* resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           (size_t)resource) { }
+                           resource,
+                           __FILE__,
+                           __LINE__) { }
+#if 0
         SharedResourceLock(Transaction* requestor, uint64_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           resource) { }
+                           *(const void**)&resource) { }
+#endif
+        inline SharedResourceLock(Transaction* requestor, const DiskLoc& loc)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kShared,
+                           loc, __FILE__, __LINE__) { }
     };
 
     class ExclusiveResourceLock : public ResourceLock {
@@ -726,11 +759,18 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
-                           (size_t)resource) { }
+                           resource) { }
+#if 0
         ExclusiveResourceLock(Transaction* requestor, uint64_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
                            resource) { }
+#endif
+        ExclusiveResourceLock(Transaction* requestor, const DiskLoc& loc)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kExclusive,
+                           loc) { }
     };
 } // namespace mongo

@@ -40,7 +40,7 @@ namespace mongo {
           _namespaceRecordStore( namespaceRecordStore ) {
     }
 
-    const DiskLoc& NamespaceDetailsRSV1MetaData::capExtent() const {
+    const DiskLoc& NamespaceDetailsRSV1MetaData::capExtent( OperationContext* txn ) const {
         return _details->capExtent;
     }
 
@@ -48,7 +48,7 @@ namespace mongo {
         *txn->recoveryUnit()->writing( &_details->capExtent ) = loc;
     }
 
-    const DiskLoc& NamespaceDetailsRSV1MetaData::capFirstNewRecord() const {
+    const DiskLoc& NamespaceDetailsRSV1MetaData::capFirstNewRecord( OperationContext* txn ) const {
         return _details->capFirstNewRecord;
     }
 
@@ -85,7 +85,8 @@ namespace mongo {
         s->nrecords = numRecords;
     }
 
-    const DiskLoc& NamespaceDetailsRSV1MetaData::deletedListEntry( int bucket ) const {
+    const DiskLoc& NamespaceDetailsRSV1MetaData::deletedListEntry( OperationContext* txn,
+                                                                   int bucket ) const {
         return _details->deletedList[ bucket ];
     }
 
@@ -163,6 +164,8 @@ namespace mongo {
     void NamespaceDetailsRSV1MetaData::setLastExtentSize( OperationContext* txn, int newMax ) {
         if ( _details->lastExtentSize == newMax )
             return;
+
+
         txn->recoveryUnit()->writingInt(_details->lastExtentSize) = newMax;
     }
 

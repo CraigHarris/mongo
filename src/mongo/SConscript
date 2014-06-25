@@ -368,7 +368,7 @@ env.Library("server_parameters",
 
 env.CppUnitTest("server_parameters_test",
                 [ "db/server_parameters_test.cpp" ],
-                LIBDEPS=["server_parameters"] )
+                LIBDEPS=["server_parameters", '$BUILD_DIR/mongo/db/concurrency/lock_mgr'] )
 
 
 env.Library("fail_point",
@@ -551,7 +551,9 @@ env.Library('index_set', [ 'db/index_set.cpp' ] )
 # Global Configuration.  Used by both mongos and mongod.
 env.Library('global_environment_experiment',
             [ 'db/global_environment_experiment.cpp',
-              'db/global_environment_noop.cpp' ])
+              'db/global_environment_noop.cpp' ],
+            LIBDEPS = ['$BUILD_DIR/mongo/db/concurrency/lock_mgr']
+            )
 
 # mongod files - also files used in tools. present in dbtests, but not in mongos and not in client
 # libs.

@@ -54,6 +54,7 @@ env.Library(
         'extent',
         '$BUILD_DIR/mongo/mongocommon',  # for ProgressMeter
         '$BUILD_DIR/mongo/db/commands/server_status_core',
+        '$BUILD_DIR/mongo/db/concurrency/lock_mgr',
         ]
     )
 
@@ -78,7 +79,7 @@ env.CppUnitTest(
         'record_store_v1_test_help'
         ]
     )
-
+"""
 env.CppUnitTest(
     target='record_store_v1_capped_test',
     source=['record_store_v1_capped_test.cpp',
@@ -87,7 +88,7 @@ env.CppUnitTest(
         'record_store_v1_test_help'
         ]
     )
-
+"""
 env.Library(
     target= 'btree',
     source= [
@@ -96,7 +97,8 @@ env.Library(
         'btree/key.cpp'
         ],
     LIBDEPS= [
-        '$BUILD_DIR/mongo/bson'
+        '$BUILD_DIR/mongo/bson',
+        '$BUILD_DIR/mongo/db/concurrency/lock_mgr',
         ]
     )
 

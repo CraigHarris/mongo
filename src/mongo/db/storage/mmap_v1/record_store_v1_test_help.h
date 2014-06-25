@@ -42,10 +42,10 @@ namespace mongo {
         DummyRecordStoreV1MetaData( bool capped, int userFlags );
         virtual ~DummyRecordStoreV1MetaData(){}
 
-        virtual const DiskLoc& capExtent() const;
+        virtual const DiskLoc& capExtent( OperationContext* txn ) const;
         virtual void setCapExtent( OperationContext* txn, const DiskLoc& loc );
 
-        virtual const DiskLoc& capFirstNewRecord() const;
+        virtual const DiskLoc& capFirstNewRecord( OperationContext* txn ) const;
         virtual void setCapFirstNewRecord( OperationContext* txn, const DiskLoc& loc );
 
         virtual long long dataSize() const;
@@ -59,7 +59,8 @@ namespace mongo {
                                long long dataSizeIncrement,
                                long long numRecordsIncrement );
 
-        virtual const DiskLoc& deletedListEntry( int bucket ) const;
+        virtual const DiskLoc& deletedListEntry( OperationContext* txn,
+                                                 int bucket ) const;
         virtual void setDeletedListEntry( OperationContext* txn,
                                           int bucket,
                                           const DiskLoc& loc );
@@ -133,15 +134,18 @@ namespace mongo {
 
         virtual Record* recordForV1( const DiskLoc& loc ) const;
 
-        virtual Extent* extentForV1( const DiskLoc& loc ) const;
+        virtual Extent* extentForV1( OperationContext* txn, const DiskLoc& loc ) const;
 
-        virtual DiskLoc extentLocForV1( const DiskLoc& loc ) const;
+        virtual DiskLoc extentLocForV1( OperationContext* txn, const DiskLoc& loc ) const;
 
         virtual Extent* getExtent( const DiskLoc& loc, bool doSanityCheck = true ) const;
 
         virtual int maxSize() const;
 
         virtual CacheHint* cacheHint( const DiskLoc& extentLoc, const HintType& hint );
+
+        virtual DiskLoc getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
+        virtual DiskLoc getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
 
     protected:
         struct ExtentInfo {

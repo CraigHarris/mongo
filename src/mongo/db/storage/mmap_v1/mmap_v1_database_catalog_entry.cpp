@@ -158,7 +158,9 @@ namespace mongo {
         // free extents
         if( !details->firstExtent.isNull() ) {
             _extentManager.freeExtents(txn, details->firstExtent, details->lastExtent);
+
             *txn->recoveryUnit()->writing( &details->firstExtent ) = DiskLoc().setInvalid();
+
             *txn->recoveryUnit()->writing( &details->lastExtent ) = DiskLoc().setInvalid();
         }
 

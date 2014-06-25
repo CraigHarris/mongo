@@ -36,6 +36,7 @@
 #include "mongo/db/catalog/collection.h"
 #include "mongo/db/curop.h"
 #include "mongo/db/commands/server_status_metric.h"
+#include "mongo/db/concurrency/lock_mgr.h"
 #include "mongo/db/storage/mmap_v1/extent.h"
 #include "mongo/db/storage/mmap_v1/extent_manager.h"
 #include "mongo/db/storage/mmap_v1/record.h"
@@ -87,6 +88,7 @@ namespace mongo {
         // align size up to a multiple of 4
         lenToAlloc = (lenToAlloc + (4-1)) & ~(4-1);
 
+
         freelistAllocs.increment();
         DiskLoc loc;
         {
@@ -95,8 +97,17 @@ namespace mongo {
             DiskLoc bestmatch;
             int bestmatchlen = INT_MAX; // sentinel meaning we haven't found a record big enough
             int b = bucket(lenToAlloc);
-            DiskLoc cur = _details->deletedListEntry(b);
+            DiskLoc cur = _details->deletedListEntry(txn, b); // kShared locked
+            DiskLoc prevRec;
             
+
+            // Loop, searching for the bestmatch DiskLoc to return
+            // bestmatch and bestprev should be locked after the loop
+            // and nothing else should be locked.
+            //
+            // XXX: assess whether it's best to lock bestmatch shared
+            // until end of loop, or exclusively.
+
             int extra = 5; // look for a better fit, a little.
             int chain = 0;
             while ( 1 ) {
@@ -130,15 +141,19 @@ namespace mongo {
                         freelistIterations.increment( 1 + chain );
                         return DiskLoc();
                     }
-                    cur = _details->deletedListEntry(b);
+                    DiskLoc newCur = _details->deletedListEntry(txn, b);
+                    cur = newCur;
                     prev = 0;
                     continue;
                 }
                 DeletedRecord *r = drec(cur);
                 if ( r->lengthWithHeaders() >= lenToAlloc &&
                      r->lengthWithHeaders() < bestmatchlen ) {
+                    // better match than we have
                     bestmatchlen = r->lengthWithHeaders();
+
                     bestmatch = cur;
+
                     bestprev = prev;
                     if (r->lengthWithHeaders() == lenToAlloc)
                         // exact match, stop searching
@@ -154,12 +169,14 @@ namespace mongo {
                     cur.Null();
                 }
                 else {
-                    cur = r->nextDeleted();
                     prev = &r->nextDeleted();
+
+                    cur = r->nextDeleted();
                 }
             }
 
             // unlink ourself from the deleted list
+
             DeletedRecord *bmr = drec(bestmatch);
             if ( bestprev ) {
                 *txn->recoveryUnit()->writing(bestprev) = bmr->nextDeleted();
@@ -167,7 +184,7 @@ namespace mongo {
             else {
                 // should be the front of a free-list
                 int myBucket = bucket(bmr->lengthWithHeaders());
-                invariant( _details->deletedListEntry(myBucket) == bestmatch );
+                invariant( _details->deletedListEntry(txn, myBucket) == bestmatch );
                 _details->setDeletedListEntry(txn, myBucket, bmr->nextDeleted());
             }
             *txn->recoveryUnit()->writing(&bmr->nextDeleted()) = DiskLoc().setInvalid(); // defensive.
@@ -214,22 +231,26 @@ namespace mongo {
         txn->recoveryUnit()->writingInt(r->lengthWithHeaders()) = lenToAlloc;
         DiskLoc newDelLoc = loc;
         newDelLoc.inc(lenToAlloc);
-        DeletedRecord* newDel = drec(newDelLoc);
-        DeletedRecord* newDelW = txn->recoveryUnit()->writing(newDel);
-        newDelW->extentOfs() = r->extentOfs();
-        newDelW->lengthWithHeaders() = left;
-        newDelW->nextDeleted().Null();
+        {
+            DeletedRecord* newDel = drec(newDelLoc);
+            DeletedRecord* newDelW = txn->recoveryUnit()->writing(newDel);
+            newDelW->extentOfs() = r->extentOfs();
+            newDelW->lengthWithHeaders() = left;
+            newDelW->nextDeleted().Null();
 
-        addDeletedRec( txn, newDelLoc );
+            addDeletedRec( txn, newDelLoc );
+        }
         return loc;
     }
 
     StatusWith<DiskLoc> SimpleRecordStoreV1::allocRecord( OperationContext* txn,
                                                           int lengthWithHeaders,
                                                           bool enforceQuota ) {
+
         DiskLoc loc = _allocFromExistingExtents( txn, lengthWithHeaders );
-        if ( !loc.isNull() )
+        if ( !loc.isNull() ) {
             return StatusWith<DiskLoc>( loc );
+        }
 
         LOG(1) << "allocating new extent";
 
@@ -257,8 +278,9 @@ namespace mongo {
                                  enforceQuota );
 
             loc = _allocFromExistingExtents( txn, lengthWithHeaders );
-            if ( ! loc.isNull() )
+            if ( ! loc.isNull() ) {
                 return StatusWith<DiskLoc>( loc );
+            }
         }
 
         return StatusWith<DiskLoc>( ErrorCodes::InternalError, "cannot allocate space" );
@@ -275,7 +297,7 @@ namespace mongo {
         DEBUGGING log() << "TEMP: add deleted rec " << dloc.toString() << ' ' << hex << d->extentOfs() << endl;
 
         int b = bucket(d->lengthWithHeaders());
-        *txn->recoveryUnit()->writing(&d->nextDeleted()) = _details->deletedListEntry(b);
+        *txn->recoveryUnit()->writing(&d->nextDeleted()) = _details->deletedListEntry(txn, b);
         _details->setDeletedListEntry(txn, b, dloc);
     }
 
@@ -289,7 +311,8 @@ namespace mongo {
     vector<RecordIterator*> SimpleRecordStoreV1::getManyIterators( OperationContext* txn ) const {
         OwnedPointerVector<RecordIterator> iterators;
         const Extent* ext;
-        for (DiskLoc extLoc = details()->firstExtent(txn); !extLoc.isNull(); extLoc = ext->xnext) {
+        for (DiskLoc extLoc = details()->firstExtent(txn);
+             !extLoc.isNull(); /* increment in scope of lock */ ) {
             ext = _getExtent(txn, extLoc);
             if (ext->firstRecord.isNull())
                 continue;
@@ -341,6 +364,7 @@ namespace mongo {
         log() << "compact begin extent #" << extentNumber
               << " for namespace " << _ns << " " << diskloc;
 
+
         unsigned oldObjSize = 0; // we'll report what the old padding was
         unsigned oldObjSizeWithPadding = 0;
 
@@ -371,7 +395,6 @@ namespace mongo {
                 while( 1 ) {
                     Record *recOld = recordFor(L);
                     RecordData oldData = recOld->toRecordData();
-                    L = getNextRecordInExtent(txn, L);
 
                     if ( compactOptions->validateDocuments && !adaptor->isDataValid( oldData ) ) {
                         // object is corrupt!
@@ -413,6 +436,9 @@ namespace mongo {
 
                         adaptor->inserted( dataFor( status.getValue() ), status.getValue() );
                     }
+
+                    DiskLoc nextRecLoc = getNextRecordInExtent(txn, L);
+                    L = nextRecLoc;
 
                     if( L.isNull() ) {
                         // we just did the very last record from the old extent.  it's still pointed to
@@ -463,10 +489,10 @@ namespace mongo {
         txn->recoveryUnit()->commitIfNeeded();
 
         list<DiskLoc> extents;
-        for( DiskLoc extLocation = _details->firstExtent(txn);
-             !extLocation.isNull();
-             extLocation = _extentManager->getExtent( extLocation )->xnext ) {
+
+        for( DiskLoc extLocation = _details->firstExtent(txn); !extLocation.isNull(); ) {
             extents.push_back( extLocation );
+            extLocation = _extentManager->getExtent( extLocation )->xnext;
         }
         log() << "compact " << extents.size() << " extents";
 

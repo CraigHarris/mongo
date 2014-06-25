@@ -129,7 +129,8 @@ namespace mongo {
                                     const StringData& indexName,
                                     bool multikey = true);
 
-            DiskLoc getIndexHead( const StringData& indexName ) const;
+            DiskLoc getIndexHead( OperationContext* txn,
+                                  const StringData& indexName ) const;
 
             void setIndexHead( OperationContext* txn,
                                const StringData& indexName,

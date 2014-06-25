@@ -1,5 +1,5 @@
 /**
- *    Copyright (C) 2013 10gen Inc.
+ *    Copyright (C) 2013-2014 MongoDB Inc.
  *
  *    This program is free software: you can redistribute it and/or  modify
  *    it under the terms of the GNU Affero General Public License, version 3,
@@ -48,13 +48,14 @@ namespace mongo {
 
         if (_curr.isNull()) {
 
+
             const RecordStoreV1MetaData* nsd = _recordStore->details();
 
             // If a start position isn't specified, we fill one out from the start of the
             // collection.
             if (CollectionScanParams::FORWARD == _direction) {
                 // Going forwards.
-                if (!nsd->capLooped()) {
+                if (!nsd->capLooped(_txn)) {
                     // If our capped collection doesn't loop around, the first record is easy.
                     _curr = collection->firstRecord(_txn);
                 }
@@ -62,21 +63,21 @@ namespace mongo {
                     // Our capped collection has "looped' around.
                     // Copied verbatim from ForwardCappedCursor::init.
                     // TODO ELABORATE
-                    _curr = _getExtent( nsd->capExtent() )->firstRecord;
-                    if (!_curr.isNull() && _curr == nsd->capFirstNewRecord()) {
-                        _curr = _getExtent( nsd->capExtent() )->lastRecord;
+                    _curr = _getExtent( nsd->capExtent(_txn) )->firstRecord;
+                    if (!_curr.isNull() && _curr == nsd->capFirstNewRecord(_txn)) {
+                        _curr = _getExtent( nsd->capExtent(_txn) )->lastRecord;
                         _curr = nextLoop(_curr);
                     }
                 }
             }
             else {
                 // Going backwards
-                if (!nsd->capLooped()) {
+                if (!nsd->capLooped(_txn)) {
                     // Start at the end.
                     _curr = collection->lastRecord(_txn);
                 }
                 else {
-                    _curr = _getExtent( nsd->capExtent() )->lastRecord;
+                    _curr = _getExtent( nsd->capExtent(_txn) )->lastRecord;
                 }
             }
         }
@@ -144,46 +145,49 @@ namespace mongo {
 
         if (CollectionScanParams::FORWARD == _direction) {
             // If it's not looped, it's easy.
-            if (!_recordStore->details()->capLooped()) {
+            if (!_recordStore->details()->capLooped(_txn)) {
                 return _getNextRecord( dl );
             }
 
             // TODO ELABORATE
             // EOF.
-            if (dl == _getExtent( details->capExtent() )->lastRecord) {
+            if (dl == _getExtent( details->capExtent(_txn) )->lastRecord) {
                 return DiskLoc();
             }
 
             DiskLoc ret = nextLoop(dl);
 
             // If we become capFirstNewRecord from same extent, advance to next extent.
-            if (ret == details->capFirstNewRecord() && ret != _getExtent( details->capExtent() )->firstRecord) {
-                ret = nextLoop(_getExtent( details->capExtent() )->lastRecord);
+            if (ret == details->capFirstNewRecord(_txn) &&
+                ret != _getExtent( details->capExtent(_txn) )->firstRecord) {
+                ret = nextLoop(_getExtent( details->capExtent(_txn) )->lastRecord);
             }
 
             // If we have just gotten to beginning of capExtent, skip to capFirstNewRecord
-            if (ret == _getExtent( details->capExtent() )->firstRecord) { ret = details->capFirstNewRecord(); }
+            if (ret == _getExtent( details->capExtent(_txn) )->firstRecord) {
+                ret = details->capFirstNewRecord(_txn);
+            }
 
             return ret;
         }
         else {
-            if (!details->capLooped()) { return _getPrevRecord( dl ); }
+            if (!details->capLooped(_txn)) { return _getPrevRecord( dl ); }
 
             // TODO ELABORATE
             // Last record
-            if (details->capFirstNewRecord() == _getExtent( details->capExtent() )->firstRecord) {
-                if (dl == nextLoop(_getExtent( details->capExtent() )->lastRecord)) {
+            if (details->capFirstNewRecord(_txn) == _getExtent( details->capExtent(_txn) )->firstRecord) {
+                if (dl == nextLoop(_getExtent( details->capExtent(_txn) )->lastRecord)) {
                     return DiskLoc();
                 }
             }
             else {
-                if (dl == _getExtent( details->capExtent() )->firstRecord) { return DiskLoc(); }
+                if (dl == _getExtent( details->capExtent(_txn) )->firstRecord) { return DiskLoc(); }
             }
 
             DiskLoc ret;
             // If we are capFirstNewRecord, advance to prev extent, otherwise just get prev.
-            if (dl == details->capFirstNewRecord()) {
-                ret = prevLoop(_getExtent( details->capExtent() )->firstRecord);
+            if (dl == details->capFirstNewRecord(_txn)) {
+                ret = prevLoop(_getExtent( details->capExtent(_txn) )->firstRecord);
             }
             else {
                 ret = prevLoop(dl);
@@ -192,8 +196,8 @@ namespace mongo {
             // If we just became last in cap extent, advance past capFirstNewRecord
             // (We know ext(capExtent)->firstRecord != capFirstNewRecord, since would
             // have returned DiskLoc() earlier otherwise.)
-            if (ret == _getExtent( details->capExtent() )->lastRecord) {
-                ret = _getPrevRecord( details->capFirstNewRecord() );
+            if (ret == _getExtent( details->capExtent(_txn) )->lastRecord) {
+                ret = _getPrevRecord( details->capFirstNewRecord(_txn) );
             }
 
             return ret;
