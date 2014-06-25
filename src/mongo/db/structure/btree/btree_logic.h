@@ -361,7 +361,8 @@ namespace mongo {
                         int* keyOfsInOut,
                         pair<DiskLoc, int>& bestParent) const;
 
-        void advanceToImpl(DiskLoc* thisLocInOut,
+        void advanceToImpl(OperationContext* txn,
+                           DiskLoc* thisLocInOut,
                            int* keyOfsInOut,
                            const BSONObj &keyBegin,
                            int keyBeginLen,
@@ -378,7 +379,8 @@ namespace mongo {
 
         DiskLoc advance(const DiskLoc& bucketLoc, int* posInOut, int direction) const;
 
-        DiskLoc _locate(const DiskLoc& bucketLoc,
+        DiskLoc _locate(OperationContext* txn,
+                       BucketType* bucket,
                        const KeyDataType& key,
                        int* posOut,
                        bool* foundOut,
@@ -393,7 +395,8 @@ namespace mongo {
 
         DiskLoc _addBucket(OperationContext* txn);
 
-        bool canMergeChildren(BucketType* bucket,
+        bool canMergeChildren(OperationContext* txn,
+                              BucketType* bucket,
                               const DiskLoc bucketLoc,
                               const int leftIndex);
 
@@ -464,23 +467,7 @@ namespace mongo {
                                   const DiskLoc lchild,
                                   BucketType* r,
                                   const DiskLoc rchild);
-
-        void doBalanceRightToLeft(OperationContext* txn,
-                                  BucketType* bucket,
-                                  const DiskLoc bucketLoc,
-                                  int leftIndex,
-                                  int split,
-                                  BucketType* l,
-                                  const DiskLoc lchild,
-                                  BucketType* r,
-                                  const DiskLoc rchild);
-
-        bool tryBalanceChildren(OperationContext* txn,
-                                BucketType* bucket,
-                                const DiskLoc bucketLoc,
-                                int leftIndex);
-
-        int indexInParent(BucketType* bucket, const DiskLoc bucketLoc) const;
+c) const;
 
         void doMergeChildren(OperationContext* txn,
                              BucketType* bucket,
