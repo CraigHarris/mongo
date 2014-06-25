@@ -63,7 +63,8 @@ namespace mongo {
 
     protected:
         void checkValidNumKeys(int nKeys) {
-            ASSERT_EQUALS(nKeys, _helper.btree.fullValidate(NULL, true, true, 0));
+            OperationContextNoop txn;
+            ASSERT_EQUALS(nKeys, _helper.btree.fullValidate(&txn, NULL, true, true, 0));
         }
 
         void insert(const BSONObj &key, const DiskLoc dl) {
@@ -83,8 +84,9 @@ namespace mongo {
                     int direction) {
             int pos;
             DiskLoc loc;
+            OperationContextNoop txn;
             ASSERT_EQUALS(expectedFound,
-                          _helper.btree.locate(key, _helper.dummyDiskLoc, direction, &pos, &loc));
+                          _helper.btree.locate(&txn, key, _helper.dummyDiskLoc, direction, &pos, &loc));
             ASSERT_EQUALS(expectedLocation, loc);
             ASSERT_EQUALS(expectedPos, pos);
         }
@@ -128,8 +130,8 @@ namespace mongo {
 
         int bucketRebalancedSeparatorPos(const DiskLoc bucketLoc, int leftIndex) {
             BucketType* bucket = _helper.btree.getBucket(bucketLoc);
-
-            return _helper.btree._rebalancedSeparatorPos(bucket, leftIndex);
+            OperationContextNoop txn;
+            return _helper.btree._rebalancedSeparatorPos(&txn, bucket, leftIndex);
         }
 
         FullKey getKey(const DiskLoc bucketLoc, int pos) const {

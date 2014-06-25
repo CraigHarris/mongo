@@ -98,12 +98,14 @@ namespace mongo {
             return _btree->unindex(txn, key, loc);
         }
 
-        virtual void fullValidate(long long *numKeysOut) {
-            *numKeysOut = _btree->fullValidate(NULL, false, false, 0);
+        virtual void fullValidate(OperationContext* txn, long long *numKeysOut) {
+            *numKeysOut = _btree->fullValidate(txn, NULL, false, false, 0);
         }
 
-        virtual Status dupKeyCheck(const BSONObj& key, const DiskLoc& loc) {
-            return _btree->dupKeyCheck(key, loc);
+        virtual Status dupKeyCheck(OperationContext* txn,
+                                   const BSONObj& key,
+                                   const DiskLoc& loc) {
+            return _btree->dupKeyCheck(txn, key, loc);
         }
 
         virtual bool isEmpty() {
@@ -141,17 +143,19 @@ namespace mongo {
                     _ofs = -1;
             }
 
-            virtual bool locate(const BSONObj& key, const DiskLoc& loc) {
-                return _btree->locate(key, loc, _direction, &_ofs, &_bucket);
+            virtual bool locate(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) {
+                return _btree->locate(txn, key, loc, _direction, &_ofs, &_bucket);
             }
 
-            virtual void customLocate(const BSONObj& keyBegin,
+            virtual void customLocate(OperationContext* txn,
+                                      const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterKey,
                                       const vector<const BSONElement*>& keyEnd,
                                       const vector<bool>& keyEndInclusive) {
 
-                _btree->customLocate(&_bucket,
+                _btree->customLocate(txn,
+                                     &_bucket,
                                      &_ofs,
                                      keyBegin,
                                      keyBeginLen,
@@ -161,13 +165,15 @@ namespace mongo {
                                      _direction);
             }
 
-            void advanceTo(const BSONObj &keyBegin,
+            void advanceTo(OperationContext* txn,
+                           const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
 
-                _btree->advanceTo(&_bucket,
+                _btree->advanceTo(txn,
+                                  &_bucket,
                                   &_ofs,
                                   keyBegin,
                                   keyBeginLen,
@@ -185,8 +191,8 @@ namespace mongo {
                 return _btree->getDiskLoc(_bucket, _ofs);
             }
 
-            virtual void advance() {
-                _btree->advance(&_bucket, &_ofs, _direction);
+            virtual void advance(OperationContext* txn) {
+                _btree->advance(txn, &_bucket, &_ofs, _direction);
             }
 
             virtual void savePosition() {
@@ -196,9 +202,10 @@ namespace mongo {
                 }
             }
 
-            virtual void restorePosition() {
+            virtual void restorePosition(OperationContext* txn) {
                 if (!_bucket.isNull()) {
-                    _btree->restorePosition(_savedKey,
+                    _btree->restorePosition(txn,
+                                            _savedKey,
                                             _savedLoc,
                                             _direction,
                                             &_bucket,

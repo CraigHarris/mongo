@@ -107,14 +107,16 @@ namespace mongo {
                              const DiskLoc& loc) = 0;
 
         // TODO: Hide this by exposing an update method?
-        virtual Status dupKeyCheck(const BSONObj& key, const DiskLoc& loc) = 0;
+        virtual Status dupKeyCheck(OperationContext* txn,
+                                   const BSONObj& key,
+                                   const DiskLoc& loc) = 0;
 
         //
         // Information about the tree
         //
 
         // TODO: expose full set of args for testing?
-        virtual void fullValidate(long long* numKeysOut) = 0;
+        virtual void fullValidate(OperationContext* txn, long long* numKeysOut) = 0;
 
         virtual bool isEmpty() = 0;
         
@@ -148,9 +150,10 @@ namespace mongo {
              */
             virtual void aboutToDeleteBucket(const DiskLoc& bucket) = 0;
 
-            virtual bool locate(const BSONObj& key, const DiskLoc& loc) = 0;
+            virtual bool locate(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) = 0;
 
-            virtual void advanceTo(const BSONObj &keyBegin,
+            virtual void advanceTo(OperationContext* txn,
+                                   const BSONObj &keyBegin,
                                    int keyBeginLen,
                                    bool afterKey,
                                    const vector<const BSONElement*>& keyEnd,
@@ -160,7 +163,8 @@ namespace mongo {
              * Locate a key with fields comprised of a combination of keyBegin fields and keyEnd
              * fields.
              */
-            virtual void customLocate(const BSONObj& keyBegin,
+            virtual void customLocate(OperationContext* txn,
+                                      const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterVersion,
                                       const vector<const BSONElement*>& keyEnd,
@@ -174,14 +178,14 @@ namespace mongo {
 
             virtual DiskLoc getDiskLoc() const = 0;
 
-            virtual void advance() = 0;
+            virtual void advance(OperationContext* txn) = 0;
 
             //
             // Saving and restoring state
             //
             virtual void savePosition() = 0;
 
-            virtual void restorePosition() = 0;
+            virtual void restorePosition(OperationContext* txn) = 0;
         };
 
         /**

@@ -122,7 +122,7 @@ namespace mongo {
                 // don't know if I need this or not
             }
 
-            bool locate(const BSONObj& key, const DiskLoc& loc) {
+            bool locate(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) {
                 _cached = false;
                 IndexKey indexKey( key, loc );
                 string buf = indexKey.asString();
@@ -134,7 +134,8 @@ namespace mongo {
                 return key.woCompare( _cachedKey, BSONObj(), false ) == 0;
             }
 
-            void advanceTo(const BSONObj &keyBegin,
+            void advanceTo(OperationContext*,
+                           const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
@@ -146,7 +147,8 @@ namespace mongo {
              * Locate a key with fields comprised of a combination of keyBegin fields and keyEnd
              * fields.
              */
-            void customLocate(const BSONObj& keyBegin,
+            void customLocate(OperationContext*,
+                              const BSONObj& keyBegin,
                               int keyBeginLen,
                               bool afterVersion,
                               const vector<const BSONElement*>& keyEnd,
@@ -168,7 +170,7 @@ namespace mongo {
                 return _cachedLoc;
             }
 
-            void advance() {
+            void advance(OperationContext* txn) {
                 if ( _forward() )
                     _iterator->Next();
                 else
@@ -180,7 +182,7 @@ namespace mongo {
                 invariant( !"rocksdb cursor doesn't do saving yet" );
             }
 
-            void restorePosition() {
+            void restorePosition(OperationContext* txn) {
                 invariant( !"rocksdb cursor doesn't do saving yet" );
             }
 
@@ -263,12 +265,12 @@ namespace mongo {
         return 1; // XXX: fix? does it matter since its so slow to check?
     }
 
-    Status RocksBtreeImpl::dupKeyCheck(const BSONObj& key, const DiskLoc& loc) {
+    Status RocksBtreeImpl::dupKeyCheck(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) {
         // XXX: not done yet!
         return Status::OK();
     }
 
-    void RocksBtreeImpl::fullValidate(long long* numKeysOut) {
+    void RocksBtreeImpl::fullValidate(OperationContext* txn, long long* numKeysOut) {
         // XXX: no key counts
         if ( numKeysOut )
             numKeysOut[0] = -1;

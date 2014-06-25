@@ -98,7 +98,7 @@ namespace mongo {
 
         virtual Status touch(OperationContext* txn) const;
 
-        virtual Status validate(int64_t* numKeys);
+        virtual Status validate(OperationContext* txn, int64_t* numKeys);
 
         // XXX: consider migrating callers to use IndexCursor instead
         virtual DiskLoc findSingle( const BSONObj& key ) const;

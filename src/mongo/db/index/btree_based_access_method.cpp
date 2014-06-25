@@ -233,10 +233,10 @@ namespace mongo {
         return cursor->getDiskLoc();
     }
 
-    Status BtreeBasedAccessMethod::validate(int64_t* numKeys) {
+    Status BtreeBasedAccessMethod::validate(OperationContext* txn, int64_t* numKeys) {
         // XXX: long long vs int64_t
         long long keys;
-        _newInterface->fullValidate(&keys);
+        _newInterface->fullValidate(txn, &keys);
         *numKeys = keys;
         return Status::OK();
     }

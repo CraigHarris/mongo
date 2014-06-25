@@ -84,12 +84,14 @@ namespace mongo {
         return _cursor->pointsToSamePlaceAs(*other._cursor);
     }
 
-    Status BtreeIndexCursor::seek(const vector<const BSONElement*>& position,
+    Status BtreeIndexCursor::seek(OperationContext* txn,
+                                  const vector<const BSONElement*>& position,
                                   const vector<bool>& inclusive) {
 
         BSONObj emptyObj;
 
-        _cursor->customLocate(emptyObj,
+        _cursor->customLocate(txn,
+                              emptyObj,
                               0,
                               false,
                               position,
@@ -97,13 +99,15 @@ namespace mongo {
         return Status::OK();
     }
 
-    Status BtreeIndexCursor::skip(const BSONObj &keyBegin,
+    Status BtreeIndexCursor::skip(OperationContext* txn,
+                                  const BSONObj &keyBegin,
                                   int keyBeginLen,
                                   bool afterKey,
                                   const vector<const BSONElement*>& keyEnd,
                                   const vector<bool>& keyEndInclusive) {
 
-        _cursor->advanceTo(keyBegin,
+        _cursor->advanceTo(txn,
+                           keyBegin,
                            keyBeginLen,
                            afterKey,
                            keyEnd,

@@ -279,12 +279,12 @@ namespace {
             
         }
 
-        virtual void fullValidate(long long *numKeysOut) {
+        virtual void fullValidate(OperationContext* txn, long long *numKeysOut) {
             // TODO check invariants?
             *numKeysOut = _data->size();
         }
 
-        virtual Status dupKeyCheck(const BSONObj& key, const DiskLoc& loc) {
+        virtual Status dupKeyCheck(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) {
             invariant(!hasFieldNames(key));
             if (isDup(*_data, key, loc))
                 return dupKeyError(key);
@@ -323,13 +323,14 @@ namespace {
                 invariant(!"aboutToDeleteBucket should not be called");
             }
 
-            virtual bool locate(const BSONObj& keyRaw, const DiskLoc& loc) {
+            virtual bool locate(OperationContext* txn, const BSONObj& keyRaw, const DiskLoc& loc) {
                 const BSONObj key = stripFieldNames(keyRaw);
                 _it = _data.lower_bound(IndexEntry(key, loc)); // lower_bound is >= key
                 return _it != _data.end() && (_it->key == key); // intentionally not comparing loc
             }
 
-            virtual void customLocate(const BSONObj& keyBegin,
+            virtual void customLocate(OperationContext* txn,
+                                      const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterKey,
                                       const vector<const BSONElement*>& keyEnd,
@@ -345,13 +346,14 @@ namespace {
                                                    DiskLoc()));
             }
 
-            void advanceTo(const BSONObj &keyBegin,
+            void advanceTo(OperationContext* txn,
+                           const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
                 // XXX I think these do the same thing????
-                customLocate(keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
+                customLocate(txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
             }
 
             virtual BSONObj getKey() const {
@@ -362,7 +364,7 @@ namespace {
                 return _it->loc;
             }
 
-            virtual void advance() {
+            virtual void advance(OperationContext* txn) {
                 if (_it != _data.end())
                     ++_it;
             }
@@ -377,12 +379,12 @@ namespace {
                 _savedLoc = _it->loc;
             }
 
-            virtual void restorePosition() {
+            virtual void restorePosition(OperationContext* txn) {
                 if (_savedAtEnd) {
                     _it = _data.end();
                 }
                 else {
-                    locate(_savedKey, _savedLoc);
+                    locate(txn, _savedKey, _savedLoc);
                 }
             }
 
@@ -420,13 +422,14 @@ namespace {
                 invariant(!"aboutToDeleteBucket should not be called");
             }
 
-            virtual bool locate(const BSONObj& keyRaw, const DiskLoc& loc) {
+            virtual bool locate(OperationContext* txn, const BSONObj& keyRaw, const DiskLoc& loc) {
                 const BSONObj key = stripFieldNames(keyRaw);
                 _it = lower_bound(IndexEntry(key, loc)); // lower_bound is <= query
                 return _it != _data.rend() && (_it->key == key); // intentionally not comparing loc
             }
 
-            virtual void customLocate(const BSONObj& keyBegin,
+            virtual void customLocate(OperationContext* txn,
+                                      const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterKey,
                                       const vector<const BSONElement*>& keyEnd,
@@ -442,13 +445,14 @@ namespace {
                                              DiskLoc()));
             }
 
-            void advanceTo(const BSONObj &keyBegin,
+            void advanceTo(OperationContext* txn,
+                           const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
                 // XXX I think these do the same thing????
-                customLocate(keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
+                customLocate(txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
             }
 
             virtual BSONObj getKey() const {
@@ -459,7 +463,7 @@ namespace {
                 return _it->loc;
             }
 
-            virtual void advance() {
+            virtual void advance(OperationContext* txn) {
                 if (_it != _data.rend())
                     ++_it;
             }
@@ -474,12 +478,12 @@ namespace {
                 _savedLoc = _it->loc;
             }
 
-            virtual void restorePosition() {
+            virtual void restorePosition(OperationContext* txn) {
                 if (_savedAtEnd) {
                     _it = _data.rend();
                 }
                 else {
-                    locate(_savedKey, _savedLoc);
+                    locate(txn, _savedKey, _savedLoc);
                 }
             }
 
