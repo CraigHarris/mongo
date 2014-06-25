@@ -118,7 +118,8 @@ namespace mongo {
         return true;
     }
 
-    DiskLoc NamespaceDetailsCollectionCatalogEntry::getIndexHead( const StringData& idxName ) const {
+    DiskLoc NamespaceDetailsCollectionCatalogEntry::getIndexHead(OperationContext* txn,
+                                                                 const StringData& idxName ) const {
         int idxNo = _findIndexNumber( idxName );
         invariant( idxNo >= 0 );
         return _details->idx( idxNo ).head;

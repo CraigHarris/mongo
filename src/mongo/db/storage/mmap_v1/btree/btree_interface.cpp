@@ -108,8 +108,8 @@ namespace mongo {
             return _btree->dupKeyCheck(txn, key, loc);
         }
 
-        virtual bool isEmpty() {
-            return _btree->isEmpty();
+        virtual bool isEmpty(OperationContext* txn) {
+            return _btree->isEmpty(txn);
         }
 
         virtual Status touch(OperationContext* txn) const{
@@ -124,7 +124,7 @@ namespace mongo {
                 : _txn(txn),
                   _btree(btree),
                   _direction(direction),
-                  _bucket(btree->getHead()), // XXX this shouldn't be nessisary, but is.
+                  _bucket(btree->getHead(txn)), // XXX this shouldn't be nessisary, but is.
                   _ofs(0) {
             }
 
@@ -189,7 +189,7 @@ namespace mongo {
             }
 
             virtual DiskLoc getDiskLoc() const {
-                return _btree->getDiskLoc(_bucket, _ofs);
+                return _btree->getDiskLoc(_txn, _bucket, _ofs);
             }
 
             virtual void advance() {

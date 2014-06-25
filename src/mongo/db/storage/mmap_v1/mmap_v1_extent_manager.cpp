@@ -103,7 +103,6 @@ namespace mongo {
                 break;
             }
 
-            _files.push_back( df.release() );
         }
 
         return Status::OK();
@@ -213,13 +212,14 @@ namespace mongo {
         return reinterpret_cast<Record*>( df->p() + ofs );
     }
 
-    DiskLoc MmapV1ExtentManager::extentLocForV1( const DiskLoc& loc ) const {
+    DiskLoc MmapV1ExtentManager::extentLocForV1( OperationContext* txn,
+                                                 const DiskLoc& loc ) const {
         Record* record = recordForV1( loc );
         return DiskLoc( loc.a(), record->extentOfs() );
     }
 
-    Extent* MmapV1ExtentManager::extentForV1( const DiskLoc& loc ) const {
-        DiskLoc extentLoc = extentLocForV1( loc );
+    Extent* MmapV1ExtentManager::extentForV1( OperationContext* txn, const DiskLoc& loc ) const {
+        DiskLoc extentLoc = extentLocForV1( txn, loc );
         return getExtent( extentLoc );
     }
 
@@ -558,5 +558,19 @@ namespace mongo {
             error() << "corrupt pdfile version? major: " << *major << " minor: " << *minor;
             fassertFailed( 14026 );
         }
+    }
+
+    DiskLoc MmapV1ExtentManager::getNextExtent( OperationContext* txn,
+                                                const DiskLoc& extentLoc ) const {
+        if (extentLoc.isNull()) return extentLoc;
+        DiskLoc result = getExtent( extentLoc )->xnext;
+        return result;
+    }
+
+    DiskLoc MmapV1ExtentManager::getPrevExtent( OperationContext* txn,
+                                                const DiskLoc& extentLoc ) const {
+        if (extentLoc.isNull()) return extentLoc;
+        DiskLoc result = getExtent( extentLoc )->xprev;
+        return result;
     }
 }

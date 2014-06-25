@@ -1,7 +1,7 @@
 // extent_manager.h
 
 /**
-*    Copyright (C) 2013 10gen Inc.
+*    Copyright (C) 2013-2014 MongoDB Inc.
 *
 *    This program is free software: you can redistribute it and/or  modify
 *    it under the terms of the GNU Affero General Public License, version 3,
@@ -106,13 +106,14 @@ namespace mongo {
          * @param loc - has to be for a specific Record (not an Extent)
          * Note(erh) see comment on recordFor
          */
-        virtual Extent* extentForV1( const DiskLoc& loc ) const = 0;
+        virtual Extent* extentForV1( OperationContext* txn, const DiskLoc& loc ) const = 0;
 
         /**
          * @param loc - has to be for a specific Record (not an Extent)
          * Note(erh) see comment on recordFor
          */
-        virtual DiskLoc extentLocForV1( const DiskLoc& loc ) const = 0;
+        virtual DiskLoc extentLocForV1( OperationContext* txn,
+                                        const DiskLoc& loc ) const = 0;
 
         /**
          * @param loc - has to be for a specific Extent
@@ -144,6 +145,13 @@ namespace mongo {
          * quantizes extent size to >= min + page boundary
          */
         virtual int quantizeExtentSize( int size ) const;
+
+        /**
+         * @param extentLoc - a locked extent
+         * side effects: result is locked, and lock on extentLoc is released
+         */
+        virtual DiskLoc getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const=0;
+        virtual DiskLoc getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const=0;
 
         // see cacheHint methods
         enum HintType { Sequential, Random };

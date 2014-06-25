@@ -52,10 +52,10 @@ namespace mongo {
 
         virtual ~NamespaceDetailsRSV1MetaData(){}
 
-        virtual const DiskLoc& capExtent() const;
+        virtual const DiskLoc& capExtent( OperationContext* txn ) const;
         virtual void setCapExtent( OperationContext* txn, const DiskLoc& loc );
 
-        virtual const DiskLoc& capFirstNewRecord() const;
+        virtual const DiskLoc& capFirstNewRecord( OperationContext* txn ) const;
         virtual void setCapFirstNewRecord( OperationContext* txn, const DiskLoc& loc );
 
         virtual bool capLooped() const;
@@ -71,7 +71,8 @@ namespace mongo {
                                long long dataSize,
                                long long numRecords );
 
-        virtual const DiskLoc& deletedListEntry( int bucket ) const;
+        virtual const DiskLoc& deletedListEntry( OperationContext* txn,
+                                                 int bucket ) const;
         virtual void setDeletedListEntry( OperationContext* txn,
                                           int bucket,
                                           const DiskLoc& loc );

@@ -35,6 +35,7 @@
 #include <set>
 #include <vector>
 
+#include "mongo/db/operation_context_noop.h"
 #include "mongo/db/storage/mmap_v1/extent.h"
 #include "mongo/db/storage/mmap_v1/record.h"
 #include "mongo/unittest/unittest.h"
@@ -56,7 +57,7 @@ namespace mongo {
         }
     }
 
-    const DiskLoc& DummyRecordStoreV1MetaData::capExtent() const {
+    const DiskLoc& DummyRecordStoreV1MetaData::capExtent( OperationContext* txn ) const {
         return _capExtent;
     }
 
@@ -65,7 +66,7 @@ namespace mongo {
         _capExtent = loc;
     }
 
-    const DiskLoc& DummyRecordStoreV1MetaData::capFirstNewRecord() const {
+    const DiskLoc& DummyRecordStoreV1MetaData::capFirstNewRecord( OperationContext* txn ) const {
         return _capFirstNewRecord;
     }
 
@@ -100,7 +101,7 @@ namespace mongo {
         DiskLoc myNull;
     }
 
-    const DiskLoc& DummyRecordStoreV1MetaData::deletedListEntry( int bucket ) const {
+    const DiskLoc& DummyRecordStoreV1MetaData::deletedListEntry( OperationContext* txn, int bucket ) const {
         invariant( bucket >= 0 );
         if ( static_cast<size_t>( bucket ) >= _deletedLists.size() )
             return myNull;
@@ -259,11 +260,11 @@ namespace mongo {
         return reinterpret_cast<Record*>( root + loc.getOfs() );
     }
 
-    Extent* DummyExtentManager::extentForV1( const DiskLoc& loc ) const {
+    Extent* DummyExtentManager::extentForV1( OperationContext* txn, const DiskLoc& loc ) const {
         invariant( false );
     }
 
-    DiskLoc DummyExtentManager::extentLocForV1( const DiskLoc& loc ) const {
+    DiskLoc DummyExtentManager::extentLocForV1( OperationContext* txn, const DiskLoc& loc ) const {
         return DiskLoc( loc.a(), 0 );
     }
 
@@ -283,6 +284,20 @@ namespace mongo {
 
     DummyExtentManager::CacheHint* DummyExtentManager::cacheHint( const DiskLoc& extentLoc, const HintType& hint ) {
         return new CacheHint();
+    }
+
+    DiskLoc DummyExtentManager::getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
+        if (static_cast<size_t>(extentLoc.a()) < _extents.size()-1) {
+            return DiskLoc(extentLoc.a()+1, 0);
+        }
+        return DiskLoc();
+    }
+
+    DiskLoc DummyExtentManager::getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
+        if (static_cast<size_t>(extentLoc.a()) > 0) {
+            return DiskLoc(extentLoc.a()-1, 0);
+        }
+        return DiskLoc();
     }
 
 namespace {
@@ -320,7 +335,7 @@ namespace {
                       << " size: " << actualSize
                       << " prev: " << actualRec->prevOfs()
                       << " next: " << actualRec->nextOfs()
-                      << (actualLoc == md->capFirstNewRecord() ? " (CAP_FIRST_NEW)" : "")
+                      << (actualLoc == md->capFirstNewRecord(txn) ? " (CAP_FIRST_NEW)" : "")
                       ;
 
                 const bool foundCycle = !seenLocs.insert(actualLoc).second;
@@ -338,8 +353,9 @@ namespace {
     void printDRecList(const ExtentManager* em, const RecordStoreV1MetaData* md) {
         log() << " *** BEGIN ACTUAL DELETED RECORD LIST *** ";
         std::set<DiskLoc> seenLocs;
+        OperationContextNoop txn;
         for (int bucketIdx = 0; bucketIdx < RecordStoreV1Base::Buckets; bucketIdx++) {
-            DiskLoc actualLoc = md->deletedListEntry(bucketIdx);
+            DiskLoc actualLoc = md->deletedListEntry(&txn, bucketIdx);
             while (!actualLoc.isNull()) {
                 const DeletedRecord* actualDrec = &em->recordForV1(actualLoc)->asDeleted();
                 const int actualSize = actualDrec->lengthWithHeaders();
@@ -468,8 +484,8 @@ namespace {
                         *prevNextPtr = loc;
                     }
 
-                    if (loc.a() < md->capExtent().a()
-                            && drecs[drecIdx + 1].loc.a() == md->capExtent().a()) {
+                    if (loc.a() < md->capExtent(txn).a()
+                            && drecs[drecIdx + 1].loc.a() == md->capExtent(txn).a()) {
                         // Bucket 1 is known as cappedLastDelRecLastExtent
                         md->setDeletedListEntry(txn, 1, loc);
                     }
@@ -553,21 +569,21 @@ namespace {
             if (drecs) {
                 int drecIdx = 0;
                 for (int bucketIdx = 0; bucketIdx < RecordStoreV1Base::Buckets; bucketIdx++) {
-                    DiskLoc actualLoc = md->deletedListEntry(bucketIdx);
+                    DiskLoc actualLoc = md->deletedListEntry(txn, bucketIdx);
 
                     if (md->isCapped() && bucketIdx == 1) {
                         // In capped collections, the 2nd bucket (index 1) points to the drec before
                         // the first drec in the capExtent. If the capExtent is the first Extent,
                         // it should be Null.
 
-                        if (md->capExtent() == md->firstExtent(txn)) {
+                        if (md->capExtent(txn) == md->firstExtent(txn)) {
                             ASSERT_EQUALS(actualLoc, DiskLoc());
                         }
                         else {
-                            ASSERT_NOT_EQUALS(actualLoc.a(), md->capExtent().a());
+                            ASSERT_NOT_EQUALS(actualLoc.a(), md->capExtent(txn).a());
                             const DeletedRecord* actualDrec =
                                 &em->recordForV1(actualLoc)->asDeleted();
-                            ASSERT_EQUALS(actualDrec->nextDeleted().a(), md->capExtent().a());
+                            ASSERT_EQUALS(actualDrec->nextDeleted().a(), md->capExtent(txn).a());
                         }
 
                         // Don't do normal checking of bucket 1 in capped collections. Checking

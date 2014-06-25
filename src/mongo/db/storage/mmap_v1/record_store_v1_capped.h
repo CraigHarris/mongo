@@ -1,7 +1,7 @@
 // record_store_v1_capped.h
 
 /**
-*    Copyright (C) 2013 10gen Inc.
+*    Copyright (C) 2013-2014 MongoDB Inc.
 *
 *    This program is free software: you can redistribute it and/or  modify
 *    it under the terms of the GNU Affero General Public License, version 3,
@@ -99,17 +99,17 @@ namespace mongo {
     private:
         // -- start copy from cap.cpp --
         void compact(OperationContext* txn);
-        const DiskLoc& cappedFirstDeletedInCurExtent() const;
+        const DiskLoc& cappedFirstDeletedInCurExtent(OperationContext* txn) const;
         void setFirstDeletedInCurExtent( OperationContext* txn, const DiskLoc& loc );
         void cappedCheckMigrate(OperationContext* txn);
         DiskLoc __capAlloc( OperationContext* txn, int len );
-        bool inCapExtent( const DiskLoc &dl ) const;
-        const DiskLoc& cappedListOfAllDeletedRecords() const;
-        const DiskLoc& cappedLastDelRecLastExtent() const;
+        bool inCapExtent( OperationContext* txn, const DiskLoc &dl ) const;
+        const DiskLoc& cappedListOfAllDeletedRecords(OperationContext* txn) const;
+        const DiskLoc& cappedLastDelRecLastExtent(OperationContext* txn) const;
         void setListOfAllDeletedRecords( OperationContext* txn, const DiskLoc& loc );
         void setLastDelRecLastExtent( OperationContext* txn, const DiskLoc& loc );
-        Extent *theCapExtent() const;
-        bool nextIsInCapExtent( const DiskLoc &dl ) const;
+        Extent *theCapExtent( OperationContext* txn ) const;
+        bool nextIsInCapExtent( OperationContext* txn, const DiskLoc &dl ) const;
         void advanceCapExtent( OperationContext* txn, const StringData& ns );
         void cappedTruncateLastDelUpdate(OperationContext* txn);
 

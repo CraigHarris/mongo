@@ -37,11 +37,11 @@ namespace mongo {
 
     class OperationContextNoop : public OperationContext {
     public:
-        OperationContextNoop(RecoveryUnit* ru) {
+        OperationContextNoop(RecoveryUnit* ru) : _tx(1) {
             _recoveryUnit.reset(ru);
         }
 
-        OperationContextNoop() {
+        OperationContextNoop() : _tx(1)  {
             _recoveryUnit.reset(new RecoveryUnitNoop());
         }
 
@@ -90,11 +90,12 @@ namespace mongo {
         };
 
         virtual Transaction* getTransaction() {
-            return NULL;
+            return &_tx;
         }
 
     private:
         boost::scoped_ptr<RecoveryUnit> _recoveryUnit;
+        Transaction _tx;
     };
 
 }  // namespace mongo

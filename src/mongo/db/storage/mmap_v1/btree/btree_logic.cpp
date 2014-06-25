@@ -63,7 +63,7 @@ namespace mongo {
         // XXX: Due to the way bulk building works, we may already have an empty root bucket that we
         // must now dispose of. This isn't the case in some unit tests that use the Builder directly
         // rather than going through an IndexAccessMethod.
-        DiskLoc oldHead = _logic->_headManager->getHead();
+        DiskLoc oldHead = _logic->_headManager->getHead(txn);
         if (!oldHead.isNull()) {
             _logic->_headManager->setHead(_txn, DiskLoc());
             _logic->_recordStore->deleteRecord(_txn, oldHead);
@@ -1087,7 +1087,7 @@ namespace mongo {
         // Find the DiskLoc 
         bool found;
 
-        DiskLoc bucket = _locate(txn, getRootLoc(), key, &position, &found, minDiskLoc, 1);
+        DiskLoc bucket = _locate(txn, getRootLoc(txn), key, &position, &found, minDiskLoc, 1);
 
         while (!bucket.isNull()) {
             FullKey fullKey = getFullKey(getBucket(bucket), position);
@@ -1119,7 +1119,7 @@ namespace mongo {
         int position;
         bool found;
 
-        DiskLoc posLoc = _locate(txn, getRootLoc(), key, &position, &found, minDiskLoc, 1);
+        DiskLoc posLoc = _locate(txn, getRootLoc(txn), key, &position, &found, minDiskLoc, 1);
 
         while (!posLoc.isNull()) {
             FullKey fullKey = getFullKey(getBucket(posLoc), position);
@@ -1270,7 +1270,7 @@ namespace mongo {
     void BtreeLogic<BtreeLayout>::delBucket(OperationContext* txn,
                                             BucketType* bucket,
                                             const DiskLoc bucketLoc) {
-        invariant(bucketLoc != getRootLoc());
+        invariant(bucketLoc != getRootLoc(txn));
 
         _bucketDeletion->aboutToDeleteBucket(bucketLoc);
 
@@ -1446,7 +1446,7 @@ namespace mongo {
 
         invariant(bucket->n == 0 && !bucket->nextChild.isNull() );
         if (bucket->parent.isNull()) {
-            invariant(getRootLoc() == bucketLoc);
+            invariant(getRootLoc(txn) == bucketLoc);
             _headManager->setHead(txn, bucket->nextChild);
         }
         else {
@@ -1805,18 +1805,18 @@ namespace mongo {
         bool found = false;
         KeyDataOwnedType ownedKey(key);
 
-        DiskLoc loc = _locate(txn, getRootLoc(), ownedKey, &pos, &found, recordLoc, 1);
+        DiskLoc loc = _locate(txn, getRootLoc(txn), ownedKey, &pos, &found, recordLoc, 1);
         if (found) {
             BucketType* bucket = btreemod(txn, getBucket(loc));
             delKeyAtPos(txn, bucket, loc, pos);
-            assertValid(_indexName, getRoot(), _ordering);
+            assertValid(_indexName, getRoot(txn), _ordering);
         }
         return found;
     }
 
     template <class BtreeLayout>
-    bool BtreeLogic<BtreeLayout>::isEmpty() const {
-        return getRoot()->n == 0;
+    bool BtreeLogic<BtreeLayout>::isEmpty(OperationContext* txn) const {
+        return getRoot(txn)->n == 0;
     }
 
     /**
@@ -2006,7 +2006,7 @@ namespace mongo {
 
     template <class BtreeLayout>
     Status BtreeLogic<BtreeLayout>::initAsEmpty(OperationContext* txn) {
-        if (!_headManager->getHead().isNull()) {
+        if (!_headManager->getHead(txn).isNull()) {
             return Status(ErrorCodes::InternalError, "index already initialized");
         }
 
@@ -2050,7 +2050,9 @@ namespace mongo {
     }
 
     template <class BtreeLayout>
-    DiskLoc BtreeLogic<BtreeLayout>::getDiskLoc(const DiskLoc& bucketLoc, const int keyOffset) const {
+    DiskLoc BtreeLogic<BtreeLayout>::getDiskLoc(OperationContext* txn,
+                                                const DiskLoc& bucketLoc,
+                                                const int keyOffset) const {
         invariant(!bucketLoc.isNull());
         BucketType* bucket = getBucket(bucketLoc);
         return getKeyHeader(bucket, keyOffset).recordLoc;
@@ -2089,7 +2091,7 @@ namespace mongo {
                                                     bool strict,
                                                     bool dumpBuckets,
                                                     unsigned depth) {
-        return _fullValidate(txn, getRootLoc(), unusedCount, strict, dumpBuckets, depth);
+        return _fullValidate(txn, getRootLoc(txn), unusedCount, strict, dumpBuckets, depth);
     }
 
     template <class BtreeLayout>
@@ -2232,15 +2234,15 @@ namespace mongo {
         }
 
         Status status = _insert(txn,
-                                getRoot(),
-                                getRootLoc(),
+                                getRoot(txn),
+                                getRootLoc(txn),
                                 key,
                                 value,
                                 dupsAllowed,
                                 DiskLoc(),
                                 DiskLoc());
 
-        assertValid(_indexName, getRoot(), _ordering);
+        assertValid(_indexName, getRoot(txn), _ordering);
         return status;
     }
 
@@ -2384,7 +2386,7 @@ namespace mongo {
         bool found = false;
         KeyDataOwnedType owned(key);
 
-        *bucketLocOut = _locate(txn, getRootLoc(), owned, posOut, &found, recordLoc, direction);
+        *bucketLocOut = _locate(txn, getRootLoc(txn), owned, posOut, &found, recordLoc, direction);
 
         if (!found) {
             return false;
@@ -2397,7 +2399,6 @@ namespace mongo {
 
     /**
      * Recursively walk down the btree, looking for a match of key and recordLoc.
-     * Caller should have acquired lock on bucketLoc.
      */
     template <class BtreeLayout>
     DiskLoc BtreeLogic<BtreeLayout>::_locate(OperationContext* txn,
@@ -2476,14 +2477,14 @@ namespace mongo {
 
     template <class BtreeLayout>
     typename BtreeLogic<BtreeLayout>::BucketType*
-    BtreeLogic<BtreeLayout>::getRoot() const {
-        return getBucket(_headManager->getHead());
+    BtreeLogic<BtreeLayout>::getRoot(OperationContext* txn) const {
+        return getBucket(_headManager->getHead(txn));
     }
 
     template <class BtreeLayout>
     DiskLoc
-    BtreeLogic<BtreeLayout>::getRootLoc() const {
-        return _headManager->getHead();
+    BtreeLogic<BtreeLayout>::getRootLoc(OperationContext* txn) const {
+        return _headManager->getHead(txn);
     }
 
     template <class BtreeLayout>

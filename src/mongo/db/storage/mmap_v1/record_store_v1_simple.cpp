@@ -36,6 +36,7 @@
 #include "mongo/db/catalog/collection.h"
 #include "mongo/db/curop.h"
 #include "mongo/db/commands/server_status_metric.h"
+#include "mongo/db/concurrency/lock_mgr.h"
 #include "mongo/db/storage/mmap_v1/extent.h"
 #include "mongo/db/storage/mmap_v1/extent_manager.h"
 #include "mongo/db/storage/mmap_v1/record.h"
@@ -95,8 +96,8 @@ namespace mongo {
             DiskLoc bestmatch;
             int bestmatchlen = INT_MAX; // sentinel meaning we haven't found a record big enough
             int b = bucket(lenToAlloc);
-            DiskLoc cur = _details->deletedListEntry(b);
-            
+            DiskLoc cur = _details->deletedListEntry(txn, b);
+
             int extra = 5; // look for a better fit, a little.
             int chain = 0;
             while ( 1 ) {
@@ -130,13 +131,14 @@ namespace mongo {
                         freelistIterations.increment( 1 + chain );
                         return DiskLoc();
                     }
-                    cur = _details->deletedListEntry(b);
+                    cur = _details->deletedListEntry(txn, b);
                     prev = 0;
                     continue;
                 }
                 DeletedRecord *r = drec(cur);
                 if ( r->lengthWithHeaders() >= lenToAlloc &&
                      r->lengthWithHeaders() < bestmatchlen ) {
+                    // better match than we have
                     bestmatchlen = r->lengthWithHeaders();
                     bestmatch = cur;
                     bestprev = prev;
@@ -167,7 +169,7 @@ namespace mongo {
             else {
                 // should be the front of a free-list
                 int myBucket = bucket(bmr->lengthWithHeaders());
-                invariant( _details->deletedListEntry(myBucket) == bestmatch );
+                invariant( _details->deletedListEntry(txn, myBucket) == bestmatch );
                 _details->setDeletedListEntry(txn, myBucket, bmr->nextDeleted());
             }
             *txn->recoveryUnit()->writing(&bmr->nextDeleted()) = DiskLoc().setInvalid(); // defensive.
@@ -228,8 +230,9 @@ namespace mongo {
                                                           int lengthWithHeaders,
                                                           bool enforceQuota ) {
         DiskLoc loc = _allocFromExistingExtents( txn, lengthWithHeaders );
-        if ( !loc.isNull() )
+        if ( !loc.isNull() ) {
             return StatusWith<DiskLoc>( loc );
+        }
 
         LOG(1) << "allocating new extent";
 
@@ -257,8 +260,9 @@ namespace mongo {
                                  enforceQuota );
 
             loc = _allocFromExistingExtents( txn, lengthWithHeaders );
-            if ( ! loc.isNull() )
+            if ( ! loc.isNull() ) {
                 return StatusWith<DiskLoc>( loc );
+            }
         }
 
         return StatusWith<DiskLoc>( ErrorCodes::InternalError, "cannot allocate space" );
@@ -275,7 +279,7 @@ namespace mongo {
         DEBUGGING log() << "TEMP: add deleted rec " << dloc.toString() << ' ' << hex << d->extentOfs() << endl;
 
         int b = bucket(d->lengthWithHeaders());
-        *txn->recoveryUnit()->writing(&d->nextDeleted()) = _details->deletedListEntry(b);
+        *txn->recoveryUnit()->writing(&d->nextDeleted()) = _details->deletedListEntry(txn, b);
         _details->setDeletedListEntry(txn, b, dloc);
     }
 

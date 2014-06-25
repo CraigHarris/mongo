@@ -128,13 +128,14 @@ namespace mongo {
          * @param loc - has to be for a specific Record (not an Extent)
          * Note(erh) see comment on recordFor
          */
-        Extent* extentForV1( const DiskLoc& loc ) const;
+        Extent* extentForV1( OperationContext* txn, const DiskLoc& loc ) const;
 
         /**
          * @param loc - has to be for a specific Record (not an Extent)
          * Note(erh) see comment on recordFor
          */
-        DiskLoc extentLocForV1( const DiskLoc& loc ) const;
+        DiskLoc extentLocForV1( OperationContext* txn,
+                                const DiskLoc& loc ) const;
 
         /**
          * @param loc - has to be for a specific Extent
@@ -149,6 +150,13 @@ namespace mongo {
 
 
         virtual CacheHint* cacheHint( const DiskLoc& extentLoc, const HintType& hint );
+
+        /**
+         * @param extentLoc - a locked extent
+         * side effects: result is locked, and lock on extentLoc is released
+         */
+        DiskLoc getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
+        DiskLoc getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
 
     private:
 

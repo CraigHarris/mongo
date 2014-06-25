@@ -93,7 +93,7 @@ namespace mongo {
         // TODO: expose full set of args for testing?
         virtual void fullValidate(OperationContext* txn, long long* numKeysOut) = 0;
 
-        virtual bool isEmpty() = 0;
+        virtual bool isEmpty(OperationContext* txn) = 0;
         
         /**
          * Attempt to bring whole index into memory. No-op is ok if not supported.

@@ -252,7 +252,8 @@ namespace mongo {
             LOG(1) << "\t bulk commit starting";
             std::set<DiskLoc> dupsToDrop;
 
-            Status status = btreeState->accessMethod()->commitBulk( bulk,
+            Status status = btreeState->accessMethod()->commitBulk( txn,
+                                                                    bulk,
                                                                     mayInterrupt,
                                                                     &dupsToDrop );
 
@@ -371,7 +372,8 @@ namespace mongo {
         for ( size_t i = 0; i < _states.size(); i++ ) {
             if ( _states[i].bulk == NULL )
                 continue;
-            Status status = _states[i].real->commitBulk( _states[i].bulk,
+            Status status = _states[i].real->commitBulk( _txn,
+                                                         _states[i].bulk,
                                                          false,
                                                          NULL );
             if ( !status.isOK() )

@@ -128,7 +128,8 @@ namespace mongo {
                                                                   descriptorCleanup.release(),
                                                                   _collection->infoCache() ) );
 
-        entry->init( _collection->_database->_dbEntry->getIndex( txn,
+        entry->init( txn,
+                     _collection->_database->_dbEntry->getIndex( txn,
                                                                  _collection->getCatalogEntry(),
                                                                  entry.get() ) );
 
