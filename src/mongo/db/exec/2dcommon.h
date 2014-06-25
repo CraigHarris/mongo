@@ -115,6 +115,7 @@ namespace twod_exec {
 
     struct BtreeLocation {
         BtreeLocation() : _eof(false) { }
+
         scoped_ptr<IndexScan> _scan;
         scoped_ptr<WorkingSet> _ws;
         DiskLoc _loc;
