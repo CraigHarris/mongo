@@ -82,6 +82,10 @@ namespace mongo {
 
         DiskLoc cur = _details->firstExtent(txn);
 
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+        lm.acquire(tx, kShared, cur);
+
         while ( !cur.isNull() ) {
             Extent* e = _extentManager->getExtent( cur );
 
@@ -91,8 +95,12 @@ namespace mongo {
             if ( extraInfo && level > 0 ) {
                 extentInfo.append( BSON( "len" << e->length << "loc: " << e->myLoc.toBSONObj() ) );
             }
+
+            lm.acquire(tx, kShared, e->xnext);
+            lm.release(tx, kShared, cur);
             cur = e->xnext;            
         }
+        lm.release(tx, kShared, cur);
 
         if ( extraInfo ) {
             extraInfo->append( "numExtents", n );
@@ -133,6 +141,7 @@ namespace mongo {
     DiskLoc RecordStoreV1Base::getNextRecord( OperationContext* txn, const DiskLoc& loc ) const {
         DiskLoc next = getNextRecordInExtent( txn, loc );
         if ( !next.isNull() ) {
+            LockManager::getSingleton().acquire( txn->getTransaction(), kShared, next );
             return next;
         }
 
@@ -147,12 +156,14 @@ namespace mongo {
                 break;
             // entire extent could be empty, keep looking
         }
+        LockManager::getSingleton().acquire( txn->getTransaction(), kShared, e->firstRecord );
         return e->firstRecord;
     }
 
     DiskLoc RecordStoreV1Base::getPrevRecord( OperationContext* txn, const DiskLoc& loc ) const {
         DiskLoc prev = getPrevRecordInExtent( txn, loc );
         if ( !prev.isNull() ) {
+            LockManager::getSingleton().acquire( txn->getTransaction(), kShared, prev );
             return prev;
         }
 
@@ -167,6 +178,7 @@ namespace mongo {
                 break;
             // entire extent could be empty, keep looking
         }
+        LockManager::getSingleton().acquire( txn->getTransaction(), kShared, prev );
         return e->lastRecord;
 
     }
@@ -202,6 +214,7 @@ namespace mongo {
 
         fassert( 17441, abs(nextOffset) >= 8 ); // defensive
         DiskLoc result( loc.a(), nextOffset );
+        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, result);
         return result;
     }
 
@@ -213,6 +226,7 @@ namespace mongo {
 
         fassert( 17442, abs(prevOffset) >= 8 ); // defensive
         DiskLoc result( loc.a(), prevOffset );
+        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, result);
         return result;
     }
 
@@ -232,6 +246,8 @@ namespace mongo {
         StatusWith<DiskLoc> loc = allocRecord( txn, lenWHdr, enforceQuota );
         if ( !loc.isOK() )
             return loc;
+
+        LockManager::getSingleton().acquire( txn->getTransaction(), kExclusive, loc.getValue() );
 
         Record *r = recordFor( loc.getValue() );
         fassert( 17319, r->lengthWithHeaders() >= lenWHdr );
@@ -276,6 +292,8 @@ namespace mongo {
         StatusWith<DiskLoc> loc = allocRecord( txn, lenWHdr, enforceQuota );
         if ( !loc.isOK() )
             return loc;
+
+        LockManager::getSingleton().acquire( txn->getTransaction(), kExclusive, loc.getValue() );
 
         Record *r = recordFor( loc.getValue() );
         fassert( 17210, r->lengthWithHeaders() >= lenWHdr );
@@ -359,17 +377,20 @@ namespace mongo {
 
         Record* todelete = recordFor( dl );
         invariant( todelete->netLength() >= 4 ); // this is required for defensive code
+        Transaction* tx = txn->getTransaction();
 
         /* remove ourself from the record next/prev chain */
         {
             if ( todelete->prevOfs() != DiskLoc::NullOfs ) {
                 DiskLoc prev = getPrevRecordInExtent( txn, dl );
+                LockManager::getSingleton().acquire( tx, kExclusive, prev );
                 Record* prevRecord = recordFor( prev );
                 txn->recoveryUnit()->writingInt( prevRecord->nextOfs() ) = todelete->nextOfs();
             }
 
             if ( todelete->nextOfs() != DiskLoc::NullOfs ) {
                 DiskLoc next = getNextRecord( txn, dl );
+                LockManager::getSingleton().acquire( tx, kExclusive, next );
                 Record* nextRecord = recordFor( next );
                 txn->recoveryUnit()->writingInt( nextRecord->prevOfs() ) = todelete->prevOfs();
             }
@@ -378,6 +399,7 @@ namespace mongo {
         /* remove ourself from extent pointers */
         {
             DiskLoc extentLoc = todelete->myExtentLoc(dl);
+            ExclusiveResourceLock( tx, extentLoc );
             Extent *e =  _getExtent( txn, extentLoc );
             if ( e->firstRecord == dl ) {
                 txn->recoveryUnit()->writing(&e->firstRecord);
@@ -427,6 +449,7 @@ namespace mongo {
                                                         DiskLoc loc) {
         dassert( recordFor(loc) == r );
         DiskLoc extentLoc = _getExtentLocForRecord( txn, loc );
+        ExclusiveResourceLock( txn->getTransaction(), extentLoc );
         Extent *e = _getExtent( txn, extentLoc );
         if ( e->lastRecord.isNull() ) {
             *txn->recoveryUnit()->writing(&e->firstRecord) = loc;
@@ -449,6 +472,7 @@ namespace mongo {
                                                        isCapped(),
                                                        size,
                                                        enforceQuota );
+        ExclusiveResourceLock( txn->getTransaction(), eloc );
         Extent *e = _extentManager->getExtent( eloc );
         invariant( e );
 
@@ -460,6 +484,7 @@ namespace mongo {
         txn->recoveryUnit()->writing( &e->lastRecord )->Null();
 
         DiskLoc emptyLoc = _findFirstSpot( txn, eloc, e );
+        ExclusiveResourceLock( txn->getTransaction(), emptyLoc );
 
         if ( _details->lastExtent(txn).isNull() ) {
             invariant( _details->firstExtent(txn).isNull() );
@@ -485,6 +510,9 @@ namespace mongo {
                                         bool full, bool scanData,
                                         ValidateAdaptor* adaptor,
                                         ValidateResults* results, BSONObjBuilder* output ) const {
+
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
 
         // 1) basic status that require no iteration
         // 2) extent level info
@@ -531,6 +559,7 @@ namespace mongo {
                 }
 
                 extentDiskLoc = _details->firstExtent(txn);
+                lm.acquire( tx, kShared, extentDiskLoc );
                 while (!extentDiskLoc.isNull()) {
                     Extent* thisExtent = _getExtent( txn, extentDiskLoc );
                     if (full) {
@@ -540,6 +569,7 @@ namespace mongo {
                         results->valid = false;
                     }
                     DiskLoc nextDiskLoc = thisExtent->xnext;
+                    lm.acquire( tx, kShared, nextDiskLoc );
                     
                     if (extentCount > 0 && !nextDiskLoc.isNull()
                         &&  _getExtent( txn, nextDiskLoc )->xprev != extentDiskLoc) {
@@ -557,10 +587,12 @@ namespace mongo {
                         results->errors.push_back( sb.str() );
                         results->valid = false;
                     }
+                    lm.release( tx, kShared, extentDiskLoc );
                     extentDiskLoc = nextDiskLoc;
                     extentCount++;
                     txn->checkForInterrupt();
                 }
+                lm.release( tx, kShared, extentDiskLoc );
             }
             catch (const DBException& e) {
                 StringBuilder sb;
@@ -568,6 +600,7 @@ namespace mongo {
                    << ": " << e.what();
                 results->errors.push_back( sb.str() );
                 results->valid = false;
+                lm.release( tx, kShared, extentDiskLoc );
                 return Status::OK();
             }
             output->append("extentCount", extentCount);
@@ -582,6 +615,7 @@ namespace mongo {
             bool testingLastExtent = false;
             try {
                 DiskLoc firstExtentLoc = _details->firstExtent(txn);
+                SharedResourceLock( tx, firstExtentLoc );
                 if (firstExtentLoc.isNull()) {
                     // this is ok
                 }
@@ -598,6 +632,7 @@ namespace mongo {
                 }
                 testingLastExtent = true;
                 DiskLoc lastExtentLoc = _details->lastExtent(txn);
+                SharedResourceLock( tx, lastExtentLoc );
                 if (lastExtentLoc.isNull()) {
                     // this is ok
                 }
@@ -644,6 +679,7 @@ namespace mongo {
                                                                   CollectionScanParams::FORWARD ) );
                 DiskLoc cl;
                 while ( !( cl = iterator->getNext() ).isNull() ) {
+                    SharedResourceLock( tx, cl );
                     n++;
 
                     if ( n < 1000000 )
@@ -725,6 +761,7 @@ namespace mongo {
             int incorrect = 0;
             for ( int i = 0; i < Buckets; i++ ) {
                 DiskLoc loc = _details->deletedListEntry(i);
+                SharedResourceLock( tx, loc );
                 try {
                     int k = 0;
                     while ( !loc.isNull() ) {
@@ -810,7 +847,10 @@ namespace mongo {
 
         std::vector<touch_location> ranges;
         {
+            LockManager& lm = LockManager::getSingleton();
+            Transaction* tx = txn->getTransaction();
             DiskLoc nextLoc = _details->firstExtent(txn);
+            lm.acquire( tx, kShared, nextLoc );
             Extent* ext = _getExtent( txn, nextLoc );
             while ( ext ) {
                 touch_location tl;
@@ -818,12 +858,15 @@ namespace mongo {
                 tl.length = ext->length;
                 ranges.push_back(tl);
 
+                lm.acquire( tx, kShared, ext->xnext );
+                lm.release( tx, kShared, nextLoc );
                 nextLoc = ext->xnext;
                 if ( nextLoc.isNull() )
                     ext = NULL;
                 else
                     ext = _getExtent( txn, nextLoc );
             }
+            lm.release( tx, kShared, nextLoc );
         }
 
         std::string progress_msg = "touch " + std::string(txn->getNS()) + " extents";
@@ -870,11 +913,13 @@ namespace mongo {
         const Record* rec = recordFor(_curr);
         const int nextOfs = _forward ? rec->nextOfs() : rec->prevOfs();
         _curr = (nextOfs == DiskLoc::NullOfs ? DiskLoc() : DiskLoc(_curr.a(), nextOfs));
+        LockManager::getSingleton().acquire(_txn->getTransaction(), kShared, _curr);
         return out;
     }
 
     void RecordStoreV1Base::IntraExtentIterator::invalidate(const DiskLoc& dl) {
         if (dl == _curr) {
+            LockManager::getSingleton().release(_txn->getTransaction(), kShared, _curr);
             getNext();
         }
     }

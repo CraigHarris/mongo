@@ -809,6 +809,7 @@ namespace mongo {
         else {
             // go up parents until rightmost/leftmost node is >=/<= target or at top
             while (!bucket->parent.isNull()) {
+                SharedResourceLock(txn->getTransaction(), bucket->parent);
                 *thisLocInOut = bucket->parent;
                 bucket = getBucket(*thisLocInOut);
 
@@ -863,6 +864,9 @@ namespace mongo {
                                                int direction,
                                                pair<DiskLoc, int>& bestParent) const {
 
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+
         BucketType* bucket = getBucket(*locInOut);
 
         if (0 == bucket->n) {
@@ -903,6 +907,8 @@ namespace mongo {
 
                 if (!next.isNull()) {
                     bestParent = pair<DiskLoc, int>(*locInOut, *keyOfsInOut);
+                    lm.acquire(tx, kShared, next);
+                    lm.release(tx, kShared, *locInOut);
                     *locInOut = next;
                     bucket = getBucket(*locInOut);
                     continue;
@@ -937,6 +943,8 @@ namespace mongo {
                     return;
                 }
                 else {
+                    lm.acquire(tx, kShared, next);
+                    lm.release(tx, kShared, *locInOut);
                     *locInOut = next;
                     bucket = getBucket(*locInOut);
                     continue;
@@ -1087,6 +1095,9 @@ namespace mongo {
         // Find the DiskLoc 
         bool found;
 
+        // XXX should lock result of getRootLoc inside getRootLoc
+        SharedResourceLock(txn->getTransaction(), getRootLoc());
+
         DiskLoc bucket = _locate(txn, getRootLoc(), key, &position, &found, minDiskLoc, 1);
 
         while (!bucket.isNull()) {
@@ -1118,6 +1129,9 @@ namespace mongo {
                                                  const DiskLoc self) const {
         int position;
         bool found;
+
+        // XXX should lock root inside getRootLoc
+        SharedResourceLock(txn->getTransaction(), getRootLoc());
 
         DiskLoc posLoc = _locate(txn, getRootLoc(), key, &position, &found, minDiskLoc, 1);
 
@@ -1274,6 +1288,8 @@ namespace mongo {
 
         _bucketDeletion->aboutToDeleteBucket(bucketLoc);
 
+        // lock the parent for writing. XXX could just lock the key in the parent
+        ExclusiveResourceLock parentLock(txn->getTransaction(), bucket->parent);
         BucketType* p = getBucket(bucket->parent);
         int parentIdx = indexInParent(txn, bucket, bucketLoc);
         *txn->recoveryUnit()->writing(&childLocForPos(p, parentIdx)) = DiskLoc();
@@ -1354,6 +1370,8 @@ namespace mongo {
                                               int p) {
         invariant(bucket->n > 0);
         DiskLoc left = childLocForPos(bucket, p);
+        SharedResourceLock leftLock(txn->getTransaction(), left);
+
         if (bucket->n == 1) {
             if (left.isNull() && bucket->nextChild.isNull()) {
                 _delKeyAtPos(bucket, p);
@@ -1420,6 +1438,7 @@ namespace mongo {
         // advanceLoc must be a descentant of thisLoc, because thisLoc has a
         // child in the proper direction and all descendants of thisLoc must be
         // nonempty because they are not the root.
+        SharedResourceLock(txn->getTransaction(), advanceLoc);
         BucketType* advanceBucket = getBucket(advanceLoc);
          
         if (!childLocForPos(advanceBucket, advanceKeyOfs).isNull()
@@ -1450,13 +1469,17 @@ namespace mongo {
             _headManager->setHead(txn, bucket->nextChild);
         }
         else {
+            ExclusiveResourceLock parentLock(txn->getTransaction(), bucket->parent);
             BucketType* parentBucket = getBucket(bucket->parent);
             int bucketIndexInParent = indexInParent(txn, bucket, bucketLoc);
             *txn->recoveryUnit()->writing(&childLocForPos(parentBucket, bucketIndexInParent)) =
                 bucket->nextChild;
         }
 
-        *txn->recoveryUnit()->writing(&getBucket(bucket->nextChild)->parent) = bucket->parent;
+        {
+            ExclusiveResourceLock childLock(txn->getTransaction(), bucket->nextChild);
+            *txn->recoveryUnit()->writing(&getBucket(bucket->nextChild)->parent) = bucket->parent;
+        }
         _bucketDeletion->aboutToDeleteBucket(bucketLoc);
         deallocBucket(txn, bucket, bucketLoc);
     }
@@ -1474,6 +1497,9 @@ namespace mongo {
         if (leftNodeLoc.isNull() || rightNodeLoc.isNull()) {
             return false;
         }
+
+        SharedResourceLock leftLock(txn->getTransaction(), leftNodeLoc);
+        SharedResourceLock rightLock(txn->getTransaction(), rightNodeLoc);
 
         int pos = 0;
 
@@ -1499,6 +1525,9 @@ namespace mongo {
                                                          int leftIndex) {
         int split = -1;
         int rightSize = 0;
+
+        SharedResourceLock leftLock(txn->getTransaction(), childLocForPos(bucket, leftIndex));
+        SharedResourceLock rightLock(txn->getTransaction(), childLocForPos(bucket, leftIndex+1));
 
         const BucketType* l = childForPos(bucket, leftIndex);
         const BucketType* r = childForPos(bucket, leftIndex + 1);
@@ -1560,6 +1589,9 @@ namespace mongo {
         DiskLoc leftNodeLoc = childLocForPos(bucket, leftIndex);
         DiskLoc rightNodeLoc = childLocForPos(bucket, leftIndex + 1);
 
+        ExclusiveResourceLock leftLock(txn->getTransaction(), leftNodeLoc);
+        ExclusiveResourceLock rightLock(txn->getTransaction(), rightNodeLoc);
+
         BucketType* l = btreemod(txn, getBucket(leftNodeLoc));
         BucketType* r = btreemod(txn, getBucket(rightNodeLoc));
 
@@ -1603,6 +1635,7 @@ namespace mongo {
                                                BucketType* bucket,
                                                const DiskLoc bucketLoc) const {
         invariant(!bucket->parent.isNull());
+        SharedResourceLock parentLock(txn->getTransaction(), bucket->parent);
         const BucketType* p = getBucket(bucket->parent);
         if (p->nextChild == bucketLoc) {
             return p->n;
@@ -1733,6 +1766,9 @@ namespace mongo {
         DiskLoc lchild = childLocForPos(bucket, leftIndex);
         DiskLoc rchild = childLocForPos(bucket, leftIndex + 1);
 
+        SharedResourceLock lchildLock(txn->getTransaction(), lchild);
+        SharedResourceLock rchildLock(txn->getTransaction(), rchild);
+
         int zeropos = 0;
         BucketType* l = btreemod(txn, getBucket(lchild));
         _packReadyForMod(l, zeropos);
@@ -1765,6 +1801,7 @@ namespace mongo {
             return false;
         }
 
+        SharedResourceLock(txn->getTransaction(), bucket->parent);
         BucketType* p = getBucket(bucket->parent);
         int parentIdx = indexInParent(txn, bucket, bucketLoc);
 
@@ -1805,8 +1842,15 @@ namespace mongo {
         bool found = false;
         KeyDataOwnedType ownedKey(key);
 
+        // acquire a read lock on the btree root node.  this will be released in _locate
+        // after locking the appropriate child bucket
+        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, getRootLoc());
+
+        // _locate will acquire a shared/read lock on loc. Locks on the ancestors of loc
+        // will have been released.
         DiskLoc loc = _locate(txn, getRootLoc(), ownedKey, &pos, &found, recordLoc, 1);
         if (found) {
+            ExclusiveResourceLock(txn->getTransaction(), loc);
             BucketType* bucket = btreemod(txn, getBucket(loc));
             delKeyAtPos(txn, bucket, loc, pos);
             assertValid(_indexName, getRoot(), _ordering);
@@ -1839,6 +1883,7 @@ namespace mongo {
         for (int i = firstIndex; i <= lastIndex; i++) {
             const DiskLoc childLoc = childLocForPos(bucket, i);
             if (!childLoc.isNull()) {
+                ExclusiveResourceLock childLock(txn->getTransaction(), childLoc);
                 *txn->recoveryUnit()->writing(&getBucket(childLoc)->parent) = bucketLoc;
             }
         }
@@ -1906,6 +1951,7 @@ namespace mongo {
             invariant(kn->prevChildBucket == leftChildLoc);
             *txn->recoveryUnit()->writing(&bucket->nextChild) = rightChildLoc;
             if (!rightChildLoc.isNull()) {
+                ExclusiveResourceLock parentLock(txn->getTransaction(), getBucket(rightChildLoc)->parent);
                 *txn->recoveryUnit()->writing(&getBucket(rightChildLoc)->parent) = bucketLoc;
             }
         }
@@ -1919,6 +1965,7 @@ namespace mongo {
             // Intent declared in basicInsert()
             *const_cast<LocType*>(pc) = rightChildLoc;
             if (!rightChildLoc.isNull()) {
+                ExclusiveResourceLock parentLock(txn->getTransaction(), getBucket(rightChildLoc)->parent);
                 *txn->recoveryUnit()->writing(&getBucket(rightChildLoc)->parent) = bucketLoc;
             }
         }
@@ -1936,6 +1983,7 @@ namespace mongo {
 
         int split = splitPos(bucket, keypos);
         DiskLoc rLoc = _addBucket(txn);
+        ExclusiveResourceLock rLocLock(txn->getTransaction(), rLoc);
         BucketType* r = btreemod(txn, getBucket(rLoc));
 
         for (int i = split + 1; i < bucket->n; i++) {
@@ -2022,6 +2070,7 @@ namespace mongo {
         uassertStatusOK(loc.getStatus());
 
         // this is a new bucket, not referenced by anyone, probably don't need this lock
+        ExclusiveResourceLock(txn->getTransaction(), loc.getValue());
         BucketType* b = btreemod(txn, getBucket(loc.getValue()));
         init(b);
         return loc.getValue();
@@ -2121,6 +2170,7 @@ namespace mongo {
 
             if (!kn.prevChildBucket.isNull()) {
                 DiskLoc left = kn.prevChildBucket;
+                SharedResourceLock leftLock(txn->getTransaction(), left);
                 BucketType* b = getBucket(left);
 
                 if (strict) {
@@ -2135,6 +2185,7 @@ namespace mongo {
         }
 
         if (!bucket->nextChild.isNull()) {
+            SharedResourceLock nextChildLock(txn->getTransaction(), bucket->nextChild);
             BucketType* b = getBucket(bucket->nextChild);
             if (strict) {
                 invariant(b->parent == bucketLoc);
@@ -2284,6 +2335,7 @@ namespace mongo {
             return Status::OK();
         }
         else {
+            SharedResourceLock childLock(txn->getTransaction(), childLoc);
             return _insert(txn,
                            getBucket(childLoc),
                            childLoc,
@@ -2300,6 +2352,9 @@ namespace mongo {
                                              const DiskLoc& bucketLoc,
                                              int* posInOut,
                                              int direction) const {
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+
         BucketType* bucket = getBucket(bucketLoc);
 
         if (*posInOut < 0 || *posInOut >= bucket->n ) {
@@ -2316,6 +2371,7 @@ namespace mongo {
 
         // Look down if we need to.
         DiskLoc nextDownLoc = childLocForPos(bucket, ko + adj);
+        SharedResourceLock childLock(txn->getTransaction(), nextDownLoc);
         BucketType* nextDown = getBucket(nextDownLoc);
         if (NULL != nextDown) {
             for (;;) {
@@ -2326,10 +2382,12 @@ namespace mongo {
                     *posInOut = nextDown->n - 1;
                 }
                 DiskLoc newNextDownLoc = childLocForPos(nextDown, *posInOut + adj);
+                lm.acquire(tx, kShared, newNextDownLoc);
                 BucketType* newNextDownBucket = getBucket(newNextDownLoc);
                 if (NULL == newNextDownBucket) {
                     break;
                 }
+                lm.release(tx, kShared, nextDownLoc);
                 nextDownLoc = newNextDownLoc;
                 nextDown = newNextDownBucket;
             }
@@ -2345,6 +2403,7 @@ namespace mongo {
         // Hit the end of the bucket, move up and over.
         DiskLoc childLoc = bucketLoc;
         DiskLoc ancestor = getBucket(bucketLoc)->parent;
+        lm.acquire(tx, kShared, ancestor);
         for (;;) {
             if (ancestor.isNull()) {
                 break;
@@ -2359,8 +2418,11 @@ namespace mongo {
             invariant(direction < 0 || an->nextChild == childLoc);
             // parent exhausted also, keep going up
             childLoc = ancestor;
+            lm.acquire(tx, kShared, an->parent);
+            lm.release(tx, kShared, ancestor);
             ancestor = an->parent;
         }
+        lm.release(tx, kShared, ancestor);
 
         return DiskLoc();
     }
@@ -2422,6 +2484,8 @@ namespace mongo {
         DiskLoc childLoc = childLocForPos(bucket, position);
 
         if (!childLoc.isNull()) {
+            LockManager::getSingleton().acquire(txn->getTransaction(), kShared, childLoc);
+            LockManager::getSingleton().release(txn->getTransaction(), kShared, bucket->parent);
             DiskLoc inChild = _locate(txn, childLoc, key, posOut, foundOut, recordLoc, direction);
             if (!inChild.isNull()) {
                 return inChild;
