@@ -302,8 +302,9 @@ namespace {
 
         class ForwardCursor : public BtreeInterface::Cursor {
         public:
-            ForwardCursor(const IndexSet& data)
+            ForwardCursor(const IndexSet& data, OperationContext* txn)
                 : _data(data),
+                  _txn(txn),
                   _it(data.end())
             {}
 
@@ -323,14 +324,13 @@ namespace {
                 invariant(!"aboutToDeleteBucket should not be called");
             }
 
-            virtual bool locate(OperationContext* txn, const BSONObj& keyRaw, const DiskLoc& loc) {
+            virtual bool locate(const BSONObj& keyRaw, const DiskLoc& loc) {
                 const BSONObj key = stripFieldNames(keyRaw);
                 _it = _data.lower_bound(IndexEntry(key, loc)); // lower_bound is >= key
                 return _it != _data.end() && (_it->key == key); // intentionally not comparing loc
             }
 
-            virtual void customLocate(OperationContext* txn,
-                                      const BSONObj& keyBegin,
+            virtual void customLocate(const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterKey,
                                       const vector<const BSONElement*>& keyEnd,
@@ -346,14 +346,13 @@ namespace {
                                                    DiskLoc()));
             }
 
-            void advanceTo(OperationContext* txn,
-                           const BSONObj &keyBegin,
+            void advanceTo(const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
                 // XXX I think these do the same thing????
-                customLocate(txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
+                customLocate(_txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
             }
 
             virtual BSONObj getKey() const {
@@ -364,7 +363,7 @@ namespace {
                 return _it->loc;
             }
 
-            virtual void advance(OperationContext* txn) {
+            virtual void advance() {
                 if (_it != _data.end())
                     ++_it;
             }
@@ -379,17 +378,18 @@ namespace {
                 _savedLoc = _it->loc;
             }
 
-            virtual void restorePosition(OperationContext* txn) {
+            virtual void restorePosition() {
                 if (_savedAtEnd) {
                     _it = _data.end();
                 }
                 else {
-                    locate(txn, _savedKey, _savedLoc);
+                    locate(_txn, _savedKey, _savedLoc);
                 }
             }
 
         private:
             const IndexSet& _data;
+            OperationContext* txn; // not owned
             IndexSet::const_iterator _it;
 
             // For save/restorePosition since _it may be invalidated durring a yield.
@@ -401,8 +401,9 @@ namespace {
         // TODO see if this can share any code with ForwardIterator
         class ReverseCursor : public BtreeInterface::Cursor {
         public:
-            ReverseCursor(const IndexSet& data)
+            ReverseCursor(const IndexSet& data, OperationContext* txn)
                 : _data(data),
+                  _txn(txn),
                   _it(data.rend())
             {}
 
@@ -422,14 +423,13 @@ namespace {
                 invariant(!"aboutToDeleteBucket should not be called");
             }
 
-            virtual bool locate(OperationContext* txn, const BSONObj& keyRaw, const DiskLoc& loc) {
+            virtual bool locate(const BSONObj& keyRaw, const DiskLoc& loc) {
                 const BSONObj key = stripFieldNames(keyRaw);
                 _it = lower_bound(IndexEntry(key, loc)); // lower_bound is <= query
                 return _it != _data.rend() && (_it->key == key); // intentionally not comparing loc
             }
 
-            virtual void customLocate(OperationContext* txn,
-                                      const BSONObj& keyBegin,
+            virtual void customLocate(const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterKey,
                                       const vector<const BSONElement*>& keyEnd,
@@ -445,14 +445,13 @@ namespace {
                                              DiskLoc()));
             }
 
-            void advanceTo(OperationContext* txn,
-                           const BSONObj &keyBegin,
+            void advanceTo(const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
                 // XXX I think these do the same thing????
-                customLocate(txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
+                customLocate(_txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
             }
 
             virtual BSONObj getKey() const {
@@ -463,7 +462,7 @@ namespace {
                 return _it->loc;
             }
 
-            virtual void advance(OperationContext* txn) {
+            virtual void advance() {
                 if (_it != _data.rend())
                     ++_it;
             }
@@ -478,12 +477,12 @@ namespace {
                 _savedLoc = _it->loc;
             }
 
-            virtual void restorePosition(OperationContext* txn) {
+            virtual void restorePosition() {
                 if (_savedAtEnd) {
                     _it = _data.rend();
                 }
                 else {
-                    locate(txn, _savedKey, _savedLoc);
+                    locate(_txn, _savedKey, _savedLoc);
                 }
             }
 
@@ -504,6 +503,7 @@ namespace {
             }
 
             const IndexSet& _data;
+            OperationContext* _txn; // not owned
             IndexSet::const_reverse_iterator _it;
 
             // For save/restorePosition since _it may be invalidated durring a yield.
@@ -512,12 +512,12 @@ namespace {
             DiskLoc _savedLoc;
         };
 
-        virtual BtreeInterface::Cursor* newCursor(int direction) const {
+        virtual BtreeInterface::Cursor* newCursor(OperationContext* txn, int direction) const {
             if (direction == 1)
-                return new ForwardCursor(*_data);
+                return new ForwardCursor(*_data, txn);
 
             invariant(direction == -1);
-            return new ReverseCursor(*_data);
+            return new ReverseCursor(*_data, txn);
         }
 
         virtual Status initAsEmpty(OperationContext* txn) {

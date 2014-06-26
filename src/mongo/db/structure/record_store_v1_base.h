@@ -71,10 +71,10 @@ namespace mongo {
                                           const DiskLoc& loc ) = 0;
         virtual void orphanDeletedList(OperationContext* txn) = 0;
 
-        virtual const DiskLoc& firstExtent() const = 0;
+        virtual const DiskLoc& firstExtent( OperationContext* txn ) const = 0;
         virtual void setFirstExtent( OperationContext* txn, const DiskLoc& loc ) = 0;
 
-        virtual const DiskLoc& lastExtent() const = 0;
+        virtual const DiskLoc& lastExtent( OperationContext* txn ) const = 0;
         virtual void setLastExtent( OperationContext* txn, const DiskLoc& loc ) = 0;
 
         virtual bool isCapped() const = 0;
@@ -85,7 +85,7 @@ namespace mongo {
         virtual bool clearUserFlag( OperationContext* txn, int flag ) = 0;
         virtual bool replaceUserFlags( OperationContext* txn, int flags ) = 0;
 
-        virtual int lastExtentSize() const = 0;
+        virtual int lastExtentSize( OperationContext* txn) const = 0;
         virtual void setLastExtentSize( OperationContext* txn, int newMax ) = 0;
 
         virtual long long maxCappedDocs() const = 0;
@@ -220,15 +220,15 @@ namespace mongo {
         virtual DeletedRecord* drec( const DiskLoc& loc ) const;
 
         // just a wrapper for _extentManager->getExtent( loc );
-        Extent* _getExtent( const DiskLoc& loc ) const;
+        Extent* _getExtent( OperationContext* txn, const DiskLoc& loc ) const;
 
-        DiskLoc _getExtentLocForRecord( const DiskLoc& loc ) const;
+        DiskLoc _getExtentLocForRecord( OperationContext* txn, const DiskLoc& loc ) const;
 
-        DiskLoc _getNextRecord( const DiskLoc& loc ) const;
-        DiskLoc _getPrevRecord( const DiskLoc& loc ) const;
+        DiskLoc _getNextRecord( OperationContext* txn, const DiskLoc& loc ) const;
+        DiskLoc _getPrevRecord( OperationContext* txn, const DiskLoc& loc ) const;
 
-        DiskLoc _getNextRecordInExtent( const DiskLoc& loc ) const;
-        DiskLoc _getPrevRecordInExtent( const DiskLoc& loc ) const;
+        DiskLoc _getNextRecordInExtent( OperationContext* txn, const DiskLoc& loc ) const;
+        DiskLoc _getPrevRecordInExtent( OperationContext* txn, const DiskLoc& loc ) const;
 
         /**
          * finds the first suitable DiskLoc for data
@@ -267,14 +267,17 @@ namespace mongo {
      */
     class RecordStoreV1Base::IntraExtentIterator : public RecordIterator {
     public:
-        IntraExtentIterator(DiskLoc start, const RecordStoreV1Base* rs, bool forward = true)
-            : _curr(start), _rs(rs), _forward(forward) {}
+        IntraExtentIterator(OperationContext* txn,
+                            DiskLoc start,
+                            const RecordStoreV1Base* rs,
+                            bool forward = true)
+            : _txn(txn), _curr(start), _rs(rs), _forward(forward) {}
 
         virtual bool isEOF() { return _curr.isNull(); }
 
         virtual DiskLoc curr() { return _curr; }
 
-        virtual DiskLoc getNext();
+        virtual DiskLoc getNext( );
 
         virtual void invalidate(const DiskLoc& dl);
 
@@ -286,6 +289,7 @@ namespace mongo {
 
     private:
         virtual const Record* recordFor( const DiskLoc& loc ) const { return _rs->recordFor(loc); }
+        OperationContext* _txn
         DiskLoc _curr;
         const RecordStoreV1Base* _rs;
         bool _forward;

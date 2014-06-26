@@ -118,27 +118,27 @@ namespace mongo {
         return reinterpret_cast<DeletedRecord*>( recordFor( loc ) );
     }
 
-    Extent* RecordStoreV1Base::_getExtent( const DiskLoc& loc ) const {
-        return _extentManager->getExtent( loc );
+    Extent* RecordStoreV1Base::_getExtent( OperationContext* txn, const DiskLoc& loc ) const {
+        return _extentManager->getExtent( txn, loc );
     }
 
-    DiskLoc RecordStoreV1Base::_getExtentLocForRecord( const DiskLoc& loc ) const {
-        return _extentManager->extentLocForV1( loc );
+    DiskLoc RecordStoreV1Base::_getExtentLocForRecord( OperationContext* txn, const DiskLoc& loc ) const {
+        return _extentManager->extentLocForV1( txn, loc );
     }
 
 
-    DiskLoc RecordStoreV1Base::getNextRecord( const DiskLoc& loc ) const {
-        DiskLoc next = getNextRecordInExtent( loc );
+    DiskLoc RecordStoreV1Base::getNextRecord( OperationContext* txn, const DiskLoc& loc ) const {
+        DiskLoc next = getNextRecordInExtent( txn, loc );
         if ( !next.isNull() )
             return next;
 
         // now traverse extents
 
-        Extent* e = _getExtent( _getExtentLocForRecord(loc) );
+        Extent* e = _getExtent( txn, _getExtentLocForRecord(loc) );
         while ( 1 ) {
             if ( e->xnext.isNull() )
                 return DiskLoc(); // end of collection
-            e = _getExtent( e->xnext );
+            e = _getExtent( txn, e->xnext );
             if ( !e->firstRecord.isNull() )
                 break;
             // entire extent could be empty, keep looking
@@ -146,18 +146,18 @@ namespace mongo {
         return e->firstRecord;
     }
 
-    DiskLoc RecordStoreV1Base::getPrevRecord( const DiskLoc& loc ) const {
-        DiskLoc prev = getPrevRecordInExtent( loc );
+    DiskLoc RecordStoreV1Base::getPrevRecord( OperationContext* txn, const DiskLoc& loc ) const {
+        DiskLoc prev = getPrevRecordInExtent( txn, loc );
         if ( !prev.isNull() )
             return prev;
 
         // now traverse extents
 
-        Extent *e = _getExtent(_getExtentLocForRecord(loc));
+        Extent *e = _getExtent(txn, _getExtentLocForRecord(txn, loc));
         while ( 1 ) {
             if ( e->xprev.isNull() )
                 return DiskLoc(); // end of collection
-            e = _getExtent( e->xprev );
+            e = _getExtent( txn, e->xprev );
             if ( !e->firstRecord.isNull() )
                 break;
             // entire extent could be empty, keep looking
@@ -188,25 +188,28 @@ namespace mongo {
 
     }
 
-    DiskLoc RecordStoreV1Base::getNextRecordInExtent( const DiskLoc& loc ) const {
+    DiskLoc RecordStoreV1Base::getNextRecordInExtent( OperationContext* txn, const DiskLoc& loc ) const {
         int nextOffset = recordFor( loc )->nextOfs();
 
         if ( nextOffset == DiskLoc::NullOfs )
             return DiskLoc();
 
         fassert( 17441, abs(nextOffset) >= 8 ); // defensive
-        return DiskLoc( loc.a(), nextOffset );
+        DiskLoc result( loc.a(), nextOffset );
+        LockManager::getSingleton().acquire(txn->getTransaction(), result);
+        return result;
     }
 
-    DiskLoc RecordStoreV1Base::getPrevRecordInExtent( const DiskLoc& loc ) const {
+    DiskLoc RecordStoreV1Base::getPrevRecordInExtent( OperationContext* txn, const DiskLoc& loc ) const {
         int prevOffset = recordFor( loc )->prevOfs();
 
         if ( prevOffset == DiskLoc::NullOfs )
             return DiskLoc();
 
         fassert( 17442, abs(prevOffset) >= 8 ); // defensive
-        return DiskLoc( loc.a(), prevOffset );
-
+        DiskLoc result( loc.a(), prevOffset );
+        LockManager::getSingleton().acquire(txn->getTransaction(), result);
+        return result;
     }
 
 
@@ -853,14 +856,14 @@ namespace mongo {
 
         const DiskLoc out = _curr; // we always return where we were, not where we will be.
         const Record* rec = recordFor(_curr);
-        const int nextOfs = _forward ? rec->nextOfs() : rec->prevOfs();
+        const int nextOfs = _forward ? rec->nextOfs(_txn) : rec->prevOfs(_txn);
         _curr = (nextOfs == DiskLoc::NullOfs ? DiskLoc() : DiskLoc(_curr.a(), nextOfs));
         return out;
     }
 
     void RecordStoreV1Base::IntraExtentIterator::invalidate(const DiskLoc& dl) {
         if (dl == _curr)
-            getNext();
+            getNext(_txn);
     }
 
     /* @return the size for an allocated record quantized to 1/16th of the BucketSize

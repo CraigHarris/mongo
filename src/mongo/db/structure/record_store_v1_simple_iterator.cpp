@@ -39,10 +39,11 @@ namespace mongo {
     // Regular / non-capped collection traversal
     //
 
-    SimpleRecordStoreV1Iterator::SimpleRecordStoreV1Iterator(const SimpleRecordStoreV1* collection,
+    SimpleRecordStoreV1Iterator::SimpleRecordStoreV1Iterator(OperationContext* txn,
+                                                             const SimpleRecordStoreV1* collection,
                                                              const DiskLoc& start,
                                                              const CollectionScanParams::Direction& dir)
-        : _curr(start), _recordStore(collection), _direction(dir) {
+        : _txn(txn), _curr(start), _recordStore(collection), _direction(dir) {
 
         if (_curr.isNull()) {
 
@@ -58,7 +59,7 @@ namespace mongo {
                 Extent* e = em->getExtent( _recordStore->details()->firstExtent() );
 
                 while (e->firstRecord.isNull() && !e->xnext.isNull()) {
-                    e = em->getExtent( e->xnext );
+                    e = em->getExtent( _txn, e->xnext );
                 }
 
                 // _curr may be set to DiskLoc() here if e->lastRecord isNull but there is no
@@ -68,12 +69,12 @@ namespace mongo {
             else {
                 // Walk backwards, skipping empty extents, and use the last record in the first
                 // non-empty extent we see.
-                Extent* e = em->getExtent( _recordStore->details()->lastExtent() );
+                Extent* e = em->getExtent( _txn, _recordStore->details()->lastExtent() );
 
                 // TODO ELABORATE
                 // Does one of e->lastRecord.isNull(), e.firstRecord.isNull() imply the other?
                 while (e->lastRecord.isNull() && !e->xprev.isNull()) {
-                    e = em->getExtent( e->xprev );
+                    e = em->getExtent( _txn, e->xprev );
                 }
 
                 // _curr may be set to DiskLoc() here if e->lastRecord isNull but there is no
@@ -95,10 +96,10 @@ namespace mongo {
         // Move to the next thing.
         if (!isEOF()) {
             if (CollectionScanParams::FORWARD == _direction) {
-                _curr = _recordStore->getNextRecord( _curr );
+                _curr = _recordStore->getNextRecord( _txn, _curr );
             }
             else {
-                _curr = _recordStore->getPrevRecord( _curr );
+                _curr = _recordStore->getPrevRecord( _txn, _curr );
             }
         }
 

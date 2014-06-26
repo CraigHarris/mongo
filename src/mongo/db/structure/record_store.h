@@ -175,7 +175,8 @@ namespace mongo {
          * canonical to get all would be
          * getIterator( DiskLoc(), false, CollectionScanParams::FORWARD )
          */
-        virtual RecordIterator* getIterator( const DiskLoc& start = DiskLoc(),
+        virtual RecordIterator* getIterator( OperationContext* txn,
+                                             const DiskLoc& start = DiskLoc(),
                                              bool tailable = false,
                                              const CollectionScanParams::Direction& dir =
                                              CollectionScanParams::FORWARD
@@ -192,7 +193,7 @@ namespace mongo {
          * Returns many iterators that partition the RecordStore into many disjoint sets. Iterating
          * all returned iterators is equivalent to Iterating the full store.
          */
-        virtual std::vector<RecordIterator*> getManyIterators() const = 0;
+        virtual std::vector<RecordIterator*> getManyIterators( OperationContext* txn ) const = 0;
 
         // higher level
 

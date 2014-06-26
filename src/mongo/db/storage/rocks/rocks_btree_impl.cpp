@@ -122,7 +122,7 @@ namespace mongo {
                 // don't know if I need this or not
             }
 
-            bool locate(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) {
+            bool locate(const BSONObj& key, const DiskLoc& loc) {
                 _cached = false;
                 IndexKey indexKey( key, loc );
                 string buf = indexKey.asString();
@@ -134,8 +134,7 @@ namespace mongo {
                 return key.woCompare( _cachedKey, BSONObj(), false ) == 0;
             }
 
-            void advanceTo(OperationContext*,
-                           const BSONObj &keyBegin,
+            void advanceTo(const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
@@ -147,8 +146,7 @@ namespace mongo {
              * Locate a key with fields comprised of a combination of keyBegin fields and keyEnd
              * fields.
              */
-            void customLocate(OperationContext*,
-                              const BSONObj& keyBegin,
+            void customLocate(const BSONObj& keyBegin,
                               int keyBeginLen,
                               bool afterVersion,
                               const vector<const BSONElement*>& keyEnd,
@@ -170,7 +168,7 @@ namespace mongo {
                 return _cachedLoc;
             }
 
-            void advance(OperationContext* txn) {
+            void advance() {
                 if ( _forward() )
                     _iterator->Next();
                 else
@@ -182,7 +180,7 @@ namespace mongo {
                 invariant( !"rocksdb cursor doesn't do saving yet" );
             }
 
-            void restorePosition(OperationContext* txn) {
+            void restorePosition() {
                 invariant( !"rocksdb cursor doesn't do saving yet" );
             }
 
@@ -204,6 +202,7 @@ namespace mongo {
             }
 
             scoped_ptr<rocksdb::Iterator> _iterator;
+            OperationContext* _txn; // not owned
             bool _direction;
 
             mutable bool _cached;
@@ -233,7 +232,7 @@ namespace mongo {
 
         if ( !dupsAllowed ) {
             // XXX: this is slow
-            Status status = dupKeyCheck( key, loc );
+            Status status = dupKeyCheck( txn, key, loc );
             if ( !status.isOK() )
                 return status;
         }
@@ -286,9 +285,11 @@ namespace mongo {
         return Status::OK();
     }
 
-    BtreeInterface::Cursor* RocksBtreeImpl::newCursor(int direction) const {
+    BtreeInterface::Cursor* RocksBtreeImpl::newCursor(OperationContext* txn,
+                                                      int direction) const {
         return new RocksCursor( _db->NewIterator( rocksdb::ReadOptions(),
                                                   _columnFamily ),
+                                txn,
                                 direction );
     }
 

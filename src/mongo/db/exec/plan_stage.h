@@ -152,7 +152,7 @@ namespace mongo {
          * Stage returns StageState::ADVANCED if *out is set to the next unit of output.  Otherwise,
          * returns another value of StageState to indicate the stage's status.
          */
-        virtual StageState work(WorkingSetID* out) = 0;
+        virtual StageState work(OperationContext* txn, WorkingSetID* out) = 0;
 
         /**
          * Returns true if no more work can be done on the query / out of results.

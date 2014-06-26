@@ -150,10 +150,9 @@ namespace mongo {
              */
             virtual void aboutToDeleteBucket(const DiskLoc& bucket) = 0;
 
-            virtual bool locate(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) = 0;
+            virtual bool locate(const BSONObj& key, const DiskLoc& loc) = 0;
 
-            virtual void advanceTo(OperationContext* txn,
-                                   const BSONObj &keyBegin,
+            virtual void advanceTo(const BSONObj &keyBegin,
                                    int keyBeginLen,
                                    bool afterKey,
                                    const vector<const BSONElement*>& keyEnd,
@@ -163,8 +162,7 @@ namespace mongo {
              * Locate a key with fields comprised of a combination of keyBegin fields and keyEnd
              * fields.
              */
-            virtual void customLocate(OperationContext* txn,
-                                      const BSONObj& keyBegin,
+            virtual void customLocate(const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterVersion,
                                       const vector<const BSONElement*>& keyEnd,
@@ -178,20 +176,20 @@ namespace mongo {
 
             virtual DiskLoc getDiskLoc() const = 0;
 
-            virtual void advance(OperationContext* txn) = 0;
+            virtual void advance() = 0;
 
             //
             // Saving and restoring state
             //
             virtual void savePosition() = 0;
 
-            virtual void restorePosition(OperationContext* txn) = 0;
+            virtual void restorePosition() = 0;
         };
 
         /**
          * Caller takes ownership. BtreeInterface must outlive all Cursors it produces.
          */
-        virtual Cursor* newCursor(int direction) const = 0;
+        virtual Cursor* newCursor(OperationContext* txn, int direction) const = 0;
 
         //
         // Index creation

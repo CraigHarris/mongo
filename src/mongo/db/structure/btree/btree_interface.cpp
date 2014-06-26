@@ -118,8 +118,11 @@ namespace mongo {
 
         class Cursor : public BtreeInterface::Cursor {
         public:
-            Cursor(const BtreeLogic<OnDiskFormat>* btree, int direction)
+            Cursor(const BtreeLogic<OnDiskFormat>* btree,
+                   OperationContext* txn,
+                   int direction)
                 : _btree(btree),
+                  _txn(txn),
                   _direction(direction),
                   _bucket(btree->getHead()), // XXX this shouldn't be nessisary, but is.
                   _ofs(0) {
@@ -143,18 +146,17 @@ namespace mongo {
                     _ofs = -1;
             }
 
-            virtual bool locate(OperationContext* txn, const BSONObj& key, const DiskLoc& loc) {
-                return _btree->locate(txn, key, loc, _direction, &_ofs, &_bucket);
+            virtual bool locate(const BSONObj& key, const DiskLoc& loc) {
+                return _btree->locate(_txn, key, loc, _direction, &_ofs, &_bucket);
             }
 
-            virtual void customLocate(OperationContext* txn,
-                                      const BSONObj& keyBegin,
+            virtual void customLocate(const BSONObj& keyBegin,
                                       int keyBeginLen,
                                       bool afterKey,
                                       const vector<const BSONElement*>& keyEnd,
                                       const vector<bool>& keyEndInclusive) {
 
-                _btree->customLocate(txn,
+                _btree->customLocate(_txn,
                                      &_bucket,
                                      &_ofs,
                                      keyBegin,
@@ -165,14 +167,13 @@ namespace mongo {
                                      _direction);
             }
 
-            void advanceTo(OperationContext* txn,
-                           const BSONObj &keyBegin,
+            void advanceTo(const BSONObj &keyBegin,
                            int keyBeginLen,
                            bool afterKey,
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
 
-                _btree->advanceTo(txn,
+                _btree->advanceTo(_txn,
                                   &_bucket,
                                   &_ofs,
                                   keyBegin,
@@ -191,8 +192,8 @@ namespace mongo {
                 return _btree->getDiskLoc(_bucket, _ofs);
             }
 
-            virtual void advance(OperationContext* txn) {
-                _btree->advance(txn, &_bucket, &_ofs, _direction);
+            virtual void advance() {
+                _btree->advance(_txn, &_bucket, &_ofs, _direction);
             }
 
             virtual void savePosition() {
@@ -202,9 +203,9 @@ namespace mongo {
                 }
             }
 
-            virtual void restorePosition(OperationContext* txn) {
+            virtual void restorePosition() {
                 if (!_bucket.isNull()) {
-                    _btree->restorePosition(txn,
+                    _btree->restorePosition(_txn,
                                             _savedKey,
                                             _savedLoc,
                                             _direction,
@@ -215,6 +216,7 @@ namespace mongo {
 
         private:
             const BtreeLogic<OnDiskFormat>* const _btree;
+            OperationContext* _txn; // not owned
             const int _direction;
 
             DiskLoc _bucket;
@@ -225,8 +227,8 @@ namespace mongo {
             DiskLoc _savedLoc;
         };
 
-        virtual Cursor* newCursor(int direction) const {
-            return new Cursor(_btree.get(), direction);
+        virtual Cursor* newCursor(OperationContext* txn, int direction) const {
+            return new Cursor(_btree.get(), txn, direction);
         }
 
         virtual Status initAsEmpty(OperationContext* txn) {

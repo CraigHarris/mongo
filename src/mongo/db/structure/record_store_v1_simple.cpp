@@ -275,20 +275,22 @@ namespace mongo {
         _details->setDeletedListEntry(txn, b, dloc);
     }
 
-    RecordIterator* SimpleRecordStoreV1::getIterator( const DiskLoc& start, bool tailable,
+    RecordIterator* SimpleRecordStoreV1::getIterator( OperationContext* txn,
+                                                      const DiskLoc& start,
+                                                      bool tailable,
                                                       const CollectionScanParams::Direction& dir) const {
-        return new SimpleRecordStoreV1Iterator( this, start, dir );
+        return new SimpleRecordStoreV1Iterator( txn, this, start, dir );
     }
 
-    vector<RecordIterator*> SimpleRecordStoreV1::getManyIterators() const {
+    vector<RecordIterator*> SimpleRecordStoreV1::getManyIterators( OperationContext* txn ) const {
         OwnedPointerVector<RecordIterator> iterators;
         const Extent* ext;
         for (DiskLoc extLoc = details()->firstExtent(); !extLoc.isNull(); extLoc = ext->xnext) {
-            ext = _getExtent(extLoc);
+            ext = _getExtent(txn, extLoc);
             if (ext->firstRecord.isNull())
                 continue;
 
-            iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(ext->firstRecord, this));
+            iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(txn, ext->firstRecord, this));
         }
 
         return iterators.release();

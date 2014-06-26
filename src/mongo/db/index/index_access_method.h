@@ -113,7 +113,7 @@ namespace mongo {
          * Fills in '*out' with an IndexCursor.  Return a status indicating success or reason of
          * failure. If the latter, '*out' contains NULL.  See index_cursor.h for IndexCursor usage.
          */
-        virtual Status newCursor(const CursorOptions& opts, IndexCursor** out) const = 0;
+        virtual Status newCursor(OperationContext* txn, const CursorOptions& opts, IndexCursor** out) const = 0;
 
         // ------ index level operations ------
 
@@ -147,7 +147,7 @@ namespace mongo {
          * Currently wasserts that the index is invalid.  This could/should be changed in
          * the future to return a Status.
          */
-        virtual Status validate(int64_t* numKeys) = 0;
+        virtual Status validate(OperationContext* txn, int64_t* numKeys) = 0;
 
         //
         // Bulk operations support

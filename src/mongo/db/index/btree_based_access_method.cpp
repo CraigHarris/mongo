@@ -143,8 +143,8 @@ namespace mongo {
         return ret;
     }
 
-    Status BtreeBasedAccessMethod::newCursor(const CursorOptions& opts, IndexCursor** out) const {
-        *out = new BtreeIndexCursor(_newInterface->newCursor(opts.direction));
+    Status BtreeBasedAccessMethod::newCursor(OperationContext* txn, const CursorOptions& opts, IndexCursor** out) const {
+        *out = new BtreeIndexCursor(_newInterface->newCursor(txn, opts.direction));
         return Status::OK();
     }
 
