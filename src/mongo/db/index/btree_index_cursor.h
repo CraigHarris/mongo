@@ -53,8 +53,7 @@ namespace mongo {
         virtual Status seek(const BSONObj& position);
 
         // Btree-specific seeking functions.
-        Status seek(OperationContext* txn,
-                    const std::vector<const BSONElement*>& position,
+        Status seek(const std::vector<const BSONElement*>& position,
                     const std::vector<bool>& inclusive);
 
         /**
@@ -65,8 +64,7 @@ namespace mongo {
          */
         void seek(const BSONObj& position, bool afterKey);
 
-        Status skip(OperationContext* txn,
-                    const BSONObj& keyBegin,
+        Status skip(const BSONObj& keyBegin,
                     int keyBeginLen,
                     bool afterKey,
                     const std::vector<const BSONElement*>& keyEnd,
@@ -98,7 +96,7 @@ namespace mongo {
          *
          * Intentionally private, we're friends with the only class allowed to call it.
          */
-        BtreeIndexCursor(BtreeInterface::Cursor* cursor);
+        BtreeIndexCursor(OperationContext* txn, BtreeInterface::Cursor* cursor);
 
         bool isSavedPositionValid();
 
@@ -111,6 +109,9 @@ namespace mongo {
         // For handling bucket deletion.
         static unordered_set<BtreeIndexCursor*> _activeCursors;
         static SimpleMutex _activeCursorsMutex;
+
+        // transactional context for read locks. Not owned by us
+        OperationContext* _txn;
 
         boost::scoped_ptr<BtreeInterface::Cursor> _cursor;
     };

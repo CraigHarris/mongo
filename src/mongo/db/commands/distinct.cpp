@@ -115,7 +115,7 @@ namespace mongo {
             }
 
             Runner* rawRunner;
-            Status status = getRunnerDistinct(collection, query, key, &rawRunner);
+            Status status = getRunnerDistinct(txn, collection, query, key, &rawRunner);
             if (!status.isOK()) {
                 uasserted(17216, mongoutils::str::stream() << "Can't get runner for query "
                               << query << ": " << status.toString());

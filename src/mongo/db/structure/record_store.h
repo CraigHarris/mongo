@@ -47,8 +47,8 @@ namespace mongo {
     class ExtentManager;
     class MAdvise;
     class NamespaceDetails;
-    class Record;
     class OperationContext;
+    class Record;
 
     class RecordStoreCompactAdaptor;
     class RecordStore;

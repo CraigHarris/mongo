@@ -408,6 +408,10 @@ namespace mongo {
                               const LockMode& mode,
                               const ResourceId& resId,
                               Notifier* notifier) {
+        if (kReservedResourceId == resId) {
+            return;
+        }
+
         {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown();
@@ -485,6 +489,10 @@ namespace mongo {
     LockManager::LockStatus LockManager::release(const Transaction* holder,
                                                  const LockMode& mode,
                                                  const ResourceId& resId) {
+        if (kReservedResourceId == resId) {
+            return kLockNotFound;
+        }
+
         {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown(holder);

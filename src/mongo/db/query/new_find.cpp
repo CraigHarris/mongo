@@ -337,7 +337,10 @@ namespace mongo {
         return qr;
     }
 
-    Status getOplogStartHack(Collection* collection, CanonicalQuery* cq, Runner** runnerOut) {
+    Status getOplogStartHack(OperationContext* txn,
+                             Collection* collection,
+                             CanonicalQuery* cq,
+                             Runner** runnerOut) {
         if ( collection == NULL )
             return Status(ErrorCodes::InternalError,
                           "getOplogStartHack called with a NULL collection" );
@@ -380,7 +383,7 @@ namespace mongo {
         Runner::RunnerState state = runner->getNext(NULL, &startLoc);
 
         // This is normal.  The start of the oplog is the beginning of the collection.
-        if (Runner::RUNNER_EOF == state) { return getRunner(collection, cq, runnerOut); }
+        if (Runner::RUNNER_EOF == state) { return getRunner(txn, collection, cq, runnerOut); }
 
         // This is not normal.  An error was encountered.
         if (Runner::RUNNER_ADVANCED != state) {
@@ -544,7 +547,7 @@ namespace mongo {
             rawRunner = new EOFRunner(cq, cq->ns());
         }
         else if (pq.hasOption(QueryOption_OplogReplay)) {
-            status = getOplogStartHack(collection, cq, &rawRunner);
+            status = getOplogStartHack(txn, collection, cq, &rawRunner);
         }
         else {
             // Takes ownership of cq.
@@ -552,7 +555,7 @@ namespace mongo {
             if (shardingState.needCollectionMetadata(pq.ns())) {
                 options |= QueryPlannerParams::INCLUDE_SHARD_FILTER;
             }
-            status = getRunner(collection, cq, &rawRunner, options);
+            status = getRunner(txn, collection, cq, &rawRunner, options);
         }
 
         if (!status.isOK()) {

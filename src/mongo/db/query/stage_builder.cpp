@@ -53,7 +53,8 @@
 
 namespace mongo {
 
-    PlanStage* buildStages(Collection* collection,
+    PlanStage* buildStages(OperationContext* txn,
+                           Collection* collection,
                            const QuerySolution& qsol,
                            const QuerySolutionNode* root,
                            WorkingSet* ws) {
@@ -65,7 +66,7 @@ namespace mongo {
             params.direction = (csn->direction == 1) ? CollectionScanParams::FORWARD
                                                      : CollectionScanParams::BACKWARD;
             params.maxScan = csn->maxScan;
-            return new CollectionScan(params, ws, csn->filter.get());
+            return new CollectionScan(txn, params, ws, csn->filter.get());
         }
         else if (STAGE_IXSCAN == root->getType()) {
             const IndexScanNode* ixn = static_cast<const IndexScanNode*>(root);
@@ -89,7 +90,7 @@ namespace mongo {
             params.direction = ixn->direction;
             params.maxScan = ixn->maxScan;
             params.addKeyMetadata = ixn->addKeyMetadata;
-            return new IndexScan(params, ws, ixn->filter.get());
+            return new IndexScan(txn, params, ws, ixn->filter.get());
         }
         else if (STAGE_FETCH == root->getType()) {
             const FetchNode* fn = static_cast<const FetchNode*>(root);
@@ -275,7 +276,7 @@ namespace mongo {
             params.direction = dn->direction;
             params.bounds = dn->bounds;
             params.fieldNo = dn->fieldNo;
-            return new DistinctScan(params, ws);
+            return new DistinctScan(txn, params, ws);
         }
         else if (STAGE_COUNT == root->getType()) {
             const CountNode* cn = static_cast<const CountNode*>(root);
@@ -294,7 +295,7 @@ namespace mongo {
             params.endKey = cn->endKey;
             params.endKeyInclusive = cn->endKeyInclusive;
 
-            return new Count(params, ws);
+            return new Count(txn, params, ws);
         }
         else {
             mongoutils::str::stream ss;
@@ -306,14 +307,15 @@ namespace mongo {
     }
 
     // static (this one is used for Cached and MultiPlanStage)
-    bool StageBuilder::build(Collection* collection,
+    bool StageBuilder::build(OperationContext* txn,
+                             Collection* collection,
                              const QuerySolution& solution,
                              WorkingSet* wsIn,
                              PlanStage** rootOut) {
         if (NULL == wsIn || NULL == rootOut) { return false; }
         QuerySolutionNode* solutionNode = solution.root.get();
         if (NULL == solutionNode) { return false; }
-        return NULL != (*rootOut = buildStages(collection, solution, solutionNode, wsIn));
+        return NULL != (*rootOut = buildStages(txn, collection, solution, solutionNode, wsIn));
     }
 
 }  // namespace mongo

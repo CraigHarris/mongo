@@ -42,6 +42,7 @@ namespace mongo {
     class BSONObj;
     class CanonicalQuery;
     class DiskLoc;
+    class OperationContext;
     class TypeExplain;
     struct PlanInfo;
 
@@ -53,7 +54,8 @@ namespace mongo {
          *
          * 'out' is valid only if an OK status is returned.
          */
-        static Status make(Collection* collection,
+        static Status make(OperationContext* txn,
+                           Collection* collection,
                            const QueryPlannerParams& params,
                            CanonicalQuery* cq,
                            SubplanRunner** out);
@@ -94,7 +96,8 @@ namespace mongo {
         Status planSubqueries();
 
     private:
-        SubplanRunner(Collection* collection,
+        SubplanRunner(OperationContext* txn,
+                      Collection* collection,
                       const QueryPlannerParams& params,
                       CanonicalQuery* cq);
 

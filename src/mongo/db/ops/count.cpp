@@ -97,7 +97,7 @@ namespace mongo {
             limit = -limit;
         }
 
-        uassertStatusOK(getRunnerCount(collection, query, hintObj, &rawRunner));
+        uassertStatusOK(getRunnerCount(txn, collection, query, hintObj, &rawRunner));
         auto_ptr<Runner> runner(rawRunner);
 
         // Store the plan summary string in CurOp.

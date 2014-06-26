@@ -118,11 +118,11 @@ namespace mongo {
 
         class Cursor : public BtreeInterface::Cursor {
         public:
-            Cursor(const BtreeLogic<OnDiskFormat>* btree,
-                   OperationContext* txn,
+            Cursor(OperationContext* txn,
+                   const BtreeLogic<OnDiskFormat>* btree,
                    int direction)
-                : _btree(btree),
-                  _txn(txn),
+                : _txn(txn),
+                  _btree(btree),
                   _direction(direction),
                   _bucket(btree->getHead()), // XXX this shouldn't be nessisary, but is.
                   _ofs(0) {
@@ -228,7 +228,7 @@ namespace mongo {
         };
 
         virtual Cursor* newCursor(OperationContext* txn, int direction) const {
-            return new Cursor(_btree.get(), txn, direction);
+            return new Cursor(txn, _btree.get(), direction);
         }
 
         virtual Status initAsEmpty(OperationContext* txn) {

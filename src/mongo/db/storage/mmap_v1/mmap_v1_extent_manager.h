@@ -44,7 +44,6 @@ namespace mongo {
 
     class DataFile;
     class Record;
-    class OperationContext;
 
     struct Extent;
 
@@ -83,33 +82,31 @@ namespace mongo {
         /**
          * opens all current files
          */
-        Status init(OperationContext* txn);
+        Status init(txn);
 
         size_t numFiles() const;
         long long fileSize() const;
 
         // TODO: make private
-        DataFile* getFile( OperationContext* txn,
-                           int n,
+        DataFile* getFile( int n,
                            int sizeNeeded = 0,
                            bool preallocateOnly = false );
 
         // must call Extent::reuse on the returned extent
-        DiskLoc allocateExtent( OperationContext* txn,
-                                bool capped,
+        DiskLoc allocateExtent( bool capped,
                                 int size,
                                 int quotaMax );
 
         /**
          * firstExt has to be == lastExt or a chain
          */
-        void freeExtents( OperationContext* txn, DiskLoc firstExt, DiskLoc lastExt );
+        void freeExtents( DiskLoc firstExt, DiskLoc lastExt );
 
         /**
          * frees a single extent
          * ignores all fields in the Extent except: magic, myLoc, length
          */
-        void freeExtent( OperationContext* txn, DiskLoc extent );
+        void freeExtent( DiskLoc extent );
 
         void printFreeList() const;
 
@@ -141,7 +138,7 @@ namespace mongo {
          */
         Extent* getExtent( const DiskLoc& loc, bool doSanityCheck = true ) const;
 
-        void getFileFormat( OperationContext* txn, int* major, int* minor ) const;
+        void getFileFormat( int* major, int* minor ) const;
 
         const DataFile* getOpenFile( int n ) const { return _getOpenFile( n ); }
 
@@ -155,24 +152,23 @@ namespace mongo {
         /**
          * will return NULL if nothing suitable in free list
          */
-        DiskLoc _allocFromFreeList( OperationContext* txn, int approxSize, bool capped );
+        DiskLoc _allocFromFreeList( int approxSize, bool capped );
 
         /* allocate a new Extent, does not check free list
          * @param maxFileNoForQuota - 0 for unlimited
         */
-        DiskLoc _createExtent( OperationContext* txn, int approxSize, int maxFileNoForQuota );
+        DiskLoc _createExtent( int approxSize, int maxFileNoForQuota );
 
-        DataFile* _addAFile( OperationContext* txn, int sizeNeeded, bool preallocateNextFile );
+        DataFile* _addAFile( int sizeNeeded, bool preallocateNextFile );
 
         DiskLoc _getFreeListStart() const;
         DiskLoc _getFreeListEnd() const;
-        void _setFreeListStart( OperationContext* txn, DiskLoc loc );
-        void _setFreeListEnd( OperationContext* txn, DiskLoc loc );
+        void _setFreeListStart( DiskLoc loc );
+        void _setFreeListEnd( DiskLoc loc );
 
         const DataFile* _getOpenFile( int n ) const;
 
-        DiskLoc _createExtentInFile( OperationContext* txn,
-                                     int fileNo,
+        DiskLoc _createExtentInFile( int fileNo,
                                      DataFile* f,
                                      int size,
                                      int maxFileNoForQuota );
