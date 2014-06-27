@@ -148,7 +148,8 @@ namespace mongo {
          * If necessary, run the query in order to generate execution stats (but throw out
          * the results of the query).
          */
-        static Status explain(Collection* collection,
+        static Status explain(OperationContext* txn,
+                              Collection* collection,
                               CanonicalQuery* rawCanonicalQuery,
                               size_t plannerOptions,
                               Explain::Verbosity verbosity,

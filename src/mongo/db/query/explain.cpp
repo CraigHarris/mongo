@@ -314,7 +314,8 @@ namespace mongo {
     }
 
     // static
-    Status Explain::explain(Collection* collection,
+    Status Explain::explain(OperationContext* txn,
+                            Collection* collection,
                             CanonicalQuery* rawCanonicalQuery,
                             size_t plannerOptions,
                             Explain::Verbosity verbosity,
@@ -348,10 +349,12 @@ namespace mongo {
             return Status(ErrorCodes::BadValue, ss);
         }
         else if (1 == solutions.size()) {
-            return explainSinglePlan(collection, rawCanonicalQuery, solutions[0], verbosity, out);
+            return explainSinglePlan(txn, collection, rawCanonicalQuery,
+                                     solutions[0], verbosity, out);
         }
         else {
-            return explainMultiPlan(collection, rawCanonicalQuery, solutions, verbosity, out);
+            return explainMultiPlan(txn, collection, rawCanonicalQuery,
+                                    solutions, verbosity, out);
         }
     }
 

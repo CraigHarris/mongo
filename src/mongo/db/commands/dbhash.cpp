@@ -84,7 +84,8 @@ namespace mongo {
 
         auto_ptr<Runner> runner;
         if ( desc ) {
-            runner.reset(InternalPlanner::indexScan(collection,
+            runner.reset(InternalPlanner::indexScan(opCtx,
+                                                    collection,
                                                     desc,
                                                     BSONObj(),
                                                     BSONObj(),
@@ -93,7 +94,8 @@ namespace mongo {
                                                     InternalPlanner::IXSCAN_FETCH));
         }
         else if ( collection->isCapped() ) {
-            runner.reset(InternalPlanner::collectionScan(fullCollectionName,
+            runner.reset(InternalPlanner::collectionScan(opCtx,
+                                                         fullCollectionName,
                                                          collection));
         }
         else {

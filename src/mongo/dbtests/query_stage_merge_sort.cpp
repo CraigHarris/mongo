@@ -71,8 +71,11 @@ namespace QueryStageMergeSortTests {
         }
 
         void getLocs(set<DiskLoc>* out, Collection* coll) {
-            RecordIterator* it = coll->getIterator(DiskLoc(), false,
-                                                       CollectionScanParams::FORWARD);
+            OperationContext txn; // XXX is this safe?
+            RecordIterator* it = coll->getIterator(&txn,
+                                                   DiskLoc(),
+                                                   false,
+                                                   CollectionScanParams::FORWARD);
             while (!it->isEOF()) {
                 DiskLoc nextLoc = it->getNext();
                 out->insert(nextLoc);

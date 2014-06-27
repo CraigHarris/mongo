@@ -214,7 +214,7 @@ namespace mongo {
         if (IDHackRunner::supportsQuery(*canonicalQuery) &&
             collection->getIndexCatalog()->findIdIndex()) {
             LOG(2) << "Using idhack: " << canonicalQuery->toStringShort();
-            *out = new IDHackRunner(txn, collection, canonicalQuery.release());
+            *out = new IDHackRunner(collection, canonicalQuery.release());
             return Status::OK();
         }
 
@@ -350,7 +350,7 @@ namespace mongo {
                     // We're not going to cache anything that's fast count.
                     WorkingSet* ws = new WorkingSet();
                     PlanStage* root;
-                    verify(StageBuilder::build(collection, *solutions[i], ws, &root));
+                    verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
                     *out = new SingleSolutionRunner(collection,
                                                     canonicalQuery.release(),
                                                     solutions[i],
@@ -798,7 +798,7 @@ namespace mongo {
                 // Build and return the SSR over solutions[i].
                 WorkingSet* ws = new WorkingSet();
                 PlanStage* root;
-                verify(StageBuilder::build(collection, *solutions[i], ws, &root));
+                verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
                 *out = new SingleSolutionRunner(collection, cq, solutions[i], root, ws);
                 return Status::OK();
             }

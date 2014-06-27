@@ -363,14 +363,16 @@ namespace NamespaceTests {
 
                 DiskLoc last, first;
                 {
-                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(ns(),
+                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(&txn,
+                                                                            ns(),
                                                                             collection(),
                                                                             InternalPlanner::BACKWARD));
                     runner->getNext(NULL, &last);
                     ASSERT( !last.isNull() );
                 }
                 {
-                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(ns(),
+                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(&txn,
+                                                                            ns(),
                                                                             collection(),
                                                                             InternalPlanner::FORWARD));
                     runner->getNext(NULL, &first);
@@ -383,14 +385,16 @@ namespace NamespaceTests {
 
                 {
                     DiskLoc loc;
-                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(ns(),
+                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(&txn,
+                                                                            ns(),
                                                                             collection(),
                                                                             InternalPlanner::FORWARD));
                     runner->getNext(NULL, &loc);
                     ASSERT( first == loc);
                 }
                 {
-                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(ns(),
+                    auto_ptr<Runner> runner(InternalPlanner::collectionScan(&txn,
+                                                                            ns(),
                                                                             collection(),
                                                                             InternalPlanner::BACKWARD));
                     DiskLoc loc;

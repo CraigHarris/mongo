@@ -42,7 +42,7 @@ namespace mongo {
      */
     class SimpleRecordStoreV1Iterator : public RecordIterator {
     public:
-        SimpleRecordStoreV1Iterator( const OperationContext* txn,
+        SimpleRecordStoreV1Iterator( OperationContext* txn,
                                      const SimpleRecordStoreV1* records,
                                      const DiskLoc& start,
                                      const CollectionScanParams::Direction& dir );

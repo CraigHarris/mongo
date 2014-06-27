@@ -218,7 +218,8 @@ namespace mongo {
         }
 
         auto_ptr<Runner> runner(
-            InternalPlanner::collectionScan(db->_indexesName,
+            InternalPlanner::collectionScan(txn,
+                                            db->_indexesName,
                                             db->getCollection(txn, db->_indexesName)));
 
         BSONObj index;

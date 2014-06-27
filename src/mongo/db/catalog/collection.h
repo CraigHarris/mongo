@@ -137,7 +137,8 @@ namespace mongo {
          * canonical to get all would be
          * getIterator( DiskLoc(), false, CollectionScanParams::FORWARD )
          */
-        RecordIterator* getIterator( const DiskLoc& start = DiskLoc(),
+        RecordIterator* getIterator( OperationContext* txn,
+                                     const DiskLoc& start = DiskLoc(),
                                      bool tailable = false,
                                      const CollectionScanParams::Direction& dir = CollectionScanParams::FORWARD ) const;
 
@@ -154,7 +155,7 @@ namespace mongo {
          * this should only be used at a very low level
          * does no yielding, indexes, etc...
          */
-        int64_t countTableScan( const MatchExpression* expression );
+        int64_t countTableScan( OperationContext* txn, const MatchExpression* expression );
 
         void deleteDocument( OperationContext* txn,
                              const DiskLoc& loc,

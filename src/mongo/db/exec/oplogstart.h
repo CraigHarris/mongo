@@ -60,7 +60,10 @@ namespace mongo {
     class OplogStart : public PlanStage {
     public:
         // Does not take ownership.
-        OplogStart(const Collection* collection, MatchExpression* filter, WorkingSet* ws);
+        OplogStart(OperationContext* txn,
+                   const Collection* collection,
+                   MatchExpression* filter,
+                   WorkingSet* ws);
         virtual ~OplogStart();
 
         virtual StageState work(WorkingSetID* out);
@@ -83,6 +86,9 @@ namespace mongo {
         void switchToExtentHopping();
 
         StageState workExtentHopping(WorkingSetID* out);
+
+        // transactional context for read locks. Not owned by us
+        OperationContext* _txn;
 
         // If we're backwards scanning we just punt to a collscan.
         scoped_ptr<CollectionScan> _cs;

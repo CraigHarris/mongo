@@ -83,7 +83,7 @@ namespace mongo {
         // align size up to a multiple of 4
         lenToAlloc = (lenToAlloc + (4-1)) & ~(4-1);
 
-        LockManager& lm = LockManager::getInstance();
+        LockManager& lm = LockManager::getSingleton();
         Transaction* tx = txn->getTransaction();
 
         freelistAllocs.increment();
@@ -96,9 +96,9 @@ namespace mongo {
             int bestmatchlen = INT_MAX; // sentinel meaning we haven't found a record big enough
             int b = bucket(lenToAlloc);
             DiskLoc cur = _details->deletedListEntry(b);
-            DislLoc prevRec;
+            DiskLoc prevRec;
             
-            lm->acquire( tx, kShared, cur );
+            lm.acquire( tx, kShared, cur );
             int extra = 5; // look for a better fit, a little.
             int chain = 0;
             while ( 1 ) {
@@ -133,7 +133,7 @@ namespace mongo {
                         return DiskLoc();
                     }
                     cur = _details->deletedListEntry(b);
-                    lm->acquire( tx, kShared, cur );
+                    lm.acquire( tx, kShared, cur );
                     prev = 0;
                     continue;
                 }
@@ -170,7 +170,7 @@ namespace mongo {
                 }
             }
 
-            lm.acquire( tx, kExclusive bestmatch );
+            lm.acquire( tx, kExclusive, bestmatch );
             ExclusiveResourceLock( tx, bestPrevRec );
             lm.release( tx, kShared, bestmatch );
             lm.release( tx, kShared, bestPrevRec );
@@ -234,7 +234,7 @@ namespace mongo {
         DiskLoc newDelLoc = loc;
         newDelLoc.inc(lenToAlloc);
         {
-            ExclusiveLock( tx, newDelLoc );
+            ExclusiveResourceLock( tx, newDelLoc );
             DeletedRecord* newDel = drec(newDelLoc);
             DeletedRecord* newDelW = txn->recoveryUnit()->writing(newDel);
             newDelW->extentOfs() = r->extentOfs();
@@ -249,7 +249,7 @@ namespace mongo {
     StatusWith<DiskLoc> SimpleRecordStoreV1::allocRecord( OperationContext* txn,
                                                           int lengthWithHeaders,
                                                           int quotaMax ) {
-        LockManager& LockManager::getSingleton();
+        LockManager& lm = LockManager::getSingleton();
         Transaction* tx = txn->getTransaction();
 
         DiskLoc loc = _allocFromExistingExtents( txn, lengthWithHeaders );
@@ -262,7 +262,7 @@ namespace mongo {
 
         increaseStorageSize( txn,
                              _extentManager->followupSize( lengthWithHeaders,
-                                                           _details->lastExtentSize()),
+                                                           _details->lastExtentSize(txn)),
                              quotaMax );
 
         loc = _allocFromExistingExtents( txn, lengthWithHeaders );
@@ -274,14 +274,14 @@ namespace mongo {
 
         log() << "warning: alloc() failed after allocating new extent. "
               << "lengthWithHeaders: " << lengthWithHeaders << " last extent size:"
-              << _details->lastExtentSize() << "; trying again";
+              << _details->lastExtentSize(txn) << "; trying again";
 
-        for ( int z = 0; z < 10 && lengthWithHeaders > _details->lastExtentSize(); z++ ) {
+        for ( int z = 0; z < 10 && lengthWithHeaders > _details->lastExtentSize(txn); z++ ) {
             log() << "try #" << z << endl;
 
             increaseStorageSize( txn,
                                  _extentManager->followupSize( lengthWithHeaders,
-                                                               _details->lastExtentSize()),
+                                                               _details->lastExtentSize(txn)),
                                  quotaMax );
 
             loc = _allocFromExistingExtents( txn, lengthWithHeaders );
@@ -319,9 +319,11 @@ namespace mongo {
     vector<RecordIterator*> SimpleRecordStoreV1::getManyIterators( OperationContext* txn ) const {
         OwnedPointerVector<RecordIterator> iterators;
         const Extent* ext;
-        for (DiskLoc extLoc = details()->firstExtent(); !extLoc.isNull(); /* increment in scope of lock */ ) {
+        Transaction* tx = txn->getTransaction();
+        for (DiskLoc extLoc = details()->firstExtent(txn);
+             !extLoc.isNull(); /* increment in scope of lock */ ) {
             SharedResourceLock( tx, extLoc );
-            ext = _getExtent(extLoc);
+            ext = _getExtent(txn, extLoc);
             if (! ext->firstRecord.isNull()) {
                 iterators.push_back(
                     new RecordStoreV1Base::IntraExtentIterator(txn, ext->firstRecord, this)
@@ -452,7 +454,7 @@ namespace mongo {
                         lm.release( tx, kExclusive, status.getValue() );
                     }
 
-                    DiskLoc nextRecLoc = getNextRecordInExtent(L);
+                    DiskLoc nextRecLoc = getNextRecordInExtent(txn, L);
                     lm.acquire( tx, kExclusive, nextRecLoc );
                     lm.release( tx, kExclusive, L );
                     L = nextRecLoc;
@@ -477,8 +479,8 @@ namespace mongo {
                 lm.release( tx, kExclusive, L );
             } // if !L.isNull()
 
-            invariant( _details->firstExtent() == diskloc );
-            invariant( _details->lastExtent() != diskloc );
+            invariant( _details->firstExtent(txn) == diskloc );
+            invariant( _details->lastExtent(txn) != diskloc );
             DiskLoc newFirst = e->xnext;
             ExclusiveResourceLock( tx, newFirst );
             _details->setFirstExtent( txn, newFirst );
@@ -508,7 +510,7 @@ namespace mongo {
         txn->recoveryUnit()->commitIfNeeded();
 
         list<DiskLoc> extents;
-        for( DiskLoc extLocation = _details->firstExtent(); !extLocation.isNull(); ) {
+        for( DiskLoc extLocation = _details->firstExtent(txn); !extLocation.isNull(); ) {
             SharedResourceLock( txn->getTransaction(), extLocation );
             extents.push_back( extLocation );
             extLocation = _extentManager->getExtent( extLocation )->xnext;
@@ -522,7 +524,7 @@ namespace mongo {
         _details->setLastExtentSize( txn, 0 );
 
         // create a new extent so new records go there
-        increaseStorageSize( txn, _details->lastExtentSize(), true );
+        increaseStorageSize( txn, _details->lastExtentSize(txn), true );
 
         // reset data size and record counts to 0 for this namespace
         // as we're about to tally them up again for each new extent
@@ -539,8 +541,8 @@ namespace mongo {
             pm.hit();
         }
 
-        invariant( _extentManager->getExtent( _details->firstExtent() )->xprev.isNull() );
-        invariant( _extentManager->getExtent( _details->lastExtent() )->xnext.isNull() );
+        invariant( _extentManager->getExtent( _details->firstExtent(txn) )->xprev.isNull() );
+        invariant( _extentManager->getExtent( _details->lastExtent(txn) )->xnext.isNull() );
 
         // indexes will do their own progress meter
         pm.finished();

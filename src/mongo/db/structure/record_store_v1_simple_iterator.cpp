@@ -49,17 +49,17 @@ namespace mongo {
 
             const ExtentManager* em = _recordStore->_extentManager;
 
-            if ( _recordStore->details()->firstExtent().isNull() ) {
+            if ( _recordStore->details()->firstExtent(txn).isNull() ) {
                 // nothing in the collection
-                verify( _recordStore->details()->lastExtent().isNull() );
+                verify( _recordStore->details()->lastExtent(txn).isNull() );
             }
             else if (CollectionScanParams::FORWARD == _direction) {
 
                 // Find a non-empty extent and start with the first record in it.
-                Extent* e = em->getExtent( _recordStore->details()->firstExtent() );
+                Extent* e = em->getExtent( _recordStore->details()->firstExtent(txn) );
 
                 while (e->firstRecord.isNull() && !e->xnext.isNull()) {
-                    e = em->getExtent( _txn, e->xnext );
+                    e = em->getExtent( e->xnext );
                 }
 
                 // _curr may be set to DiskLoc() here if e->lastRecord isNull but there is no
@@ -69,12 +69,12 @@ namespace mongo {
             else {
                 // Walk backwards, skipping empty extents, and use the last record in the first
                 // non-empty extent we see.
-                Extent* e = em->getExtent( _txn, _recordStore->details()->lastExtent() );
+                Extent* e = em->getExtent( _recordStore->details()->lastExtent(txn) );
 
                 // TODO ELABORATE
                 // Does one of e->lastRecord.isNull(), e.firstRecord.isNull() imply the other?
                 while (e->lastRecord.isNull() && !e->xprev.isNull()) {
-                    e = em->getExtent( _txn, e->xprev );
+                    e = em->getExtent( e->xprev );
                 }
 
                 // _curr may be set to DiskLoc() here if e->lastRecord isNull but there is no

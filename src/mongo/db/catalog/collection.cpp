@@ -119,20 +119,23 @@ namespace mongo {
         return true;
     }
 
-    RecordIterator* Collection::getIterator( const DiskLoc& start, bool tailable,
-                                                     const CollectionScanParams::Direction& dir) const {
+    RecordIterator* Collection::getIterator( OperationContext* txn,
+                                             const DiskLoc& start,
+                                             bool tailable,
+                                             const CollectionScanParams::Direction& dir) const {
         invariant( ok() );
-        return _recordStore->getIterator( start, tailable, dir );
+        return _recordStore->getIterator( txn, start, tailable, dir );
     }
 
     vector<RecordIterator*> Collection::getManyIterators() const {
         return _recordStore->getManyIterators();
     }
 
-    int64_t Collection::countTableScan( const MatchExpression* expression ) {
-        scoped_ptr<RecordIterator> iterator( getIterator( DiskLoc(),
-                                                              false,
-                                                              CollectionScanParams::FORWARD ) );
+    int64_t Collection::countTableScan( OperationContext* txn, const MatchExpression* expression ) {
+        scoped_ptr<RecordIterator> iterator( getIterator( OperationContext*,
+                                                          DiskLoc(),
+                                                          false,
+                                                          CollectionScanParams::FORWARD ) );
         int64_t count = 0;
         while ( !iterator->isEOF() ) {
             DiskLoc loc = iterator->getNext();

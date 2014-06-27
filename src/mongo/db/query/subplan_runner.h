@@ -108,6 +108,9 @@ namespace mongo {
             RUNNING,
         };
 
+        // transactional context for read locks. Not owned by us
+        OperationContext* _txn;
+
         SubplanRunnerState _state;
 
         Collection* _collection;

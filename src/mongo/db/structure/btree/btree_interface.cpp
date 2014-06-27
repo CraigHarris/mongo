@@ -215,8 +215,8 @@ namespace mongo {
             }
 
         private:
-            const BtreeLogic<OnDiskFormat>* const _btree;
             OperationContext* _txn; // not owned
+            const BtreeLogic<OnDiskFormat>* const _btree;
             const int _direction;
 
             DiskLoc _bucket;

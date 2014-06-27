@@ -153,7 +153,8 @@ namespace mongo {
 
                 Runner* runner;
                 Status status = getRunnerAlwaysPlan(
-                    _collection, _query.release(), _plannerParams, &runner);
+                    _txn, _collection, _query.release(), _plannerParams, &runner
+                );
 
                 if (!status.isOK()) {
                     // We utterly failed.

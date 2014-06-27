@@ -36,6 +36,9 @@
 #pragma once
 
 namespace mongo {
+
+    class OperationContext;
+
 namespace twod_exec {
 
     //
@@ -122,7 +125,7 @@ namespace twod_exec {
 
         static bool hasPrefix(const BSONObj& key, const GeoHash& hash);
 
-        void advance();
+        void advance(OperationContext* txn);
 
         void prepareToYield() { _scan->prepareToYield(); }
         void recoverFromYield() { _scan->recoverFromYield(); }
@@ -130,8 +133,12 @@ namespace twod_exec {
         // Returns the min and max keys which bound a particular location.
         // The only time these may be equal is when we actually equal the location
         // itself, otherwise our expanding algorithm will fail.
-        static bool initial(const IndexDescriptor* descriptor, const TwoDIndexingParams& params,
-                            BtreeLocation& min, BtreeLocation& max, GeoHash start);
+        static bool initial(OperationContext* txn,
+                            const IndexDescriptor* descriptor,
+                            const TwoDIndexingParams& params,
+                            BtreeLocation& min,
+                            BtreeLocation& max,
+                            GeoHash start);
     };
 
     //
@@ -207,7 +214,10 @@ namespace twod_exec {
 
         // Fills the stack, but only checks a maximum number of maxToCheck points at a time.
         // Further calls to this function will continue the expand/check neighbors algorithm.
-        virtual void fillStack(int maxToCheck, int maxToAdd = -1, bool onlyExpand = false);
+        virtual void fillStack(OperationContext* txn,
+                               int maxToCheck,
+                               int maxToAdd = -1,
+                               bool onlyExpand = false);
 
         bool checkAndAdvance(BtreeLocation* bl, const GeoHash& hash, int& totalFound);
 

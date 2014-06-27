@@ -180,7 +180,7 @@ namespace mongo {
         invariant( details );
 
         RecordStoreV1Base* systemIndexRecordStore = _getIndexRecordStore();
-        scoped_ptr<RecordIterator> it( systemIndexRecordStore->getIterator() );
+        scoped_ptr<RecordIterator> it( systemIndexRecordStore->getIterator(txn) );
 
         while ( !it->isEOF() ) {
             DiskLoc loc = it->getNext();
@@ -289,7 +289,7 @@ namespace mongo {
             BSONObj oldSpec;
             {
                 RecordStoreV1Base* rs = _getNamespaceRecordStore();
-                scoped_ptr<RecordIterator> it( rs->getIterator() );
+                scoped_ptr<RecordIterator> it( rs->getIterator(txn) );
                 while ( !it->isEOF() ) {
                     DiskLoc loc = it->getNext();
                     BSONObj entry = it->dataFor( loc ).toBson();
@@ -773,7 +773,7 @@ namespace mongo {
         RecordStoreV1Base* rs = _getNamespaceRecordStore();
         invariant( rs );
 
-        scoped_ptr<RecordIterator> it( rs->getIterator() );
+        scoped_ptr<RecordIterator> it( rs->getIterator(txn) );
         while ( !it->isEOF() ) {
             DiskLoc loc = it->getNext();
             BSONObj entry = it->dataFor( loc ).toBson();

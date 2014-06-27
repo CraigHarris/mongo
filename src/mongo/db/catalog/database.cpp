@@ -168,7 +168,7 @@ namespace mongo {
         {
             Collection* coll = getCollection( txn, _namespacesName );
             if ( coll ) {
-                scoped_ptr<RecordIterator> it( coll->getIterator() );
+                scoped_ptr<RecordIterator> it( coll->getIterator(txn) );
                 DiskLoc next;
                 while ( !( next = it->getNext() ).isNull() ) {
                     BSONObj nsObj = coll->docFor( next );

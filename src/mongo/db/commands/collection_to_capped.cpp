@@ -81,7 +81,8 @@ namespace mongo {
             static_cast<long long>( fromCollection->dataSize() -
                                     ( toCollection->getRecordStore()->storageSize( txn ) * 2 ) );
 
-        scoped_ptr<Runner> runner( InternalPlanner::collectionScan(fromNs,
+        scoped_ptr<Runner> runner( InternalPlanner::collectionScan(txn,
+                                                                   fromNs,
                                                                    fromCollection,
                                                                    InternalPlanner::FORWARD ) );
 

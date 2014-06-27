@@ -99,7 +99,7 @@ namespace mongo {
         unsigned long long n = 0;
         unsigned long long numDropped = 0;
 
-        auto_ptr<Runner> runner(InternalPlanner::collectionScan(ns,collection));
+        auto_ptr<Runner> runner(InternalPlanner::collectionScan(txn,ns,collection));
 
         std::string idxName = descriptor->indexName();
 

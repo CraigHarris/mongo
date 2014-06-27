@@ -110,7 +110,7 @@ namespace mongo {
                     repl::ReplicationCoordinator::Milliseconds(120 * 1000),
                     repl::ReplicationCoordinator::Milliseconds(60 * 1000));
             if (!status.isOK() && status.code() != ErrorCodes::NotMaster) { // ignore not master
-                return appendCommandStatus(result, status);
+                return appendCommandStatus(txn, result, status);
             }
         }
 
@@ -922,7 +922,7 @@ namespace mongo {
                     result.append( "millis" , timer.millis() );
                     return 1;
                 }
-                runner.reset(InternalPlanner::collectionScan(ns,collection));
+                runner.reset(InternalPlanner::collectionScan(txn, ns,collection));
             }
             else if ( min.isEmpty() || max.isEmpty() ) {
                 errmsg = "only one of min or max specified";
@@ -947,7 +947,7 @@ namespace mongo {
                 min = Helpers::toKeyFormat( kp.extendRangeBound( min, false ) );
                 max = Helpers::toKeyFormat( kp.extendRangeBound( max, false ) );
 
-                runner.reset(InternalPlanner::indexScan(collection, idx, min, max, false));
+                runner.reset(InternalPlanner::indexScan(txn, collection, idx, min, max, false));
             }
 
             long long avgObjSize = collection->dataSize() / collection->numRecords();

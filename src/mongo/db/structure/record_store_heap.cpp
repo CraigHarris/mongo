@@ -29,6 +29,7 @@
 *    it in the license file.
 */
 
+#include "mongo/db/operation_context_noop.h"
 #include "mongo/db/structure/record_store_heap.h"
 
 #include "mongo/db/storage/record.h"
@@ -219,29 +220,30 @@ namespace mongo {
         return Status::OK();
     }
 
-    RecordIterator* HeapRecordStore::getIterator(const DiskLoc& start,
+    RecordIterator* HeapRecordStore::getIterator(OperationContext* txn,
+                                                 const DiskLoc& start,
                                                  bool tailable,
                                                  const CollectionScanParams::Direction& dir) const {
         if (tailable)
             invariant(_isCapped && dir == CollectionScanParams::FORWARD);
 
         if (dir == CollectionScanParams::FORWARD) {
-            return new HeapRecordIterator(_records, *this, start, tailable);
+            return new HeapRecordIterator(txn, _records, *this, start, tailable);
         }
         else {
-            return new HeapRecordIterator(_records, *this, start);
+            return new HeapRecordIterator(txn, _records, *this, start);
         }
     }
 
-    RecordIterator* HeapRecordStore::getIteratorForRepair() const {
+    RecordIterator* HeapRecordStore::getIteratorForRepair(OperationContext* txn) const {
         // TODO maybe make different from HeapRecordIterator
-        return new HeapRecordIterator(_records, *this);
+        return new HeapRecordIterator(txn, _records, *this);
     }
 
-    std::vector<RecordIterator*> HeapRecordStore::getManyIterators() const {
+    std::vector<RecordIterator*> HeapRecordStore::getManyIterators(OperationContext* txn) const {
         std::vector<RecordIterator*> out;
         // TODO maybe find a way to return multiple iterators.
-        out.push_back(new HeapRecordIterator(_records, *this));
+        out.push_back(new HeapRecordIterator(txn, _records, *this));
         return out;
     }
 
@@ -299,7 +301,9 @@ namespace mongo {
 
     }
     
-    void HeapRecordStore::appendCustomStats( BSONObjBuilder* result, double scale ) const {
+    void HeapRecordStore::appendCustomStats( OperationContext* txn,
+                                             BSONObjBuilder* result,
+                                             double scale ) const {
         result->append( "note", "HeapRecordStore has no cusom stats yet" );
     }
 
@@ -321,7 +325,9 @@ namespace mongo {
         invariant(!"increaseStorageSize not yet implemented");
     }
 
-    int64_t HeapRecordStore::storageSize(BSONObjBuilder* extraInfo, int infoLevel) const {
+    int64_t HeapRecordStore::storageSize(OperationContext* txn,
+                                         BSONObjBuilder* extraInfo,
+                                         int infoLevel) const {
         // Note: not making use of extraInfo or infoLevel since we don't have extents
         const int64_t recordOverhead = numRecords() * Record::HeaderSize;
         return _dataSize + recordOverhead;
@@ -339,11 +345,13 @@ namespace mongo {
     // Forward Iterator
     //
 
-    HeapRecordIterator::HeapRecordIterator(const HeapRecordStore::Records& records,
+    HeapRecordIterator::HeapRecordIterator(OperationContext* txn,
+                                           const HeapRecordStore::Records& records,
                                            const HeapRecordStore& rs,
                                            DiskLoc start,
                                            bool tailable)
-            : _tailable(tailable),
+            : _txn(txn),
+              _tailable(tailable),
               _lastLoc(minDiskLoc),
               _killedByInvalidate(false),
               _records(records),
@@ -427,10 +435,12 @@ namespace mongo {
     // Reverse Iterator
     //
 
-    HeapRecordReverseIterator::HeapRecordReverseIterator(const HeapRecordStore::Records& records,
+    HeapRecordReverseIterator::HeapRecordReverseIterator(OperationContext* txn,
+                                                         const HeapRecordStore::Records& records,
                                                          const HeapRecordStore& rs,
                                                          DiskLoc start)
-            : _killedByInvalidate(false),
+            : _txn(txn),
+              _killedByInvalidate(false),
               _records(records),
               _rs(rs) {
         if (start.isNull()) {

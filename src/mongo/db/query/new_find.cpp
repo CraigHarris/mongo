@@ -373,7 +373,7 @@ namespace mongo {
 
         // Make an oplog start finding stage.
         WorkingSet* oplogws = new WorkingSet();
-        OplogStart* stage = new OplogStart(collection, tsExpr, oplogws);
+        OplogStart* stage = new OplogStart(txn, collection, tsExpr, oplogws);
 
         // Takes ownership of ws and stage.
         auto_ptr<InternalRunner> runner(new InternalRunner(collection, stage, oplogws));
@@ -401,7 +401,7 @@ namespace mongo {
         params.tailable = cq->getParsed().hasOption(QueryOption_CursorTailable);
 
         WorkingSet* ws = new WorkingSet();
-        CollectionScan* cs = new CollectionScan(params, ws, cq->root());
+        CollectionScan* cs = new CollectionScan(txn, params, ws, cq->root());
         // Takes ownership of cq, cs, ws.
         *runnerOut = new SingleSolutionRunner(collection, cq, NULL, cs, ws);
         return Status::OK();
@@ -501,7 +501,7 @@ namespace mongo {
             bb.skip(sizeof(QueryResult));
 
             BSONObjBuilder explainBob;
-            Status explainStatus = Explain::explain(collection, cq, options,
+            Status explainStatus = Explain::explain(txn, collection, cq, options,
                                                     Explain::QUERY_PLANNER, &explainBob);
             if (!explainStatus.isOK()) {
                 uasserted(17510, "Explain error: " + explainStatus.reason());

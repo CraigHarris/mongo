@@ -136,7 +136,9 @@ namespace mongo {
          * @param extraInfo - optional more debug info
          * @param level - optional, level of debug info to put in (higher is more)
          */
-        virtual int64_t storageSize( BSONObjBuilder* extraInfo = NULL, int infoLevel = 0 ) const = 0;
+        virtual int64_t storageSize( OperationContext* txn,
+                                     BSONObjBuilder* extraInfo = NULL,
+                                     int infoLevel = 0 ) const = 0;
 
         // CRUD related
 
@@ -173,7 +175,7 @@ namespace mongo {
         /**
          * returned iterator owned by caller
          * canonical to get all would be
-         * getIterator( DiskLoc(), false, CollectionScanParams::FORWARD )
+         * getIterator( txn, DiskLoc(), false, CollectionScanParams::FORWARD )
          */
         virtual RecordIterator* getIterator( OperationContext* txn,
                                              const DiskLoc& start = DiskLoc(),
@@ -187,7 +189,7 @@ namespace mongo {
          * damaged records. The iterator might return every record in the store if all of them 
          * are reachable and not corrupted.
          */
-        virtual RecordIterator* getIteratorForRepair() const = 0;
+        virtual RecordIterator* getIteratorForRepair( OperationContext* txn ) const = 0;
 
         /**
          * Returns many iterators that partition the RecordStore into many disjoint sets. Iterating
@@ -237,7 +239,9 @@ namespace mongo {
          * @param scaleSize - amount by which to scale size metrics
          * appends any custom stats from the RecordStore or other unique stats
          */
-        virtual void appendCustomStats( BSONObjBuilder* result, double scale ) const = 0;
+        virtual void appendCustomStats( OperationContext* txn,
+                                        BSONObjBuilder* result,
+                                        double scale ) const = 0;
 
         /**
          * Load all data into cache.

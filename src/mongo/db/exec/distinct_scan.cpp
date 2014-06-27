@@ -40,7 +40,7 @@ namespace mongo {
     const char* DistinctScan::kStageType = "DISTINCT";
 
     DistinctScan::DistinctScan(OperationContext* txn, const DistinctParams& params, WorkingSet* workingSet)
-        : _txn,
+        : _txn(txn),
           _workingSet(workingSet),
           _descriptor(params.descriptor),
           _iam(params.descriptor->getIndexCatalog()->getIndex(params.descriptor)),

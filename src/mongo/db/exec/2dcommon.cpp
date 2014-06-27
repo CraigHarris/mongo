@@ -231,8 +231,12 @@ namespace twod_exec {
     // The only time these may be equal is when we actually equal the location
     // itself, otherwise our expanding algorithm will fail.
     // static
-    bool BtreeLocation::initial(const IndexDescriptor* descriptor, const TwoDIndexingParams& params,
-            BtreeLocation& min, BtreeLocation& max, GeoHash start) {
+    bool BtreeLocation::initial(OperationContext* txn,
+                                const IndexDescriptor* descriptor,
+                                const TwoDIndexingParams& params,
+                                BtreeLocation& min,
+                                BtreeLocation& max,
+                                GeoHash start) {
         verify(descriptor);
 
         min._eof = false;
@@ -294,13 +298,13 @@ namespace twod_exec {
         verify(maxParams.bounds.isValidFor(descriptor->keyPattern(), 1));
 
         min._ws.reset(new WorkingSet());
-        min._scan.reset(new IndexScan(minParams, min._ws.get(), NULL));
+        min._scan.reset(new IndexScan(txn, minParams, min._ws.get(), NULL));
 
         max._ws.reset(new WorkingSet());
-        max._scan.reset(new IndexScan(maxParams, max._ws.get(), NULL));
+        max._scan.reset(new IndexScan(txn, maxParams, max._ws.get(), NULL));
 
-        min.advance();
-        max.advance();
+        min.advance(txn);
+        max.advance(txn);
 
         return !max._eof || !min._eof;
     }
@@ -336,7 +340,7 @@ namespace twod_exec {
         bool first = _firstCall;
 
         if (_firstCall) {
-            fillStack(maxPointsHeuristic);
+            fillStack(txn, maxPointsHeuristic);
             _firstCall = false;
         }
 
@@ -346,7 +350,7 @@ namespace twod_exec {
         }
 
         while (moreToDo()) {
-            fillStack(maxPointsHeuristic);
+            fillStack(txn, maxPointsHeuristic);
             if (! _cur.isEmpty()) {
                 if (first) { ++_nscanned; }
                 return true;
@@ -356,7 +360,7 @@ namespace twod_exec {
         return !_cur.isEmpty();
     }
 
-    bool GeoBrowse::advance() {
+    bool GeoBrowse::advance(OperationContext* txn) {
         _cur._o = BSONObj();
 
         if (_stack.size()) {
@@ -369,7 +373,7 @@ namespace twod_exec {
         if (! moreToDo()) return false;
 
         while (_cur.isEmpty() && moreToDo()){
-            fillStack(maxPointsHeuristic);
+            fillStack(txn, maxPointsHeuristic);
         }
 
         return ! _cur.isEmpty() && ++_nscanned;
@@ -396,7 +400,10 @@ namespace twod_exec {
     // Are we finished getting points?
     bool GeoBrowse::moreToDo() { return _state != DONE; }
 
-    bool GeoBrowse::checkAndAdvance(BtreeLocation* bl, const GeoHash& hash, int& totalFound) {
+    bool GeoBrowse::checkAndAdvance(OperationContext* txn,
+                                    BtreeLocation* bl,
+                                    const GeoHash& hash,
+                                    int& totalFound) {
         if (bl->eof()) { return false; }
 
         //cout << "looking at " << bl->_loc.obj().toString() << " dl " << bl->_loc.toString() << endl;
@@ -408,7 +415,7 @@ namespace twod_exec {
         add(n);
         //cout << "adding\n";
 
-        bl->advance();
+        bl->advance(txn);
 
         return true;
     }
@@ -416,7 +423,7 @@ namespace twod_exec {
 
     // Fills the stack, but only checks a maximum number of maxToCheck points at a time.
     // Further calls to this function will continue the expand/check neighbors algorithm.
-    void GeoBrowse::fillStack(int maxToCheck, int maxToAdd, bool onlyExpand) {
+    void GeoBrowse::fillStack(OperationContext* txn, int maxToCheck, int maxToAdd, bool onlyExpand) {
         if(maxToAdd < 0) maxToAdd = maxToCheck;
         int maxFound = _foundInExp + maxToCheck;
         verify(maxToCheck > 0);
@@ -433,7 +440,7 @@ namespace twod_exec {
             if(! isNeighbor)
                 _prefix = expandStartHash();
 
-            if (!BtreeLocation::initial(_descriptor, _params, _min, _max, _prefix)) {
+            if (!BtreeLocation<::initial(txn, _descriptor, _params, _min, _max, _prefix)) {
                 _state = isNeighbor ? DONE_NEIGHBOR : DONE;
             } else {
                 _state = DOING_EXPAND;
@@ -448,9 +455,9 @@ namespace twod_exec {
                 _expPrefix.reset(new GeoHash(_prefix));
 
                 // Find points inside this prefix
-                while (checkAndAdvance(&_min, _prefix, _foundInExp)
+                while (checkAndAdvance(txn, &_min, _prefix, _foundInExp)
                         && _foundInExp < maxFound && _found < maxAdded) {}
-                while (checkAndAdvance(&_max, _prefix, _foundInExp)
+                while (checkAndAdvance(txn, &_max, _prefix, _foundInExp)
                         && _foundInExp < maxFound && _found < maxAdded) {}
 
                 if(_foundInExp >= maxFound || _found >= maxAdded) return;
@@ -548,7 +555,7 @@ namespace twod_exec {
                     _state = START;
                     verify(! onlyExpand);
                     verify(_found <= 0x7fffffff);
-                    fillStack(maxFound - _foundInExp, maxAdded - static_cast<int>(_found));
+                    fillStack(txn, maxFound - _foundInExp, maxAdded - static_cast<int>(_found));
                     // When we return from the recursive fillStack call, we'll either have
                     // checked enough points or be entirely done.  Max recurse depth is < 8 *
                     // 16.

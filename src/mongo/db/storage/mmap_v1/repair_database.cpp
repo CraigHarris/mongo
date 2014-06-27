@@ -338,9 +338,10 @@ namespace mongo {
                 Client::Context ctx( ns );
                 Collection* coll = originalDatabase->getCollection( txn, ns );
                 if ( coll ) {
-                    scoped_ptr<RecordIterator> it( coll->getIterator( DiskLoc(),
-                                                                          false,
-                                                                          CollectionScanParams::FORWARD ) );
+                    scoped_ptr<RecordIterator> it( coll->getIterator( txn,
+                                                                      DiskLoc(),
+                                                                      false,
+                                                                      CollectionScanParams::FORWARD ) );
                     while ( !it->isEOF() ) {
                         DiskLoc loc = it->getNext();
                         BSONObj obj = coll->docFor( loc );
@@ -404,9 +405,9 @@ namespace mongo {
 
                 }
 
-                scoped_ptr<RecordIterator> iterator( originalCollection->getIterator( DiskLoc(),
-                                                                                          false,
-                                                                                          CollectionScanParams::FORWARD ) );
+                scoped_ptr<RecordIterator> iterator(
+                    originalCollection->getIterator( txn, DiskLoc(), false,
+                                                     CollectionScanParams::FORWARD ));
                 while ( !iterator->isEOF() ) {
                     DiskLoc loc = iterator->getNext();
                     invariant( !loc.isNull() );
@@ -414,7 +415,9 @@ namespace mongo {
                     BSONObj doc = originalCollection->docFor( loc );
 
                     Client::Context tempContext( ns, tempDatabase );
-                    StatusWith<DiskLoc> result = tempCollection->insertDocument( txn, doc, indexBlock );
+                    StatusWith<DiskLoc> result = tempCollection->insertDocument( txn,
+                                                                                 doc,
+                                                                                 indexBlock );
                     if ( !result.isOK() )
                         return result.getStatus();
 

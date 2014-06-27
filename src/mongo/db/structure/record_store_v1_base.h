@@ -126,7 +126,9 @@ namespace mongo {
         virtual long long dataSize() const { return _details->dataSize(); }
         virtual long long numRecords() const { return _details->numRecords(); }
 
-        virtual int64_t storageSize( BSONObjBuilder* extraInfo = NULL, int level = 0 ) const;
+        virtual int64_t storageSize( OperationContext* txn,
+                                     BSONObjBuilder* extraInfo = NULL,
+                                     int level = 0 ) const;
 
         virtual RecordData dataFor( const DiskLoc& loc ) const;
 
@@ -154,7 +156,7 @@ namespace mongo {
                                           const char* damangeSource,
                                           const mutablebson::DamageVector& damages );
 
-        virtual RecordIterator* getIteratorForRepair() const;
+        virtual RecordIterator* getIteratorForRepair( OperationContext* txn ) const;
 
         void increaseStorageSize( OperationContext* txn, int size, int quotaMax );
 
@@ -163,7 +165,9 @@ namespace mongo {
                                  ValidateAdaptor* adaptor,
                                  ValidateResults* results, BSONObjBuilder* output ) const;
 
-        virtual void appendCustomStats( BSONObjBuilder* result, double scale ) const;
+        virtual void appendCustomStats( OperationContext* txn,
+                                        BSONObjBuilder* result,
+                                        double scale ) const;
 
         virtual Status touch( OperationContext* txn, BSONObjBuilder* output ) const;
 
@@ -176,13 +180,13 @@ namespace mongo {
          */
         int getRecordAllocationSize( int minRecordSize ) const;
 
-        DiskLoc getExtentLocForRecord( const DiskLoc& loc ) const;
+        DiskLoc getExtentLocForRecord( OperationContext* txn, const DiskLoc& loc ) const;
 
-        DiskLoc getNextRecord( const DiskLoc& loc ) const;
-        DiskLoc getPrevRecord( const DiskLoc& loc ) const;
+        DiskLoc getNextRecord( OperationContext* txn, const DiskLoc& loc ) const;
+        DiskLoc getPrevRecord( OperationContext* txn, const DiskLoc& loc ) const;
 
-        DiskLoc getNextRecordInExtent( const DiskLoc& loc ) const;
-        DiskLoc getPrevRecordInExtent( const DiskLoc& loc ) const;
+        DiskLoc getNextRecordInExtent( OperationContext* txn, const DiskLoc& loc ) const;
+        DiskLoc getPrevRecordInExtent( OperationContext* txn, const DiskLoc& loc ) const;
 
         /* @return the size for an allocated record quantized to 1/16th of the BucketSize.
            @param allocSize    requested size to allocate
@@ -289,7 +293,7 @@ namespace mongo {
 
     private:
         virtual const Record* recordFor( const DiskLoc& loc ) const { return _rs->recordFor(loc); }
-        OperationContext* _txn
+        OperationContext* _txn;
         DiskLoc _curr;
         const RecordStoreV1Base* _rs;
         bool _forward;

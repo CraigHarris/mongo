@@ -35,8 +35,6 @@ env.Library(
 env.Library(
     target = 'exec',
     source = [
-        "2dcommon.cpp",
-        "2dnear.cpp",
         "and_hash.cpp",
         "and_sorted.cpp",
         "cached_plan.cpp",
@@ -53,7 +51,6 @@ env.Library(
         "or.cpp",
         "projection.cpp",
         "projection_exec.cpp",
-        "s2near.cpp",
         "shard_filter.cpp",
         "skip.cpp",
         "sort.cpp",

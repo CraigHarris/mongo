@@ -303,8 +303,8 @@ namespace {
         class ForwardCursor : public BtreeInterface::Cursor {
         public:
             ForwardCursor(const IndexSet& data, OperationContext* txn)
-                : _data(data),
-                  _txn(txn),
+                : _txn(txn),
+                  _data(data),
                   _it(data.end())
             {}
 
@@ -352,7 +352,7 @@ namespace {
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
                 // XXX I think these do the same thing????
-                customLocate(_txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
+                customLocate(keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
             }
 
             virtual BSONObj getKey() const {
@@ -383,13 +383,13 @@ namespace {
                     _it = _data.end();
                 }
                 else {
-                    locate(_txn, _savedKey, _savedLoc);
+                    locate(_savedKey, _savedLoc);
                 }
             }
 
         private:
+            OperationContext* _txn; // not owned
             const IndexSet& _data;
-            OperationContext* txn; // not owned
             IndexSet::const_iterator _it;
 
             // For save/restorePosition since _it may be invalidated durring a yield.
@@ -402,8 +402,8 @@ namespace {
         class ReverseCursor : public BtreeInterface::Cursor {
         public:
             ReverseCursor(const IndexSet& data, OperationContext* txn)
-                : _data(data),
-                  _txn(txn),
+                : _txn(txn),
+                  _data(data),
                   _it(data.rend())
             {}
 
@@ -451,7 +451,7 @@ namespace {
                            const vector<const BSONElement*>& keyEnd,
                            const vector<bool>& keyEndInclusive) {
                 // XXX I think these do the same thing????
-                customLocate(_txn, keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
+                customLocate(keyBegin, keyBeginLen, afterKey, keyEnd, keyEndInclusive);
             }
 
             virtual BSONObj getKey() const {
@@ -482,7 +482,7 @@ namespace {
                     _it = _data.rend();
                 }
                 else {
-                    locate(_txn, _savedKey, _savedLoc);
+                    locate(_savedKey, _savedLoc);
                 }
             }
 
@@ -502,8 +502,8 @@ namespace {
                 return IndexSet::const_reverse_iterator(it);
             }
 
-            const IndexSet& _data;
             OperationContext* _txn; // not owned
+            const IndexSet& _data;
             IndexSet::const_reverse_iterator _it;
 
             // For save/restorePosition since _it may be invalidated durring a yield.
