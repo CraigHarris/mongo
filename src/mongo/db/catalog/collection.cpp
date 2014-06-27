@@ -127,12 +127,12 @@ namespace mongo {
         return _recordStore->getIterator( txn, start, tailable, dir );
     }
 
-    vector<RecordIterator*> Collection::getManyIterators() const {
-        return _recordStore->getManyIterators();
+    vector<RecordIterator*> Collection::getManyIterators( OperationContext* txn ) const {
+        return _recordStore->getManyIterators(txn);
     }
 
     int64_t Collection::countTableScan( OperationContext* txn, const MatchExpression* expression ) {
-        scoped_ptr<RecordIterator> iterator( getIterator( OperationContext*,
+        scoped_ptr<RecordIterator> iterator( getIterator( txn,
                                                           DiskLoc(),
                                                           false,
                                                           CollectionScanParams::FORWARD ) );
@@ -180,7 +180,7 @@ namespace mongo {
 
         if ( isCapped() ) {
             // TOOD: old god not done
-            Status ret = _indexCatalog.checkNoIndexConflicts( docToInsert );
+            Status ret = _indexCatalog.checkNoIndexConflicts( txn, docToInsert );
             if ( !ret.isOK() )
                 return StatusWith<DiskLoc>( ret );
         }
@@ -334,7 +334,7 @@ namespace mongo {
                 || repl::getGlobalReplicationCoordinator()->shouldIgnoreUniqueIndex(descriptor);
             UpdateTicket* updateTicket = new UpdateTicket();
             updateTickets.mutableMap()[descriptor] = updateTicket;
-            Status ret = iam->validateUpdate(objOld, objNew, oldLocation, options, updateTicket );
+            Status ret = iam->validateUpdate(txn, objOld, objNew, oldLocation, options, updateTicket );
             if ( !ret.isOK() ) {
                 return StatusWith<DiskLoc>( ret );
             }
@@ -526,7 +526,7 @@ namespace mongo {
                     invariant( iam );
 
                     int64_t keys;
-                    iam->validate(&keys);
+                    iam->validate(txn, &keys);
                     indexes.appendNumber(descriptor->indexNamespace(),
                                          static_cast<long long>(keys));
                     idxn++;

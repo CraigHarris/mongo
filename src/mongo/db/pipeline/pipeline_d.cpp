@@ -179,7 +179,7 @@ namespace {
                                              &cq,
                                              whereCallback);
             Runner* rawRunner;
-            if (status.isOK() && getRunner(collection, cq, &rawRunner, runnerOptions).isOK()) {
+            if (status.isOK() && getRunner(txn, collection, cq, &rawRunner, runnerOptions).isOK()) {
                 // success: The Runner will handle sorting for us using an index.
                 runner.reset(rawRunner);
                 sortInRunner = true;
@@ -204,7 +204,7 @@ namespace {
                                              whereCallback));
 
             Runner* rawRunner;
-            uassertStatusOK(getRunner(collection, cq, &rawRunner, runnerOptions));
+            uassertStatusOK(getRunner(txn, collection, cq, &rawRunner, runnerOptions));
             runner.reset(rawRunner);
         }
 

@@ -197,11 +197,11 @@ namespace mongo {
         return _newInterface->initAsEmpty(txn);
     }
 
-    Status BtreeBasedAccessMethod::touch(const BSONObj& obj) {
+    Status BtreeBasedAccessMethod::touch(OperationContext* txn, const BSONObj& obj) {
         BSONObjSet keys;
         getKeys(obj, &keys);
 
-        boost::scoped_ptr<BtreeInterface::Cursor> cursor(_newInterface->newCursor(1));
+        boost::scoped_ptr<BtreeInterface::Cursor> cursor(_newInterface->newCursor(txn, 1));
         for (BSONObjSet::const_iterator i = keys.begin(); i != keys.end(); ++i) {
             cursor->locate(*i, DiskLoc());
         }
@@ -214,8 +214,8 @@ namespace mongo {
         return _newInterface->touch(txn);
     }
 
-    DiskLoc BtreeBasedAccessMethod::findSingle(const BSONObj& key) const {
-        boost::scoped_ptr<BtreeInterface::Cursor> cursor(_newInterface->newCursor(1));
+    DiskLoc BtreeBasedAccessMethod::findSingle( OperationContext* txn, const BSONObj& key) const {
+        boost::scoped_ptr<BtreeInterface::Cursor> cursor(_newInterface->newCursor(txn, 1));
         cursor->locate(key, minDiskLoc);
 
         // A null bucket means the key wasn't found (nor was anything found after it).
@@ -241,7 +241,8 @@ namespace mongo {
         return Status::OK();
     }
 
-    Status BtreeBasedAccessMethod::validateUpdate(const BSONObj &from,
+    Status BtreeBasedAccessMethod::validateUpdate(OperationContext* txn,
+                                                  const BSONObj &from,
                                                   const BSONObj &to,
                                                   const DiskLoc &record,
                                                   const InsertDeleteOptions &options,
@@ -264,7 +265,7 @@ namespace mongo {
 
         if (checkForDups) {
             for (vector<BSONObj*>::iterator i = data->added.begin(); i != data->added.end(); i++) {
-                Status check = _newInterface->dupKeyCheck(**i, record);
+                Status check = _newInterface->dupKeyCheck(txn, **i, record);
                 if (!check.isOK()) {
                     status->_isValid = false;
                     return check;

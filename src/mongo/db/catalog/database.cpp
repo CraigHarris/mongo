@@ -274,7 +274,7 @@ namespace mongo {
             size += collection->dataSize();
 
             BSONObjBuilder temp;
-            storageSize += collection->getRecordStore()->storageSize( &temp );
+            storageSize += collection->getRecordStore()->storageSize( opCtx, &temp );
             numExtents += temp.obj()["numExtents"].numberInt(); // XXX
 
             indexes += collection->getIndexCatalog()->numIndexesTotal();

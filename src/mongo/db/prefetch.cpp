@@ -55,7 +55,7 @@ namespace mongo {
                                                     "repl.preload.docs",
                                                     &prefetchDocStats );
 
-    void prefetchIndexPages(Collection* collection, const BSONObj& obj);
+    void prefetchIndexPages(OperationContext* txn, Collection* collection, const BSONObj& obj);
     void prefetchRecordPages(OperationContext* txn, const char* ns, const BSONObj& obj);
 
 
@@ -102,7 +102,7 @@ namespace mongo {
         // a way to achieve that would be to prefetch the record first, and then afterwards do 
         // this part.
         //
-        prefetchIndexPages(collection, obj);
+        prefetchIndexPages(txn, collection, obj);
 
         // do not prefetch the data for inserts; it doesn't exist yet
         // 
@@ -119,7 +119,7 @@ namespace mongo {
     }
 
     // page in pages needed for all index lookups on a given object
-    void prefetchIndexPages(Collection* collection, const BSONObj& obj) {
+    void prefetchIndexPages(OperationContext* txn, Collection* collection, const BSONObj& obj) {
         DiskLoc unusedDl; // unused
         BSONObjSet unusedKeys;
         repl::ReplSetImpl::IndexPrefetchConfig prefetchConfig =
@@ -142,7 +142,7 @@ namespace mongo {
                     return;
                 IndexAccessMethod* iam = collection->getIndexCatalog()->getIndex( desc );
                 verify( iam );
-                iam->touch(obj);
+                iam->touch(txn, obj);
             }
             catch (const DBException& e) {
                 LOG(2) << "ignoring exception in prefetchIndexPages(): " << e.what() << endl;
@@ -161,7 +161,7 @@ namespace mongo {
                     IndexDescriptor* desc = ii.next();
                     IndexAccessMethod* iam = collection->getIndexCatalog()->getIndex( desc );
                     verify( iam );
-                    iam->touch(obj);
+                    iam->touch(txn, obj);
                 }
                 catch (const DBException& e) {
                     LOG(2) << "ignoring exception in prefetchIndexPages(): " << e.what() << endl;

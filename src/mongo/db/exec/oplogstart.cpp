@@ -110,7 +110,7 @@ namespace mongo {
         _cs.reset();
 
         // Set up our extent hopping state.
-        _subIterators = _collection->getManyIterators();
+        _subIterators = _collection->getManyIterators(_txn);
     }
 
     PlanStage::StageState OplogStart::workBackwardsScan(WorkingSetID* out) {

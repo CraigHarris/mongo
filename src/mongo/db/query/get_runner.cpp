@@ -115,7 +115,7 @@ namespace mongo {
         LOG(2) << "Using idhack: " << unparsedQuery.toString();
 
         *outCanonicalQuery = NULL;
-        *outRunner = new IDHackRunner(collection, unparsedQuery["_id"].wrap());
+        *outRunner = new IDHackRunner(txn, collection, unparsedQuery["_id"].wrap());
         return Status::OK();
     }
 
@@ -214,7 +214,7 @@ namespace mongo {
         if (IDHackRunner::supportsQuery(*canonicalQuery) &&
             collection->getIndexCatalog()->findIdIndex()) {
             LOG(2) << "Using idhack: " << canonicalQuery->toStringShort();
-            *out = new IDHackRunner(collection, canonicalQuery.release());
+            *out = new IDHackRunner(txn, collection, canonicalQuery.release());
             return Status::OK();
         }
 

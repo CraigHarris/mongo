@@ -91,7 +91,8 @@ namespace mongo {
          *
          * There is no obligation to perform the update after performing validation.
          */
-        virtual Status validateUpdate(const BSONObj& from,
+        virtual Status validateUpdate(OperationContext* txn,
+                                      const BSONObj& from,
                                       const BSONObj& to,
                                       const DiskLoc& loc,
                                       const InsertDeleteOptions& options,
@@ -131,12 +132,12 @@ namespace mongo {
          * appropriate pages are not swapped out.
          * See prefetch.cpp.
          */
-        virtual Status touch(const BSONObj& obj) = 0;
+        virtual Status touch(OperationContext* txn, const BSONObj& obj) = 0;
 
         /**
          * this pages in the entire index
          */
-        virtual Status touch( OperationContext* txn ) const = 0;
+        virtual Status touch(OperationContext* txn) const = 0;
 
         /**
          * Walk the entire index, checking the internal structure for consistency.

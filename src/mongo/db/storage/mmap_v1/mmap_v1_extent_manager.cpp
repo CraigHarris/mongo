@@ -106,21 +106,19 @@ namespace mongo {
         return Status::OK();
     }
 
-    const DataFile* MmapV1ExtentManager::_getOpenFile( OperationContext* txn, int n ) const {
-        SharedResourceLock(txn->getTransaction, &_files);
+    const DataFile* MmapV1ExtentManager::_getOpenFile( int n ) const {
         if ( n < 0 || n >= static_cast<int>(_files.size()) )
             log() << "uh oh: " << n;
         invariant(n >= 0 && n < static_cast<int>(_files.size()));
-        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, _files[n]);
         return _files[n];
     }
 
 
     // todo: this is called a lot. streamline the common case
     DataFile* MmapV1ExtentManager::getFile( OperationContext* txn,
-                                            int n,
-                                            int sizeNeeded ,
-                                            bool preallocateOnly) {
+                                      int n,
+                                      int sizeNeeded ,
+                                      bool preallocateOnly) {
         verify(this);
         DEV txn->lockState()->assertAtLeastReadLocked( _dbname );
 
@@ -200,22 +198,20 @@ namespace mongo {
         return size;
     }
 
-    Record* MmapV1ExtentManager::recordForV1( OperationContext* txn, const DiskLoc& loc ) const {
+    Record* MmapV1ExtentManager::recordForV1( const DiskLoc& loc ) const {
         loc.assertOk();
-        const DataFile* df = _getOpenFile( txn, loc.a() );
+        const DataFile* df = _getOpenFile( loc.a() );
 
         int ofs = loc.getOfs();
         if ( ofs < DataFileHeader::HeaderSize ) {
             df->badOfs(ofs); // will uassert - external call to keep out of the normal code path
         }
 
-        Record* result = reinterpret_cast<Record*>( df->p() + ofs );
-        LockManager::getSingleton().release(txn->getTransaction(), kShared, df);
-        return result;
+        return reinterpret_cast<Record*>( df->p() + ofs );
     }
 
-    DiskLoc MmapV1ExtentManager::extentLocForV1( OperationContext* txn, const DiskLoc& loc ) const {
-        Record* record = recordForV1( OperationContext* txn, loc );
+    DiskLoc MmapV1ExtentManager::extentLocForV1( const DiskLoc& loc ) const {
+        Record* record = recordForV1( loc );
         return DiskLoc( loc.a(), record->extentOfs() );
     }
 
@@ -224,9 +220,9 @@ namespace mongo {
         return getExtent( extentLoc );
     }
 
-    Extent* MmapV1ExtentManager::getExtent( OperationContext* txn, const DiskLoc& loc, bool doSanityCheck ) const {
+    Extent* MmapV1ExtentManager::getExtent( const DiskLoc& loc, bool doSanityCheck ) const {
         loc.assertOk();
-        Extent* e = reinterpret_cast<Extent*>( _getOpenFile( txn, loc.a() )->p() + loc.getOfs() );
+        Extent* e = reinterpret_cast<Extent*>( _getOpenFile( loc.a() )->p() + loc.getOfs() );
         if ( doSanityCheck )
             e->assertOk();
         return e;
@@ -471,31 +467,29 @@ namespace mongo {
 
     }
 
-    DiskLoc MmapV1ExtentManager::_getFreeListStart( OperationContext* txn ) const {
+    DiskLoc MmapV1ExtentManager::_getFreeListStart() const {
         if ( _files.empty() )
             return DiskLoc();
-        const DataFile* file = _getOpenFile(txn, 0);
+        const DataFile* file = _getOpenFile(0);
         return file->header()->freeListStart;
     }
 
-    DiskLoc MmapV1ExtentManager::_getFreeListEnd( OperationContext* txn ) const {
+    DiskLoc MmapV1ExtentManager::_getFreeListEnd() const {
         if ( _files.empty() )
             return DiskLoc();
-        const DataFile* file = _getOpenFile(txn, 0);
+        const DataFile* file = _getOpenFile(0);
         return file->header()->freeListEnd;
     }
 
     void MmapV1ExtentManager::_setFreeListStart( OperationContext* txn, DiskLoc loc ) {
         invariant( !_files.empty() );
         DataFile* file = _files[0];
-        ExclusiveResourceLock(txn->getTransaction(), file);
         *txn->recoveryUnit()->writing( &file->header()->freeListStart ) = loc;
     }
 
     void MmapV1ExtentManager::_setFreeListEnd( OperationContext* txn, DiskLoc loc ) {
         invariant( !_files.empty() );
         DataFile* file = _files[0];
-        ExclusiveResourceLock(txn->getTransaction(), file);
         *txn->recoveryUnit()->writing( &file->header()->freeListEnd ) = loc;
     }
 
@@ -554,7 +548,7 @@ namespace mongo {
     void MmapV1ExtentManager::getFileFormat( OperationContext* txn, int* major, int* minor ) const {
         if ( numFiles() == 0 )
             return;
-        const DataFile* df = _getOpenFile( tsn, 0 );
+        const DataFile* df = _getOpenFile( 0 );
         *major = df->getHeader()->version;
         *minor = df->getHeader()->versionMinor;
 

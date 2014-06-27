@@ -110,7 +110,7 @@ namespace mongo {
                     repl::ReplicationCoordinator::Milliseconds(120 * 1000),
                     repl::ReplicationCoordinator::Milliseconds(60 * 1000));
             if (!status.isOK() && status.code() != ErrorCodes::NotMaster) { // ignore not master
-                return appendCommandStatus(txn, result, status);
+                return appendCommandStatus(result, status);
             }
         }
 
@@ -1050,12 +1050,12 @@ namespace mongo {
                 result.append( "avgObjSize" , collection->averageObjectSize() );
 
             result.appendNumber( "storageSize",
-                                 static_cast<long long>(collection->getRecordStore()->storageSize( &result,
+                                 static_cast<long long>(collection->getRecordStore()->storageSize( txn, &result,
                                                                                                    verbose ? 1 : 0 ) ) / 
                                  scale );
             result.append( "nindexes" , collection->getIndexCatalog()->numIndexesReady() );
 
-            collection->getRecordStore()->appendCustomStats( &result, scale );
+            collection->getRecordStore()->appendCustomStats( txn, &result, scale );
 
             BSONObjBuilder indexSizes;
             result.appendNumber( "totalIndexSize" , db->getIndexSizeForCollection(txn,

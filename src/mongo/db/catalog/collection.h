@@ -147,7 +147,7 @@ namespace mongo {
          * all returned iterators is equivalent to Iterating the full collection.
          * Caller owns all pointers in the vector.
          */
-        std::vector<RecordIterator*> getManyIterators() const;
+        std::vector<RecordIterator*> getManyIterators( OperationContext* txn ) const;
 
 
         /**

@@ -96,7 +96,7 @@ namespace mongo {
          *
          * Intentionally private, we're friends with the only class allowed to call it.
          */
-        BtreeIndexCursor(OperationContext* txn, BtreeInterface::Cursor* cursor);
+        BtreeIndexCursor(BtreeInterface::Cursor* cursor);
 
         bool isSavedPositionValid();
 
@@ -109,9 +109,6 @@ namespace mongo {
         // For handling bucket deletion.
         static unordered_set<BtreeIndexCursor*> _activeCursors;
         static SimpleMutex _activeCursorsMutex;
-
-        // transactional context for read locks. Not owned by us
-        OperationContext* _txn;
 
         boost::scoped_ptr<BtreeInterface::Cursor> _cursor;
     };

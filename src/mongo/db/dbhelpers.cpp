@@ -155,7 +155,7 @@ namespace mongo {
         BtreeBasedAccessMethod* accessMethod =
             static_cast<BtreeBasedAccessMethod*>(catalog->getIndex( desc ));
 
-        DiskLoc loc = accessMethod->findSingle( query["_id"].wrap() );
+        DiskLoc loc = accessMethod->findSingle( txn, query["_id"].wrap() );
         if ( loc.isNull() )
             return false;
         result = collection->docFor( loc );
@@ -172,7 +172,7 @@ namespace mongo {
         // See SERVER-12397.  This may not always be true.
         BtreeBasedAccessMethod* accessMethod =
             static_cast<BtreeBasedAccessMethod*>(catalog->getIndex( desc ));
-        return accessMethod->findSingle( idquery["_id"].wrap() );
+        return accessMethod->findSingle( txn, idquery["_id"].wrap() );
     }
 
     /* Get the first object from a collection.  Generally only useful if the collection

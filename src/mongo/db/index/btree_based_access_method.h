@@ -74,7 +74,8 @@ namespace mongo {
                               const InsertDeleteOptions& options,
                               int64_t* numDeleted);
 
-        virtual Status validateUpdate(const BSONObj& from,
+        virtual Status validateUpdate(OperationContext* txn,
+                                      const BSONObj& from,
                                       const BSONObj& to,
                                       const DiskLoc& loc,
                                       const InsertDeleteOptions& options,
@@ -96,14 +97,14 @@ namespace mongo {
                                    bool mayInterrupt,
                                    std::set<DiskLoc>* dups );
 
-        virtual Status touch(const BSONObj& obj);
+        virtual Status touch(OperationContext* txn, const BSONObj& obj);
 
         virtual Status touch(OperationContext* txn) const;
 
         virtual Status validate(OperationContext* txn, int64_t* numKeys);
 
         // XXX: consider migrating callers to use IndexCursor instead
-        virtual DiskLoc findSingle( const BSONObj& key ) const;
+        virtual DiskLoc findSingle( OperationContext* txn, const BSONObj& key ) const;
 
         /**
          * Invalidates all active cursors, which point at the bucket being deleted.

@@ -1383,7 +1383,7 @@ namespace mongo {
                     // if not inline: dump the in memory map to inc collection, all data is on disk
                     state.dumpToInc();
                     // final reduce
-                    state.finalReduce(txn, op , pm );
+                    state.finalReduce(op , pm );
                     reduceTime += rt.micros();
                     countsBuilder.appendNumber( "reduce" , state.numReduces() );
                     timingBuilder.appendNumber("reduceTime", reduceTime / 1000);
