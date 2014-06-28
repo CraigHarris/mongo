@@ -199,7 +199,7 @@ namespace mongo {
             params.numWanted = node->numWanted;
             params.addPointMeta = node->addPointMeta;
             params.addDistMeta = node->addDistMeta;
-            return new TwoDNear(params, ws);
+            return new TwoDNear(txn, params, ws);
         }
         else if (STAGE_GEO_NEAR_2DSPHERE == root->getType()) {
             const GeoNear2DSphereNode* node = static_cast<const GeoNear2DSphereNode*>(root);
@@ -211,7 +211,7 @@ namespace mongo {
             params.filter = node->filter.get();
             params.addPointMeta = node->addPointMeta;
             params.addDistMeta = node->addDistMeta;
-            return new S2NearStage(params, ws);
+            return new S2NearStage(txn, params, ws);
         }
         else if (STAGE_TEXT == root->getType()) {
             const TextNode* node = static_cast<const TextNode*>(root);

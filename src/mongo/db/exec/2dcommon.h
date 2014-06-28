@@ -115,6 +115,9 @@ namespace twod_exec {
     struct BtreeLocation {
         BtreeLocation() : _eof(false) { }
 
+        // transactional context for read locks. Not owned by us
+        scoped_ptr<OperationContext> _txn;
+
         scoped_ptr<IndexScan> _scan;
         scoped_ptr<WorkingSet> _ws;
         DiskLoc _loc;
@@ -125,7 +128,7 @@ namespace twod_exec {
 
         static bool hasPrefix(const BSONObj& key, const GeoHash& hash);
 
-        void advance(OperationContext* txn);
+        void advance();
 
         void prepareToYield() { _scan->prepareToYield(); }
         void recoverFromYield() { _scan->recoverFromYield(); }
@@ -133,8 +136,7 @@ namespace twod_exec {
         // Returns the min and max keys which bound a particular location.
         // The only time these may be equal is when we actually equal the location
         // itself, otherwise our expanding algorithm will fail.
-        static bool initial(OperationContext* txn,
-                            const IndexDescriptor* descriptor,
+        static bool initial(const IndexDescriptor* descriptor,
                             const TwoDIndexingParams& params,
                             BtreeLocation& min,
                             BtreeLocation& max,
@@ -214,8 +216,7 @@ namespace twod_exec {
 
         // Fills the stack, but only checks a maximum number of maxToCheck points at a time.
         // Further calls to this function will continue the expand/check neighbors algorithm.
-        virtual void fillStack(OperationContext* txn,
-                               int maxToCheck,
+        virtual void fillStack(int maxToCheck,
                                int maxToAdd = -1,
                                bool onlyExpand = false);
 
