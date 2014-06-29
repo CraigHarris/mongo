@@ -28,6 +28,7 @@
 
 #include "mongo/platform/basic.h"
 
+#include "mongo/db/d_concurrency.h"
 #include "mongo/db/concurrency/lock_mgr.h"
 
 #include <boost/thread/locks.hpp>
@@ -379,7 +380,10 @@ namespace mongo {
     }
 
     void LockManager::acquireLock(LockRequest* lr, Notifier* notifier) {
-        if (NULL == lr) return;
+        if (NULL == lr || !useExperimentalDocLocking)  {
+            return;
+        }
+
         {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown();
@@ -408,7 +412,7 @@ namespace mongo {
                               const LockMode& mode,
                               const ResourceId& resId,
                               Notifier* notifier) {
-        if (kReservedResourceId == resId) {
+        if (kReservedResourceId == resId || !useExperimentalDocLocking) {
             return;
         }
 
@@ -476,7 +480,7 @@ namespace mongo {
     }
 
     LockManager::LockStatus LockManager::releaseLock(LockRequest* lr) {
-        if (NULL == lr) return kLockNotFound;
+        if (NULL == lr || !useExperimentalDocLocking) return kLockNotFound;
         {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown(lr->requestor);
@@ -489,7 +493,7 @@ namespace mongo {
     LockManager::LockStatus LockManager::release(const Transaction* holder,
                                                  const LockMode& mode,
                                                  const ResourceId& resId) {
-        if (kReservedResourceId == resId) {
+        if (kReservedResourceId == resId || !useExperimentalDocLocking) {
             return kLockNotFound;
         }
 
@@ -537,7 +541,7 @@ namespace mongo {
         return numLocksReleased;
     }
 #endif
-    void LockManager::abort(Transaction* goner) {
+    void LockManager::abort(Transaction* goner) {   
         {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown(goner);
@@ -627,6 +631,9 @@ namespace mongo {
     bool LockManager::isLocked(const Transaction* holder,
                                const LockMode& mode,
                                const ResourceId& resId) const {
+        if (!useExperimentalDocLocking) {
+            return false;
+        }
         {
             unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown(holder);
