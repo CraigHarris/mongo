@@ -125,7 +125,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
 
             int numCounted = runCount(&count);
             ASSERT_EQUALS(2, numCounted);
@@ -157,7 +157,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
 
             int numCounted = runCount(&count);
             ASSERT_EQUALS(5, numCounted);
@@ -189,7 +189,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = false;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
 
             int numCounted = runCount(&count);
             ASSERT_EQUALS(3, numCounted);
@@ -217,7 +217,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = false;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             
             int numCounted = runCount(&count);
             ASSERT_EQUALS(0, numCounted);
@@ -246,7 +246,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = false;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             
             int numCounted = runCount(&count);
             ASSERT_EQUALS(0, numCounted);
@@ -276,7 +276,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             
             int numCounted = runCount(&count);
             ASSERT_EQUALS(0, numCounted);
@@ -307,7 +307,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             WorkingSetID wsid;
 
             int numCounted = 0;
@@ -358,7 +358,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             WorkingSetID wsid;
 
             int numCounted = 0;
@@ -412,7 +412,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             WorkingSetID wsid;
 
             int numCounted = 0;
@@ -469,7 +469,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             WorkingSetID wsid;
 
             int numCounted = 0;
@@ -527,7 +527,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
 
             int numCounted = runCount(&count);
             ASSERT_EQUALS(7, numCounted);
@@ -560,7 +560,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true; // yes?
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
 
             int numCounted = runCount(&count);
             ASSERT_EQUALS(9, numCounted);
@@ -590,7 +590,7 @@ namespace QueryStageCount {
             params.endKeyInclusive = true;
 
             WorkingSet ws;
-            Count count(params, &ws);
+            Count count(&_txn, params, &ws);
             WorkingSetID wsid;
 
             int numCounted = 0;

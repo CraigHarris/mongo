@@ -85,7 +85,8 @@ namespace mongo {
         temp.swap(*indexEntries);
     }
 
-    Status getRunner(Collection* collection,
+    Status getRunner(OperationContext* txn,
+                     Collection* collection,
                      const std::string& ns,
                      const BSONObj& unparsedQuery,
                      Runner** outRunner,
@@ -108,13 +109,13 @@ namespace mongo {
                         collection->ns(), unparsedQuery, outCanonicalQuery, whereCallback);
             if (!status.isOK())
                 return status;
-            return getRunner(collection, *outCanonicalQuery, outRunner, plannerOptions);
+            return getRunner(txn, collection, *outCanonicalQuery, outRunner, plannerOptions);
         }
 
         LOG(2) << "Using idhack: " << unparsedQuery.toString();
 
         *outCanonicalQuery = NULL;
-        *outRunner = new IDHackRunner(collection, unparsedQuery["_id"].wrap());
+        *outRunner = new IDHackRunner(txn, collection, unparsedQuery["_id"].wrap());
         return Status::OK();
     }
 
@@ -191,7 +192,8 @@ namespace mongo {
     /**
      * For a given query, get a runner.
      */
-    Status getRunner(Collection* collection,
+    Status getRunner(OperationContext* txn,
+                     Collection* collection,
                      CanonicalQuery* rawCanonicalQuery,
                      Runner** out,
                      size_t plannerOptions) {
@@ -212,7 +214,7 @@ namespace mongo {
         if (IDHackRunner::supportsQuery(*canonicalQuery) &&
             collection->getIndexCatalog()->findIdIndex()) {
             LOG(2) << "Using idhack: " << canonicalQuery->toStringShort();
-            *out = new IDHackRunner(collection, canonicalQuery.release());
+            *out = new IDHackRunner(txn, collection, canonicalQuery.release());
             return Status::OK();
         }
 
@@ -259,7 +261,7 @@ namespace mongo {
                 WorkingSet* sharedWs = new WorkingSet();
 
                 PlanStage *root, *backupRoot=NULL;
-                verify(StageBuilder::build(collection, *qs, sharedWs, &root));
+                verify(StageBuilder::build(txn, collection, *qs, sharedWs, &root));
                 if ((plannerParams.options & QueryPlannerParams::PRIVATE_IS_COUNT)
                     && turnIxscanIntoCount(qs)) {
                     LOG(2) << "Using fast count: " << canonicalQuery->toStringShort()
@@ -270,7 +272,7 @@ namespace mongo {
                     }
                 }
                 else if (NULL != backupQs) {
-                    verify(StageBuilder::build(collection, *backupQs, sharedWs, &backupRoot));
+                    verify(StageBuilder::build(txn, collection, *backupQs, sharedWs, &backupRoot));
                 }
 
                 // add a CachedPlanStage on top of the previous root
@@ -290,7 +292,7 @@ namespace mongo {
             LOG(2) << "Running query as sub-queries: " << canonicalQuery->toStringShort();
 
             SubplanRunner* runner;
-            Status runnerStatus = SubplanRunner::make(collection, plannerParams,
+            Status runnerStatus = SubplanRunner::make(txn, collection, plannerParams,
                                                       canonicalQuery.release(), &runner);
             if (!runnerStatus.isOK()) {
                 return runnerStatus;
@@ -300,10 +302,11 @@ namespace mongo {
             return Status::OK();
         }
 
-        return getRunnerAlwaysPlan(collection, canonicalQuery.release(), plannerParams, out);
+        return getRunnerAlwaysPlan(txn, collection, canonicalQuery.release(), plannerParams, out);
     }
 
-    Status getRunnerAlwaysPlan(Collection* collection,
+    Status getRunnerAlwaysPlan(OperationContext* txn,
+                               Collection* collection,
                                CanonicalQuery* rawCanonicalQuery,
                                const QueryPlannerParams& plannerParams,
                                Runner** out) {
@@ -347,7 +350,7 @@ namespace mongo {
                     // We're not going to cache anything that's fast count.
                     WorkingSet* ws = new WorkingSet();
                     PlanStage* root;
-                    verify(StageBuilder::build(collection, *solutions[i], ws, &root));
+                    verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
                     *out = new SingleSolutionRunner(collection,
                                                     canonicalQuery.release(),
                                                     solutions[i],
@@ -366,7 +369,7 @@ namespace mongo {
             // Only one possible plan.  Run it.  Build the stages from the solution.
             WorkingSet* ws = new WorkingSet();
             PlanStage* root;
-            verify(StageBuilder::build(collection, *solutions[0], ws, &root));
+            verify(StageBuilder::build(txn, collection, *solutions[0], ws, &root));
 
             // And, run the plan.
             *out = new SingleSolutionRunner(collection,
@@ -391,7 +394,7 @@ namespace mongo {
 
                 // version of StageBuild::build when WorkingSet is shared
                 PlanStage* nextPlanRoot;
-                verify(StageBuilder::build(collection, *solutions[ix],
+                verify(StageBuilder::build(txn, collection, *solutions[ix],
                                            sharedWorkingSet, &nextPlanRoot));
 
                 // Owns none of the arguments
@@ -587,7 +590,8 @@ namespace mongo {
 
     }  // namespace
 
-    Status getRunnerCount(Collection* collection,
+    Status getRunnerCount(OperationContext* txn,
+                          Collection* collection,
                           const BSONObj& query,
                           const BSONObj& hintObj,
                           Runner** out) {
@@ -606,7 +610,7 @@ namespace mongo {
                                                      &cq,
                                                      whereCallback));
 
-        return getRunner(collection, cq, out, QueryPlannerParams::PRIVATE_IS_COUNT);
+        return getRunner(txn, collection, cq, out, QueryPlannerParams::PRIVATE_IS_COUNT);
     }
 
     //
@@ -669,7 +673,8 @@ namespace mongo {
         return false;
     }
 
-    Status getRunnerDistinct(Collection* collection,
+    Status getRunnerDistinct(OperationContext* txn,
+                             Collection* collection,
                              const BSONObj& query,
                              const string& field,
                              Runner** out) {
@@ -718,7 +723,7 @@ namespace mongo {
             }
 
             // Takes ownership of cq.
-            return getRunner(collection, cq, out);
+            return getRunner(txn, collection, cq, out);
         }
 
         //
@@ -765,7 +770,7 @@ namespace mongo {
 
             WorkingSet* ws = new WorkingSet();
             PlanStage* root;
-            verify(StageBuilder::build(collection, *soln, ws, &root));
+            verify(StageBuilder::build(txn, collection, *soln, ws, &root));
             *out = new SingleSolutionRunner(collection, cq, soln, root, ws);
             return Status::OK();
         }
@@ -774,7 +779,7 @@ namespace mongo {
         vector<QuerySolution*> solutions;
         status = QueryPlanner::plan(*cq, plannerParams, &solutions);
         if (!status.isOK()) {
-            return getRunner(collection, cq, out);
+            return getRunner(txn, collection, cq, out);
         }
 
         // We look for a solution that has an ixscan we can turn into a distinctixscan
@@ -793,7 +798,7 @@ namespace mongo {
                 // Build and return the SSR over solutions[i].
                 WorkingSet* ws = new WorkingSet();
                 PlanStage* root;
-                verify(StageBuilder::build(collection, *solutions[i], ws, &root));
+                verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
                 *out = new SingleSolutionRunner(collection, cq, solutions[i], root, ws);
                 return Status::OK();
             }
@@ -814,7 +819,7 @@ namespace mongo {
         }
 
         // Takes ownership of cq.
-        return getRunner(collection, cq, out);
+        return getRunner(txn, collection, cq, out);
     }
 
     ScopedRunnerRegistration::ScopedRunnerRegistration(Runner* runner)

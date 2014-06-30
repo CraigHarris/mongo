@@ -454,8 +454,8 @@ namespace mongo {
 
         Runner* rawRunner;
         Status status = cq ?
-            getRunner(collection, cqHolder.release(), &rawRunner) :
-            getRunner(collection, nsString.ns(), request.getQuery(), &rawRunner, &cq);
+            getRunner(txn, collection, cqHolder.release(), &rawRunner) :
+            getRunner(txn, collection, nsString.ns(), request.getQuery(), &rawRunner, &cq);
         uassert(17243,
                 "could not get runner " + request.getQuery().toString() + "; " + causedBy(status),
                 status.isOK());

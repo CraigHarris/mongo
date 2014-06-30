@@ -36,6 +36,7 @@
 namespace mongo {
 
     class Collection;
+    class OperationContext;
 
     // Temporarily hide the new explain implementation behind a setParameter.
     // TODO: take this out, and make the new implementation the default.
@@ -105,7 +106,8 @@ namespace mongo {
          *
          * May use a PlanExecutor to run the solution in order to produce exec stats.
          */
-        static Status explainSinglePlan(Collection* collection,
+        static Status explainSinglePlan(OperationContext* txn,
+                                        Collection* collection,
                                         CanonicalQuery* rawCanonicalQuery,
                                         QuerySolution* solution,
                                         Explain::Verbosity verbosity,
@@ -120,7 +122,8 @@ namespace mongo {
          * Uses a MultiPlan stage to choose the best plan, and to run the winning plan or the
          * rejected plans as required by the verbosity level.
          */
-        static Status explainMultiPlan(Collection* collection,
+        static Status explainMultiPlan(OperationContext* txn,
+                                       Collection* collection,
                                        CanonicalQuery* rawCanonicalQuery,
                                        vector<QuerySolution*>& solutions,
                                        Explain::Verbosity verbosity,
@@ -145,7 +148,8 @@ namespace mongo {
          * If necessary, run the query in order to generate execution stats (but throw out
          * the results of the query).
          */
-        static Status explain(Collection* collection,
+        static Status explain(OperationContext* txn,
+                              Collection* collection,
                               CanonicalQuery* rawCanonicalQuery,
                               size_t plannerOptions,
                               Explain::Verbosity verbosity,

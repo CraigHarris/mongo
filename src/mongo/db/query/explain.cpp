@@ -183,7 +183,8 @@ namespace mongo {
     }
 
     // static
-    Status Explain::explainSinglePlan(Collection* collection,
+    Status Explain::explainSinglePlan(OperationContext* txn,
+                                      Collection* collection,
                                       CanonicalQuery* rawCanonicalQuery,
                                       QuerySolution* solution,
                                       Explain::Verbosity verbosity,
@@ -191,7 +192,7 @@ namespace mongo {
         // Only one possible plan. Build the stages from the solution.
         WorkingSet* ws = new WorkingSet();
         PlanStage* root;
-        verify(StageBuilder::build(collection, *solution, ws, &root));
+        verify(StageBuilder::build(txn, collection, *solution, ws, &root));
 
         // Wrap the exec stages in a plan executor. Takes ownership of 'ws' and 'root'.
         scoped_ptr<PlanExecutor> exec(new PlanExecutor(ws, root, collection));
@@ -230,7 +231,8 @@ namespace mongo {
     }
 
     // static
-    Status Explain::explainMultiPlan(Collection* collection,
+    Status Explain::explainMultiPlan(OperationContext* txn,
+                                     Collection* collection,
                                      CanonicalQuery* rawCanonicalQuery,
                                      vector<QuerySolution*>& solutions,
                                      Explain::Verbosity verbosity,
@@ -243,7 +245,7 @@ namespace mongo {
         for (size_t ix = 0; ix < solutions.size(); ++ix) {
             // version of StageBuild::build when WorkingSet is shared
             PlanStage* nextPlanRoot;
-            verify(StageBuilder::build(collection, *solutions[ix],
+            verify(StageBuilder::build(txn, collection, *solutions[ix],
                                        sharedWorkingSet.get(), &nextPlanRoot));
 
             // Takes ownership of the solution and the root PlanStage, but not the working set.
@@ -312,7 +314,8 @@ namespace mongo {
     }
 
     // static
-    Status Explain::explain(Collection* collection,
+    Status Explain::explain(OperationContext* txn,
+                            Collection* collection,
                             CanonicalQuery* rawCanonicalQuery,
                             size_t plannerOptions,
                             Explain::Verbosity verbosity,
@@ -346,10 +349,12 @@ namespace mongo {
             return Status(ErrorCodes::BadValue, ss);
         }
         else if (1 == solutions.size()) {
-            return explainSinglePlan(collection, rawCanonicalQuery, solutions[0], verbosity, out);
+            return explainSinglePlan(txn, collection, rawCanonicalQuery,
+                                     solutions[0], verbosity, out);
         }
         else {
-            return explainMultiPlan(collection, rawCanonicalQuery, solutions, verbosity, out);
+            return explainMultiPlan(txn, collection, rawCanonicalQuery,
+                                    solutions, verbosity, out);
         }
     }
 

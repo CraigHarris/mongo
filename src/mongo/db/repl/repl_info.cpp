@@ -83,7 +83,8 @@ namespace repl {
                 const char* localSources = "local.sources";
                 Client::ReadContext ctx(txn, localSources);
                 auto_ptr<Runner> runner(
-                    InternalPlanner::collectionScan(localSources,
+                    InternalPlanner::collectionScan(txn,
+                                                    localSources,
                                                     ctx.ctx().db()->getCollection(txn,
                                                                                   localSources)));
                 BSONObj obj;

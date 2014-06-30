@@ -56,7 +56,7 @@ namespace mongo {
         ExpressionKeysPrivate::getHaystackKeys(obj, _geoField, _otherFields, _bucketSize, keys);
     }
 
-    void HaystackAccessMethod::searchCommand(Collection* collection,
+    void HaystackAccessMethod::searchCommand(OperationContext* txn, Collection* collection,
                                              const BSONObj& nearObj, double maxDistance,
                                              const BSONObj& search, BSONObjBuilder* result,
                                              unsigned limit) {
@@ -95,7 +95,7 @@ namespace mongo {
                 unordered_set<DiskLoc, DiskLoc::Hasher> thisPass;
 
 
-                scoped_ptr<Runner> runner(InternalPlanner::indexScan(collection,
+                scoped_ptr<Runner> runner(InternalPlanner::indexScan(txn,  collection,
                                                                      _descriptor, key, key, true));
                 Runner::RunnerState state;
                 DiskLoc loc;
