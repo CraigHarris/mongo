@@ -504,14 +504,14 @@ namespace mongo {
             bb.skip(sizeof(QueryResult));
 
             PlanExecutor* rawExec;
-            Status execStatus = getExecutor(collection, cq, &rawExec, options);
+            Status execStatus = getExecutor(txn, collection, cq, &rawExec, options);
             if (!execStatus.isOK()) {
                 uasserted(17510, "Explain error: " + execStatus.reason());
             }
 
             scoped_ptr<PlanExecutor> exec(rawExec);
             BSONObjBuilder explainBob;
-            Status explainStatus = Explain::explainStages(txn, exec.get(), cq, Explain::EXEC_ALL_PLANS,
+            Status explainStatus = Explain::explainStages(exec.get(), cq, Explain::EXEC_ALL_PLANS,
                                                           &explainBob);
             if (!explainStatus.isOK()) {
                 uasserted(18521, "Explain error: " + explainStatus.reason());

@@ -282,8 +282,7 @@ namespace mongo {
                     return false;
                 }
 
-                scoped_ptr<PlanExecutor> exec(new PlanExecutor(_txn,
-                                                               sharedWorkingSet,
+                scoped_ptr<PlanExecutor> exec(new PlanExecutor(sharedWorkingSet,
                                                                multiPlanStage.release(),
                                                                _collection));
 
@@ -364,7 +363,7 @@ namespace mongo {
             return false;
         }
 
-        scoped_ptr<PlanExecutor> exec(new PlanExecutor(_txn, ws, multiPlanStage.release(), _collection));
+        scoped_ptr<PlanExecutor> exec(new PlanExecutor(ws, multiPlanStage.release(), _collection));
 
         _child.reset(exec->releaseStages());
 
@@ -407,7 +406,9 @@ namespace mongo {
             else if (!_killed) {
                 // Couldn't run as subplans so we'll just call normal getExecutor.
                 PlanExecutor* exec;
-                Status status = getExecutorAlwaysPlan(_txn, _collection, _query, _plannerParams, &exec);
+
+                Status status = getExecutorAlwaysPlan(
+                    _txn, _collection, _query, _plannerParams, &exec);
 
                 if (!status.isOK()) {
                     // We utterly failed.

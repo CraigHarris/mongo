@@ -193,7 +193,7 @@ namespace mongo {
             root = new ProjectionStage(params, ws, root);
         }
 
-        *out = new PlanExecutor(txn, ws, root, collection);
+        *out = new PlanExecutor(ws, root, collection);
         return Status::OK();
     }
 
@@ -211,7 +211,7 @@ namespace mongo {
                    << " Using EOF runner: " << canonicalQuery->toStringShort();
             EOFStage* eofStage = new EOFStage();
             WorkingSet* ws = new WorkingSet();
-            *out = new PlanExecutor(txn, ws, eofStage, collection);
+            *out = new PlanExecutor(ws, eofStage, collection);
             return Status::OK();
         }
 
@@ -281,7 +281,7 @@ namespace mongo {
                 // add a CachedPlanStage on top of the previous root
                 root = new CachedPlanStage(collection, canonicalQuery, root, backupRoot);
 
-                *out = new PlanExecutor(txn, sharedWs, root, chosenSolution, collection);
+                *out = new PlanExecutor(sharedWs, root, chosenSolution, collection);
                 return Status::OK();
             }
         }
@@ -295,20 +295,21 @@ namespace mongo {
             auto_ptr<WorkingSet> ws(new WorkingSet());
 
             SubplanStage* subplan;
-            Status runnerStatus = SubplanStage::make(collection, ws.get(), plannerParams,
+            Status runnerStatus = SubplanStage::make(txn, collection, ws.get(), plannerParams,
                                                      canonicalQuery, &subplan);
             if (!runnerStatus.isOK()) {
                 return runnerStatus;
             }
 
-            *out = new PlanExecutor(txn, ws.release(), subplan, collection);
+            *out = new PlanExecutor(ws.release(), subplan, collection);
             return Status::OK();
         }
 
-        return getExecutorAlwaysPlan(collection, canonicalQuery, plannerParams, out);
+        return getExecutorAlwaysPlan(txn, collection, canonicalQuery, plannerParams, out);
     }
 
-    Status getExecutorAlwaysPlan(Collection* collection,
+    Status getExecutorAlwaysPlan(OperationContext* txn,
+                                 Collection* collection,
                                  CanonicalQuery* canonicalQuery,
                                  const QueryPlannerParams& plannerParams,
                                  PlanExecutor** execOut) {
@@ -354,7 +355,7 @@ namespace mongo {
                     PlanStage* root;
                     verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
 
-                    *execOut = new PlanExecutor(txn, ws, root, solutions[i], collection);
+                    *execOut = new PlanExecutor(ws, root, solutions[i], collection);
                     return Status::OK();
                 }
             }
@@ -370,7 +371,7 @@ namespace mongo {
             PlanStage* root;
             verify(StageBuilder::build(txn, collection, *solutions[0], ws, &root));
 
-            *execOut = new PlanExecutor(txn, ws, root, solutions[0], collection);
+            *execOut = new PlanExecutor(ws, root, solutions[0], collection);
             return Status::OK();
         }
         else {
@@ -395,7 +396,7 @@ namespace mongo {
                 multiPlanStage->addPlan(solutions[ix], nextPlanRoot, sharedWorkingSet);
             }
 
-            PlanExecutor* exec = new PlanExecutor(txn, sharedWorkingSet, multiPlanStage, collection);
+            PlanExecutor* exec = new PlanExecutor(sharedWorkingSet, multiPlanStage, collection);
 
             *execOut = exec;
             return Status::OK();
@@ -578,7 +579,8 @@ namespace mongo {
 
     }  // namespace
 
-    Status getExecutorCount(Collection* collection,
+    Status getExecutorCount(OperationContext* txn,
+                            Collection* collection,
                             const BSONObj& query,
                             const BSONObj& hintObj,
                             PlanExecutor** execOut) {
@@ -655,7 +657,8 @@ namespace mongo {
         return false;
     }
 
-    Status getExecutorDistinct(Collection* collection,
+    Status getExecutorDistinct(OperationContext* txn,
+                               Collection* collection,
                                const BSONObj& query,
                                const std::string& field,
                                PlanExecutor** out) {
@@ -757,7 +760,7 @@ namespace mongo {
             PlanStage* root;
             verify(StageBuilder::build(txn, collection, *soln, ws, &root));
             // Takes ownership of 'ws', 'root', and 'soln'.
-            *out = new PlanExecutor(txn, ws, root, soln, collection);
+            *out = new PlanExecutor(ws, root, soln, collection);
             return Status::OK();
         }
 
@@ -786,7 +789,7 @@ namespace mongo {
                 PlanStage* root;
                 verify(StageBuilder::build(txn, collection, *solutions[i], ws, &root));
                 // Takes ownership of 'ws', 'root', and 'solutions[i]'.
-                *out = new PlanExecutor(txn, ws, root, solutions[i], collection);
+                *out = new PlanExecutor(ws, root, solutions[i], collection);
                 return Status::OK();
             }
         }

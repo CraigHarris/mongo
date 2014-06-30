@@ -52,10 +52,8 @@ namespace mongo {
      */
     class PlanExecutor {
     public:
-        PlanExecutor(OperationContext* txn, WorkingSet* ws, PlanStage* rt,
-                     const Collection* collection);
-        PlanExecutor(OperationContext* txn, WorkingSet* ws, PlanStage* rt, QuerySolution* qs,
-                     const Collection* collection);
+        PlanExecutor(WorkingSet* ws, PlanStage* rt, const Collection* collection);
+        PlanExecutor(WorkingSet* ws, PlanStage* rt, QuerySolution* qs, const Collection* collection);
         ~PlanExecutor();
 
         //
@@ -122,9 +120,6 @@ namespace mongo {
         Status executePlan();
 
     private:
-        // transactional context for read locks. Not owned by us
-        OperationContext* _txn;
-
         // Collection over which this plan executor runs. Used to resolve record ids retrieved by
         // the plan stages. The collection must not be destroyed while there are active plans.
         const Collection* _collection;

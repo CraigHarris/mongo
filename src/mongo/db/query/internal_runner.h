@@ -59,7 +59,7 @@ namespace mongo {
     public:
 
         /** Takes ownership of root and ws. */
-        InternalRunner(OperationContext* txn, const Collection* collection, PlanStage* root, WorkingSet* ws);
+        InternalRunner(const Collection* collection, PlanStage* root, WorkingSet* ws);
 
         virtual ~InternalRunner();
 

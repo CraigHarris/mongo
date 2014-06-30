@@ -88,7 +88,7 @@ namespace mongo {
 
             WorkingSet* ws = new WorkingSet();
             CollectionScan* cs = new CollectionScan(txn, params, ws, NULL);
-            return new InternalRunner(txn, collection, cs, ws);
+            return new InternalRunner(collection, cs, ws);
         }
 
         /**
@@ -116,10 +116,10 @@ namespace mongo {
 
             if (IXSCAN_FETCH & options) {
                 return new InternalRunner(
-                    txn, collection, new FetchStage(ws, ix, NULL, collection), ws);
+                    collection, new FetchStage(ws, ix, NULL, collection), ws);
             }
             else {
-                return new InternalRunner(txn, collection, ix, ws);
+                return new InternalRunner(collection, ix, ws);
             }
         }
     };
