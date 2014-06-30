@@ -348,7 +348,7 @@ namespace QueryStageCollectionScan {
 
             // Make a scan and have the runner own it.
             WorkingSet* ws = new WorkingSet();
-            PlanStage* ps = new CollectionScan(params, ws, filterExpr.get());
+            PlanStage* ps = new CollectionScan(&_txn, params, ws, filterExpr.get());
             PlanExecutor runner(ws, ps, params.collection);
 
             // Use the runner to count the number of objects scanned.
@@ -367,7 +367,7 @@ namespace QueryStageCollectionScan {
             params.direction = direction;
             params.tailable = false;
 
-            scoped_ptr<CollectionScan> scan(new CollectionScan(params, &ws, NULL));
+            scoped_ptr<CollectionScan> scan(new CollectionScan(&_txn, params, &ws, NULL));
             while (!scan->isEOF()) {
                 WorkingSetID id = WorkingSet::INVALID_ID;
                 PlanStage::StageState state = scan->work(&id);
@@ -453,7 +453,7 @@ namespace QueryStageCollectionScan {
 
             // Make a scan and have the runner own it.
             WorkingSet* ws = new WorkingSet();
-            PlanStage* ps = new CollectionScan(params, ws, NULL);
+            PlanStage* ps = new CollectionScan(&_txn, params, ws, NULL);
             PlanExecutor runner(ws, ps, params.collection);
 
             int count = 0;
@@ -482,7 +482,7 @@ namespace QueryStageCollectionScan {
             params.tailable = false;
 
             WorkingSet* ws = new WorkingSet();
-            PlanStage* ps = new CollectionScan(params, ws, NULL);
+            PlanStage* ps = new CollectionScan(&_txn, params, ws, NULL);
             PlanExecutor runner(ws, ps, params.collection);
 
             int count = 0;
@@ -518,7 +518,7 @@ namespace QueryStageCollectionScan {
             params.tailable = false;
 
             WorkingSet ws;
-            scoped_ptr<CollectionScan> scan(new CollectionScan(params, &ws, NULL));
+            scoped_ptr<CollectionScan> scan(new CollectionScan(&_txn, params, &ws, NULL));
 
             int count = 0;
             while (count < 10) {
@@ -579,7 +579,7 @@ namespace QueryStageCollectionScan {
             params.tailable = false;
 
             WorkingSet ws;
-            scoped_ptr<CollectionScan> scan(new CollectionScan(params, &ws, NULL));
+            scoped_ptr<CollectionScan> scan(new CollectionScan(&_txn, params, &ws, NULL));
 
             int count = 0;
             while (count < 10) {

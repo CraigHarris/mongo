@@ -113,7 +113,7 @@ namespace mongo {
         Runner* rawRunner;
         size_t options = requireIndex ? QueryPlannerParams::NO_TABLE_SCAN : QueryPlannerParams::DEFAULT;
         massert(17245, "Could not get runner for query " + query.toString(),
-                getRunner(collection, cq, &rawRunner, options).isOK());
+                getRunner(txn, collection, cq, &rawRunner, options).isOK());
 
         auto_ptr<Runner> runner(rawRunner);
         Runner::RunnerState state;
@@ -155,7 +155,7 @@ namespace mongo {
         BtreeBasedAccessMethod* accessMethod =
             static_cast<BtreeBasedAccessMethod*>(catalog->getIndex( desc ));
 
-        DiskLoc loc = accessMethod->findSingle( query["_id"].wrap() );
+        DiskLoc loc = accessMethod->findSingle( txn, query["_id"].wrap() );
         if ( loc.isNull() )
             return false;
         result = collection->docFor( loc );
@@ -172,7 +172,7 @@ namespace mongo {
         // See SERVER-12397.  This may not always be true.
         BtreeBasedAccessMethod* accessMethod =
             static_cast<BtreeBasedAccessMethod*>(catalog->getIndex( desc ));
-        return accessMethod->findSingle( idquery["_id"].wrap() );
+        return accessMethod->findSingle( txn, idquery["_id"].wrap() );
     }
 
     /* Get the first object from a collection.  Generally only useful if the collection
@@ -182,7 +182,8 @@ namespace mongo {
     */
     bool Helpers::getSingleton(OperationContext* txn, const char *ns, BSONObj& result) {
         Client::Context context(ns);
-        auto_ptr<Runner> runner(InternalPlanner::collectionScan(ns,
+        auto_ptr<Runner> runner(InternalPlanner::collectionScan(txn,
+                                                                ns,
                                                                 context.db()->getCollection(txn,
                                                                                             ns)));
         Runner::RunnerState state = runner->getNext(&result, NULL);
@@ -193,7 +194,8 @@ namespace mongo {
     bool Helpers::getLast(OperationContext* txn, const char *ns, BSONObj& result) {
         Client::Context ctx(ns);
         Collection* coll = ctx.db()->getCollection( txn, ns );
-        auto_ptr<Runner> runner(InternalPlanner::collectionScan(ns,
+        auto_ptr<Runner> runner(InternalPlanner::collectionScan(txn,
+                                                                ns,
                                                                 coll,
                                                                 InternalPlanner::BACKWARD));
         Runner::RunnerState state = runner->getNext(&result, NULL);
@@ -356,7 +358,7 @@ namespace mongo {
                 IndexDescriptor* desc =
                     collection->getIndexCatalog()->findIndexByKeyPattern( indexKeyPattern.toBSON() );
 
-                auto_ptr<Runner> runner(InternalPlanner::indexScan(collection, desc, min, max,
+                auto_ptr<Runner> runner(InternalPlanner::indexScan(txn, collection, desc, min, max,
                                                                    maxInclusive,
                                                                    InternalPlanner::FORWARD,
                                                                    InternalPlanner::IXSCAN_FETCH));
@@ -516,7 +518,7 @@ namespace mongo {
         bool isLargeChunk = false;
         long long docCount = 0;
 
-        auto_ptr<Runner> runner(InternalPlanner::indexScan(collection, idx, min, max, false));
+        auto_ptr<Runner> runner(InternalPlanner::indexScan(txn, collection, idx, min, max, false));
         // we can afford to yield here because any change to the base data that we might miss  is
         // already being queued and will be migrated in the 'transferMods' stage
 

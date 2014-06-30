@@ -39,11 +39,12 @@ namespace mongo {
     class BSONObj;
     class CanonicalQuery;
     class DiskLoc;
+    class OperationContext;
     class PlanExecutor;
+    struct PlanInfo;
     class PlanStage;
     struct QuerySolution;
     class TypeExplain;
-    struct PlanInfo;
     class WorkingSet;
 
     /**
@@ -58,7 +59,7 @@ namespace mongo {
     public:
 
         /** Takes ownership of root and ws. */
-        InternalRunner(const Collection* collection, PlanStage* root, WorkingSet* ws);
+        InternalRunner(OperationContext* txn, const Collection* collection, PlanStage* root, WorkingSet* ws);
 
         virtual ~InternalRunner();
 

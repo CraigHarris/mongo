@@ -43,8 +43,8 @@ namespace mongo {
     // static
     const char* S2NearStage::kStageType = "GEO_NEAR_2DSPHERE";
 
-    S2NearStage::S2NearStage(const S2NearParams& params, WorkingSet* ws)
-        : _commonStats(kStageType) {
+    S2NearStage::S2NearStage(OperationContext* txn, const S2NearParams& params, WorkingSet* ws)
+        : _txn(txn), _commonStats(kStageType) {
         _initted = false;
         _params = params;
         _ws = ws;
@@ -282,7 +282,7 @@ namespace mongo {
         // Owns geo filter.
         _keyGeoFilter.reset(new GeoS2KeyMatchExpression(
             &_annulus, _params.baseBounds.fields[_nearFieldIndex].name));
-        IndexScan* scan = new IndexScan(params, _ws, _keyGeoFilter.get());
+        IndexScan* scan = new IndexScan(_txn, params, _ws, _keyGeoFilter.get());
 
         // Owns 'scan'.
         _child.reset(new FetchStage(_ws, scan, _params.filter, _params.collection));

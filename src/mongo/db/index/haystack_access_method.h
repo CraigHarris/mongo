@@ -36,6 +36,7 @@
 namespace mongo {
 
     class Collection;
+    class OperationContext;
 
     /**
      * Maps (lat, lng) to the bucketSize-sided square bucket that contains it.
@@ -62,7 +63,7 @@ namespace mongo {
 
     protected:
         friend class GeoHaystackSearchCommand;
-        void searchCommand(Collection* collection,
+        void searchCommand(OperationContext* txn, Collection* collection,
                            const BSONObj& nearObj, double maxDistance, const BSONObj& search,
                            BSONObjBuilder* result, unsigned limit);
 

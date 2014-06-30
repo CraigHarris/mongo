@@ -40,9 +40,9 @@
 
 namespace mongo {
 
-    InternalRunner::InternalRunner(const Collection* collection, PlanStage* root, WorkingSet* ws)
+    InternalRunner::InternalRunner(OperationContext* txn, const Collection* collection, PlanStage* root, WorkingSet* ws)
         : _collection(collection),
-          _exec(new PlanExecutor(ws, root, collection)) {
+          _exec(new PlanExecutor(OperationContext* txn, ws, root, collection)) {
 
         _collection->cursorCache()->registerRunner(this);
         invariant( collection );

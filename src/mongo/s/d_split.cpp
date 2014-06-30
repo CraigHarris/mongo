@@ -144,7 +144,7 @@ namespace mongo {
                 max = Helpers::toKeyFormat( kp.extendRangeBound( max, false ) );
             }
 
-            auto_ptr<Runner> runner(InternalPlanner::indexScan(collection, idx, min, max,
+            auto_ptr<Runner> runner(InternalPlanner::indexScan(txn, collection, idx, min, max,
                                                                false, InternalPlanner::FORWARD));
 
             // Find the 'missingField' value used to represent a missing document field in a key of
@@ -375,7 +375,7 @@ namespace mongo {
                 long long currCount = 0;
                 long long numChunks = 0;
                 
-                auto_ptr<Runner> runner(InternalPlanner::indexScan(collection, idx, min, max,
+                auto_ptr<Runner> runner(InternalPlanner::indexScan(txn, collection, idx, min, max,
                     false, InternalPlanner::FORWARD));
 
                 BSONObj currKey;
@@ -433,7 +433,7 @@ namespace mongo {
                     currCount = 0;
                     log() << "splitVector doing another cycle because of force, keyCount now: " << keyCount << endl;
 
-                    runner.reset(InternalPlanner::indexScan(collection, idx, min, max,
+                    runner.reset(InternalPlanner::indexScan(txn, collection, idx, min, max,
                                                             false, InternalPlanner::FORWARD));
 
                     state = runner->getNext(&currKey, NULL);
@@ -877,7 +877,7 @@ namespace mongo {
                     BSONObj newmin = Helpers::toKeyFormat( kp.extendRangeBound( chunk.min, false) );
                     BSONObj newmax = Helpers::toKeyFormat( kp.extendRangeBound( chunk.max, false) );
 
-                    auto_ptr<Runner> runner(InternalPlanner::indexScan(collection, idx,
+                    auto_ptr<Runner> runner(InternalPlanner::indexScan(txn, collection, idx,
                                                                        newmin, newmax, false));
 
                     // check if exactly one document found

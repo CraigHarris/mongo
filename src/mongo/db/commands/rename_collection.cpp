@@ -176,7 +176,7 @@ namespace mongo {
                     indexesInProg = stopIndexBuilds( txn, srcCtx.db(), cmdObj );
                     capped = sourceColl->isCapped();
                     if ( capped ) {
-                        size = sourceColl->getRecordStore()->storageSize();
+                        size = sourceColl->getRecordStore()->storageSize( txn );
                     }
                 }
             }
@@ -247,7 +247,7 @@ namespace mongo {
             {
                 Client::Context srcCtx( source );
                 sourceColl = srcCtx.db()->getCollection( txn, source );
-                sourceIt.reset( sourceColl->getIterator( DiskLoc(), false, CollectionScanParams::FORWARD ) );
+                sourceIt.reset( sourceColl->getIterator( txn, DiskLoc(), false, CollectionScanParams::FORWARD ) );
             }
 
             Collection* targetColl = NULL;

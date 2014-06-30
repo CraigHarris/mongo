@@ -35,16 +35,21 @@
 
 namespace mongo {
 
-    PlanExecutor::PlanExecutor(WorkingSet* ws, PlanStage* rt, const Collection* collection)
-        : _collection(collection),
+    PlanExecutor::PlanExecutor(OperationContext* txn,
+                               WorkingSet* ws,
+                               PlanStage* rt,
+                               const Collection* collection)
+        : _txn(txn),
+          _collection(collection),
           _workingSet(ws),
           _root(rt),
           _qs(NULL),
           _killed(false) { }
 
-    PlanExecutor::PlanExecutor(WorkingSet* ws, PlanStage* rt, QuerySolution* qs,
+    PlanExecutor::PlanExecutor(OperationContext* txn, WorkingSet* ws, PlanStage* rt, QuerySolution* qs,
                                const Collection* collection)
-        : _collection(collection),
+        : _txn(txn),
+          _collection(collection),
           _workingSet(ws),
           _root(rt),
           _qs(qs),

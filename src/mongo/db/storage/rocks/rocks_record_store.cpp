@@ -181,7 +181,8 @@ namespace mongo {
         return Status::OK();
     }
 
-    RecordIterator* RocksRecordStore::getIterator( const DiskLoc& start,
+    RecordIterator* RocksRecordStore::getIterator( OperationContext* txn,
+                                                   const DiskLoc& start,
                                                    bool tailable,
                                                    const CollectionScanParams::Direction& dir
                                                    ) const {
@@ -192,11 +193,11 @@ namespace mongo {
     }
 
 
-    RecordIterator* RocksRecordStore::getIteratorForRepair() const {
-        return getIterator();
+    RecordIterator* RocksRecordStore::getIteratorForRepair(OperationContext* txn) const {
+        return getIterator(txn);
     }
 
-    std::vector<RecordIterator*> RocksRecordStore::getManyIterators() const {
+    std::vector<RecordIterator*> RocksRecordStore::getManyIterators(OperationContext* txn) const {
         invariant( false );
     }
 
@@ -219,7 +220,9 @@ namespace mongo {
         return Status::OK();
     }
 
-    void RocksRecordStore::appendCustomStats( BSONObjBuilder* result, double scale ) const {
+    void RocksRecordStore::appendCustomStats( OperationContext* txn,
+                                              BSONObjBuilder* result,
+                                              double scale ) const {
         string statsString;
         bool valid = _db->GetProperty( _columnFamily, "rocksdb.stats", &statsString );
         invariant( valid );

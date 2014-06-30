@@ -233,7 +233,8 @@ namespace repl {
         Client::Context ctx(rsoplog);
 
         boost::scoped_ptr<Runner> runner(
-                InternalPlanner::collectionScan(rsoplog,
+                InternalPlanner::collectionScan(txn,
+                                                rsoplog,
                                                 ctx.db()->getCollection(txn, rsoplog),
                                                 InternalPlanner::BACKWARD));
 

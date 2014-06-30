@@ -79,9 +79,10 @@ namespace mongo {
         // datasize and extentSize can't be compared exactly, so add some padding to 'size'
         long long excessSize =
             static_cast<long long>( fromCollection->dataSize() -
-                                    ( toCollection->getRecordStore()->storageSize() * 2 ) );
+                                    ( toCollection->getRecordStore()->storageSize( txn ) * 2 ) );
 
-        scoped_ptr<Runner> runner( InternalPlanner::collectionScan(fromNs,
+        scoped_ptr<Runner> runner( InternalPlanner::collectionScan(txn,
+                                                                   fromNs,
                                                                    fromCollection,
                                                                    InternalPlanner::FORWARD ) );
 
