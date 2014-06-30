@@ -28,16 +28,16 @@
 
 #include "mongo/platform/basic.h"
 
-#include "mongo/db/d_concurrency.h"
 #include "mongo/db/concurrency/lock_mgr.h"
 
 #include <boost/thread/locks.hpp>
 #include <sstream>
 
+#include "mongo/base/init.h"
+#include "mongo/db/server_parameters.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
-#include "mongo/base/init.h"
 
 using boost::unique_lock;
 
@@ -274,6 +274,11 @@ namespace mongo {
     }
 
     /*---------- LockManager public functions (mutex guarded) ---------*/
+
+
+    // This startup parameter enables experimental document-level locking features
+    // It should be removed once full document-level locking is checked-in.
+    MONGO_EXPORT_STARTUP_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
 
     static LockManager* _singleton = NULL;
 

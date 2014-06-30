@@ -61,6 +61,9 @@
 
 namespace mongo {
 
+    // Defined in lock_mgr.cpp
+    extern bool useExperimentalDocLocking;
+
     class ResourceId {
     public:
         ResourceId() : _rid(0) { }

@@ -32,6 +32,7 @@
 #include "mongo/db/geo/shapes.h"
 
 #include "mongo/db/index/2d_access_method.h"
+#include "mongo/db/operation_context_noop.h"
 
 #pragma once
 
@@ -136,7 +137,8 @@ namespace twod_exec {
         // Returns the min and max keys which bound a particular location.
         // The only time these may be equal is when we actually equal the location
         // itself, otherwise our expanding algorithm will fail.
-        static bool initial(const IndexDescriptor* descriptor,
+        static bool initial(OperationContext* txn,
+                            const IndexDescriptor* descriptor,
                             const TwoDIndexingParams& params,
                             BtreeLocation& min,
                             BtreeLocation& max,
@@ -284,6 +286,7 @@ namespace twod_exec {
 
     private:
         const Collection* _collection;
+        OperationContextNoop _txn;
     };
 
 }  // namespace twod_exec

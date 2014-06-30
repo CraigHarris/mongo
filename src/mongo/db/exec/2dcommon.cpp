@@ -28,7 +28,6 @@
 
 #include "mongo/db/exec/2dcommon.h"
 
-#include "mongo/db/operation_context_noop.h"
 #include "mongo/db/matcher/matchable.h"
 #include "mongo/db/query/index_bounds_builder.h"
 
@@ -232,19 +231,13 @@ namespace twod_exec {
     // The only time these may be equal is when we actually equal the location
     // itself, otherwise our expanding algorithm will fail.
     // static
-    bool BtreeLocation::initial(const IndexDescriptor* descriptor,
+    bool BtreeLocation::initial(OperationContext* txn,
+                                const IndexDescriptor* descriptor,
                                 const TwoDIndexingParams& params,
                                 BtreeLocation& min,
                                 BtreeLocation& max,
                                 GeoHash start) {
         verify(descriptor);
-
-        // XXX expect this whole file to go away shortly
-        //
-        // !!! DANGER DANGER this will cause run-time failure DANGER !!!
-        // txn address being passed to IndexScan below
-        // the pointer will become invalid after exiting this function
-        OperationContextNoop txn;
 
         min._eof = false;
         max._eof = false;
@@ -305,10 +298,10 @@ namespace twod_exec {
         verify(maxParams.bounds.isValidFor(descriptor->keyPattern(), 1));
 
         min._ws.reset(new WorkingSet());
-        min._scan.reset(new IndexScan(&txn, minParams, min._ws.get(), NULL));
+        min._scan.reset(new IndexScan(txn, minParams, min._ws.get(), NULL));
 
         max._ws.reset(new WorkingSet());
-        max._scan.reset(new IndexScan(&txn, maxParams, max._ws.get(), NULL));
+        max._scan.reset(new IndexScan(txn, maxParams, max._ws.get(), NULL));
 
         min.advance();
         max.advance();
@@ -446,7 +439,7 @@ namespace twod_exec {
             if(! isNeighbor)
                 _prefix = expandStartHash();
 
-            if (!BtreeLocation::initial(_descriptor, _params, _min, _max, _prefix)) {
+            if (!BtreeLocation::initial(&_txn, _descriptor, _params, _min, _max, _prefix)) {
                 _state = isNeighbor ? DONE_NEIGHBOR : DONE;
             } else {
                 _state = DOING_EXPAND;

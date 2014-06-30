@@ -262,7 +262,7 @@ namespace {
             LocAndSize drecs[] = {
                 {}
             };
-            assertStateV1RS(recs, drecs, &em, md);
+            assertStateV1RS(&txn, recs, drecs, &em, md);
         }
     }
 
