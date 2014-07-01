@@ -65,10 +65,10 @@ namespace mongo {
     class ResourceId {
     public:
         ResourceId() : _rid(0) { }
-        ResourceId(size_t rid) : _rid(rid) { }
+        ResourceId(uint64_t rid) : _rid(rid) { }
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
         bool operator==(const ResourceId& other) const { return _rid == other._rid; }
-        operator size_t() const { return _rid; }
+        operator uint64_t() const { return _rid; }
 
     private:
         uint64_t _rid;
@@ -189,7 +189,7 @@ namespace mongo {
         /**
          * should be age of the transaction.  currently using txId as a proxy.
          */
-        bool operator<(const Transaction& other);
+        bool operator<(const Transaction& other) const;
 
         /**
          * for debug
@@ -561,7 +561,6 @@ namespace mongo {
                                        const LockMode& mode,
                                        const ResourceId& resId,
                                        unsigned slice,
-                                       LockRequest* queue,
                                        LockRequest*& position /* in/out */);
 
         /**
@@ -574,6 +573,11 @@ namespace mongo {
                              const ResourceId& resId,
                              unsigned slice,
                              LockRequest*& outLock) const;
+
+        /**
+         *
+         */
+        LockRequest* _findQueue(unsigned slice, const ResourceId& resId) const;
 
 	/**
 	 * @return status of requested resource id
@@ -712,7 +716,7 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           (size_t)resource) { }
+                           (uint64_t)resource) { }
         SharedResourceLock(Transaction* requestor, uint64_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
@@ -726,7 +730,7 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
-                           (size_t)resource) { }
+                           (uint64_t)resource) { }
         ExclusiveResourceLock(Transaction* requestor, uint64_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
