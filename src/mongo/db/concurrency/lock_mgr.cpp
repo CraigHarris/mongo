@@ -130,7 +130,7 @@ namespace mongo {
         return this;
     }
 
-    bool Transaction::operator<(const Transaction& other) {
+    bool Transaction::operator<(const Transaction& other) const {
         return _txId < other._txId;
     }
 
@@ -882,7 +882,7 @@ namespace mongo {
             break;
         case kPolicyOldestTxFirst:
             for (; position; position=position->nextOnResource) {
-                if (lr->requestor < position->requestor &&
+                if (*lr->requestor < *position->requestor &&
                     (isCompatible(lr->mode, position->mode) || position->isBlocked())) {
                     // smaller xid is older, so queue it before
                     position->insert(lr);
@@ -944,7 +944,7 @@ namespace mongo {
         case kPolicyReadersFirst:
             return isShared(mode);
         case kPolicyOldestTxFirst:
-            return requestor < oldRequest->requestor;
+            return *requestor < *oldRequest->requestor;
         case kPolicyBlockersFirst: {
             return requestor->_waiters.size() > oldRequest->requestor->_waiters.size();
         }

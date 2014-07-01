@@ -187,7 +187,7 @@ namespace mongo {
         /**
          * should be age of the transaction.  currently using txId as a proxy.
          */
-        bool operator<(const Transaction& other);
+        bool operator<(const Transaction& other) const;
 
         /**
          * for debug
