@@ -97,7 +97,7 @@ namespace mongo {
             buffer[_writePos++].rspCode = rspCode;
             _writePos %= 10;
             _count++;
-            _empty.notify_one();
+            _empty.notify_all();
         }
 
         TxResponse* consume() {
@@ -107,7 +107,7 @@ namespace mongo {
             TxResponse* result = &buffer[_readPos++];
             _readPos %= 10;
             _count--;
-            _full.notify_one();
+            _full.notify_all();
             return result;
         }
 
@@ -142,7 +142,7 @@ public:
         _writePos++;
         _writePos %= 10;
         _count++;
-        _empty.notify_one();
+        _empty.notify_all();
     }
 
     TxRequest* consume() {
@@ -152,7 +152,7 @@ public:
         TxRequest* result = &buffer[_readPos++];
         _readPos %= 10;
         _count--;
-        _full.notify_one();
+        _full.notify_all();
         return result;
     }
 
@@ -259,6 +259,10 @@ public:
         _rsp.post(BLOCKED);
     }
 
+    std::string toString() {
+        return _tx.toString();
+    }
+
 private:
     TxCommandBuffer _cmd;
     TxResponseBuffer _rsp;
@@ -269,6 +273,7 @@ private:
 };
 
 TEST(LockManagerTest, TxError) {
+    useExperimentalDocLocking = true;
     LockManager lm;
     LockManager::LockStatus status;
     Transaction tx(1);
@@ -478,7 +483,7 @@ TEST(LockManagerTest, TxDeadlock) {
     t1.acquire(kExclusive, 2, BLOCKED);
     t2.acquire(kExclusive, 3, BLOCKED);
     // a3's request would form a dependency cycle, so it should abort
-    a3.acquire(kExclusive, 1, ABORTED);
+    a3.acquire(kExclusive, 1, ABORTED);;
     t2.wakened(); // with a3's lock release, t2 should wake
     t2.release(kShared, 2);
     t1.wakened(); // with t2's locks released, t1 should wake
@@ -648,7 +653,7 @@ TEST(LockManagerTest, TxUpgrade) {
     t2.quit();
     t3.quit();
 }
-#if 0
+
 TEST(LockManagerTest, TxPolicy) {
 
     {
@@ -869,7 +874,7 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     t5.quit();
     tp.quit();
 }
-#endif
+
 TEST(LockManagerTest, TxShutdown) {
     LockManager lm;
     ClientTransaction t1(&lm, 1);
