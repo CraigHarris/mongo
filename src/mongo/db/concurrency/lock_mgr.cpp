@@ -129,7 +129,7 @@ namespace mongo {
         return this;
     }
 
-    bool Transaction::operator<(const Transaction& other) {
+    bool Transaction::operator<(const Transaction& other) const {
         return _txId < other._txId;
     }
 
@@ -273,10 +273,9 @@ namespace mongo {
 
     /*---------- LockManager public functions (mutex guarded) ---------*/
 
-
-    // This startup parameter enables experimental document-level locking features
+    // This parameter enables experimental document-level locking
     // It should be removed once full document-level locking is checked-in.
-    MONGO_EXPORT_STARTUP_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
+    MONGO_EXPORT_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
 
     static LockManager* _singleton = NULL;
 
@@ -400,7 +399,7 @@ namespace mongo {
         }
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
 
-        LockRequest* queue = _resourceLocks[lr->slice][lr->resId];
+        LockRequest* queue = _findQueue(lr->slice, lr->resId);
         LockRequest* conflictPosition = queue;
         ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId, lr->slice,
                                                  queue, conflictPosition);
@@ -433,7 +432,7 @@ namespace mongo {
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
-        LockRequest* queue = _resourceLocks[slice][resId];
+        LockRequest* queue = _findQueue(slice, resId);
         LockRequest* conflictPosition = queue;
         ResourceStatus status = _getConflictInfo(requestor, mode, resId, slice,
                                                  queue, conflictPosition);
@@ -655,7 +654,7 @@ namespace mongo {
         size_t resIdValue = resId;
         size_t resIdHash = 0;
         size_t mask = 0xf;
-        for (unsigned ix=0; ix < 2*sizeof(size_t); ++ix) {
+        for (unsigned ix=0; ix < 2*sizeof(uint64_t); ++ix) {
             resIdHash += (resIdValue >> ix*4) & mask;
         }
         return resIdHash % kNumResourcePartitions;
@@ -667,7 +666,7 @@ namespace mongo {
 #endif
 
     void LockManager::_push_back(LockRequest* lr) {
-        LockRequest* nextLock = _resourceLocks[lr->slice][lr->resId];
+        LockRequest* nextLock = _findQueue(lr->slice, lr->resId);
         if (NULL == nextLock) {
             _resourceLocks[lr->slice][lr->resId] = lr;
             return;
@@ -741,7 +740,7 @@ namespace mongo {
         if (queue) { _stats[slice].incPreexisting(); }
 
         ResourceStatus resourceStatus = _conflictExists(requestor, mode, resId,
-                                                        slice, queue, conflictPosition);
+                                                        slice, conflictPosition);
         if (kResourceAcquired == resourceStatus) {
             _stats[slice].incSame();
             ++conflictPosition->count;
@@ -760,13 +759,12 @@ namespace mongo {
             if (!conflictPosition)
                 _push_back(lr);
             else if (conflictPosition == queue) {
-                lr->nextOnResource = _resourceLocks[lr->slice][lr->resId];
+                lr->nextOnResource = conflictPosition;
+                conflictPosition->prevOnResource = lr;
                 _resourceLocks[lr->slice][lr->resId] = lr;
             }
             else {
-                conflictPosition->prevOnResource->nextOnResource = lr;
-                lr->nextOnResource = conflictPosition;
-                lr->prevOnResource = conflictPosition->prevOnResource;
+                conflictPosition->insert(lr);
             }
 
             _addWaiters(lr, conflictPosition, NULL);
@@ -839,9 +837,10 @@ namespace mongo {
                 _stats[lr->slice].incTimeBlocked(timer.millis());
             }
 
-            queue = conflictPosition = _resourceLocks[lr->slice][lr->resId];
-            resourceStatus = _conflictExists(lr->requestor, lr->mode, lr->resId, lr->slice,
-                                             queue, conflictPosition);
+            queue = conflictPosition = _findQueue(lr->slice, lr->resId);
+            invariant(queue && (kShared == queue->mode || kExclusive == queue->mode));
+            resourceStatus = _conflictExists(lr->requestor, lr->mode, lr->resId,
+                                             lr->slice, conflictPosition);
         } while (hasConflict(resourceStatus));
     }
 
@@ -903,7 +902,7 @@ namespace mongo {
             break;
         case kPolicyOldestTxFirst:
             for (; position; position=position->nextOnResource) {
-                if (lr->requestor < position->requestor &&
+                if (*lr->requestor < *position->requestor &&
                     (isCompatible(lr->mode, position->mode) || position->isBlocked())) {
                     // smaller xid is older, so queue it before
                     position->insert(lr);
@@ -965,7 +964,7 @@ namespace mongo {
         case kPolicyReadersFirst:
             return isShared(mode);
         case kPolicyOldestTxFirst:
-            return requestor < oldRequest->requestor;
+            return *requestor < *oldRequest->requestor;
         case kPolicyBlockersFirst: {
             return requestor->_waiters.size() > oldRequest->requestor->_waiters.size();
         }
@@ -978,7 +977,6 @@ namespace mongo {
                                                              const LockMode& mode,
                                                              const ResourceId& resId,
                                                              unsigned slice,
-                                                             LockRequest* queue,
                                                              LockRequest*& nextLock) {
 
         // handle READERS/kPolicyWritersOnly policy conflicts
@@ -1158,6 +1156,12 @@ namespace mongo {
         return kLockModeNotFound;
     }
 
+    LockRequest* LockManager::_findQueue(unsigned slice, const ResourceId& resId) const {
+        map<ResourceId,LockRequest*>::const_iterator it = _resourceLocks[slice].find(resId);
+        if (it == _resourceLocks[slice].end()) { return NULL; }
+        return it->second;
+    }
+
     /*
      * Used by acquireOne
      * XXX: there's overlap between this, _conflictExists and _findLock
@@ -1200,45 +1204,21 @@ namespace mongo {
 
     LockManager::LockStatus LockManager::_releaseInternal(LockRequest* lr) {
         Transaction* holder = lr->requestor;
-        const LockMode& mode = lr->mode;
 
         if ((kPolicyWritersOnly == _policy && 0 == _numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _numActiveWrites())) {
             _policyLock.notify_one();
         }
 
-        LockRequest* queue = _resourceLocks[lr->slice][lr->resId];
-        if (NULL == queue) {
-            return kLockResourceNotFound;
-        }
 
-        bool foundLock = false;
-        bool foundResource = false;
+        if (--lr->count > 0) { return kLockCountDecremented; }
 
-        LockRequest* nextLock = queue;
+        // find the sleepers waiting for lr.  They are lock requests that follow lr
+        // on the queue, which are incompatible with lr's mode.
 
-        // find the position of the lock to release in the queue
-        for(; !foundLock && nextLock; nextLock=nextLock->nextOnResource) {
-            if (lr != nextLock) {
-                if (nextLock->requestor == holder) {
-                    foundResource = true;
-                }
-            }
-            else {
-                // this is our lock.
-                if (--nextLock->count > 0) { return kLockCountDecremented; }
+        LockRequest* nextLock = lr->nextOnResource;
 
-                foundLock = true;
-                break; // don't increment nextLock again
-            }
-        }
-
-        if (! foundLock) {
-            // can't release a lock that hasn't been acquired in the specified mode
-            return foundResource ? kLockModeNotFound : kLockResourceNotFound;
-        }
-
-        if (isShared(mode)) {
+        if (isShared(lr->mode)) {
             // skip over any remaining shared requests. they can't be waiting for us.
             for (; nextLock; nextLock=nextLock->nextOnResource) {
                 if (isExclusive(nextLock->mode)) {
@@ -1286,10 +1266,6 @@ namespace mongo {
                  nextTx != _activeTransactions.end(); ++nextTx) {
                 verify( (*nextTx)->_waiters.find(holder) == (*nextTx)->_waiters.end());
             }
-        }
-
-        if (queue) {
-            verify(!queue->isBlocked());
         }
 #endif
 

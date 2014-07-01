@@ -15,3 +15,13 @@ env.Library(
     ],
 )
 
+env.CppUnitTest(
+    target = 'lock_mgr_test',
+    source = [
+        'lock_mgr_test.cpp',
+    ],
+    LIBDEPS = [
+        'lock_mgr'
+    ]
+)
+

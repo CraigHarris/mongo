@@ -269,6 +269,7 @@ private:
 };
 
 TEST(LockManagerTest, TxError) {
+    useExperimentalDocLocking = true;
     LockManager lm;
     LockManager::LockStatus status;
     Transaction tx(1);
@@ -648,7 +649,7 @@ TEST(LockManagerTest, TxUpgrade) {
     t2.quit();
     t3.quit();
 }
-#if 0
+
 TEST(LockManagerTest, TxPolicy) {
 
     {
@@ -869,7 +870,7 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     t5.quit();
     tp.quit();
 }
-#endif
+
 TEST(LockManagerTest, TxShutdown) {
     LockManager lm;
     ClientTransaction t1(&lm, 1);
