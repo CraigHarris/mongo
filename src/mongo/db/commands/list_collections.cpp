@@ -83,7 +83,7 @@ namespace mongo {
                 b.append( "name", nsToCollectionSubstring( ns ) );
 
                 CollectionOptions options =
-                    dbEntry->getCollectionCatalogEntry( txn, ns )->getCollectionOptions();
+                    dbEntry->getCollectionCatalogEntry( txn, ns )->getCollectionOptions(txn);
                 b.append( "options", options.toBSON() );
 
                 arr.append( b.obj() );

@@ -172,7 +172,7 @@ namespace mongo {
 
             CollectionCatalogEntry* coll = _dbEntry->getCollectionCatalogEntry( txn, ns );
 
-            CollectionOptions options = coll->getCollectionOptions();
+            CollectionOptions options = coll->getCollectionOptions( txn );
             if ( !options.temp )
                 continue;
 

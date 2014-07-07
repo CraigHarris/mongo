@@ -785,7 +785,8 @@ namespace mongo {
         }
     }
 
-    CollectionOptions MMAPV1DatabaseCatalogEntry::getCollectionOptions( const StringData& ns ) const {
+    CollectionOptions MMAPV1DatabaseCatalogEntry::getCollectionOptions( OperationContext* txn,
+                                                                        const StringData& ns ) const {
         if ( nsToCollectionSubstring( ns ) == "system.namespaces" ) {
             return CollectionOptions();
         }
@@ -793,7 +794,7 @@ namespace mongo {
         RecordStoreV1Base* rs = _getNamespaceRecordStore();
         invariant( rs );
 
-        scoped_ptr<RecordIterator> it( rs->getIterator() );
+        scoped_ptr<RecordIterator> it( rs->getIterator(txn) );
         while ( !it->isEOF() ) {
             DiskLoc loc = it->getNext();
             BSONObj entry = it->dataFor( loc ).toBson();
