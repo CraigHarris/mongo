@@ -47,7 +47,8 @@
  * Resources can be databases, collections, oplogs, records, btree-nodes, key-value pairs,
  * forward/backward pointers, or anything at all that can be unambiguously identified.
  *
- * Resources are acquired by Transactions for either shared or exclusive use. If an
+ * Resources are acquired by Transactions for some use described by a LockMode.
+ * A table defines which lock modes are compatible or conflict with other modes. If an
  * acquisition request conflicts with a pre-existing use of a resource, the requesting
  * transaction will block until the original conflicting requests and any new conflicting
  * requests have been released.
@@ -77,12 +78,38 @@ namespace mongo {
 
 
     /**
-     * LockModes: shared and exclusive
+     * LockModes:
+     *                                           Granted Mode
+     *                               +-----+-----+-----+-----+-----+-----+
+     * Requested Mode                | IS  | IX  |  S  | SIX |  U  |  X  |
+     * --------------                +-----+-----+-----+-----+-----+-----+
+     * kIntentShared(IS)             | ok  | ok  | ok  | ok  | ?ok |  -  |
+     *                               +-----+-----+-----+-----+-----+-----+
+     * kIntentExclusive(IX)          | ok  | ok  |  -  |  -  | ?ok |  -  |
+     *                               +-----+-----+-----+-----+-----+-----+
+     * kShared(S)                    | ok  |  -  | ok  |  -  | ?ok |  -  |
+     *                               +-----+-----+-----+-----+-----+-----+
+     * kSharedOrIntentExclusive(SIX) | ok  |  -  |  -  |  -  |  -  |  -  |
+     *                               +-----+-----+-----+-----+-----+-----+
+     * kUpdate                       |  -  |  -  | ok  |  -  |  -  |  -  |
+     *                               +-----+-----+-----+-----+-----+-----+
+     * kExclusive                    |  -  |  -  |  -  |  -  |  -  |  -  |
+     *                               +-----+-----+-----+-----+-----+-----+
+     *
+     * Upgrades:
+     *     IS  -> {S, IX}
+     *     S   -> {SIX, U}
+     *     IX  -> {SIX}
+     *     SIX -> X
+     *     U   -> X
      */
     enum LockMode {
-        kShared = 0, // conflicts only with kExclusive
-        kExclusive = 1, // conflicts with all lock modes
-        kInvalid
+        kIntentShared,
+        kIntentExclusive,
+        kShared,
+        kSIX,
+        kUpdate,
+        kExclusive
     };
 
 
@@ -468,7 +495,7 @@ namespace mongo {
          * release all resources acquired by a transaction
          * returns number of locks released
          */
-        size_t release(const Transaction* holder);
+        size_t releaseTxLocks(Transaction* holder);
 
         /**
          * called internally for deadlock
@@ -602,12 +629,19 @@ namespace mongo {
         void _push_back(LockRequest* lr);
         void _removeFromResourceQueue(LockRequest* lr);
 
+        /**
+         * called when a transaction ends (commit or abort)
+         * to release all locks acquired by the transaction
+         * calls _releaseInternal on each acquired lock
+         */
+        size_t _releaseTxLocksInternal(Transaction* holder);
+
 
         /**
-         * called by public ::release and internally by abort.
+         * called by public ::release and internally _releaseTxLocks
          * assumes caller as acquired a mutex.
          */
-        LockStatus _releaseInternal(LockRequest* lr);
+        LockStatus _releaseInternal(LockRequest* lr, bool isTxEnding=false);
 
         /**
          * called at start of public APIs, throws exception

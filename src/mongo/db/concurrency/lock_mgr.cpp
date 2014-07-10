@@ -50,6 +50,16 @@ using std::vector;
 
 namespace mongo {
 
+
+    // This parameter enables experimental document-level locking features
+    // It should be removed once full document-level locking is checked-in.
+    MONGO_EXPORT_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
+
+    // This parameter enables 2-phase locking, in which locks are held
+    // to the end of the acquiring transaction, rather than being released
+    // when their count goes to zero.
+    MONGO_EXPORT_SERVER_PARAMETER(use2PL, bool, false);
+
     /*---------- Utility functions ----------*/
 
     namespace {
@@ -62,8 +72,39 @@ namespace mongo {
             return kShared == mode;
         }
 
-        bool isCompatible(const LockMode& mode1, const LockMode& mode2) {
-            return mode1==mode2 && isShared(mode1);
+        bool isCompatible(const LockMode& acquired, const LockMode& requested) {
+            switch (acquired) {
+            case kIntentShared:
+                switch (requested) {
+                case kIntentShared: return true;
+                case kIntentExclusive: return true;
+                case kShared: return true;
+                case kSIX: return true;
+                case kUpdate: return false;
+                case kExclusive: return false;
+                default: return false;
+                }
+            case kIntentExclusive:
+                switch (requested) {
+                case kIntentShared: return true;
+                case kIntentExclusive: return true;
+                default: return false;
+                }
+            case kShared:
+                switch (requested) {
+                case kIntentShared: return true;
+                case kIntentExclusive: return false;
+                case kShared: return true;
+                case kSIX: return false;
+                case kUpdate: return true;
+                case kExclusive: return false;
+                default: return false;
+                }
+            case kSIX: return kIntentShared == requested;
+            case kUpdate: return false;
+            case kExclusive: return false;
+            default: return false;
+            }
         }
 
         bool hasConflict(const LockManager::ResourceStatus& status) {
@@ -117,7 +158,8 @@ namespace mongo {
         , _locks(NULL) { }
 
     Transaction::~Transaction() {
-        
+        if (use2PL)
+            LockManager::getSingleton().releaseTxLocks(this);
     }
 
     Transaction* Transaction::setTxIdOnce(unsigned txId) {
@@ -272,11 +314,6 @@ namespace mongo {
     }
 
     /*---------- LockManager public functions (mutex guarded) ---------*/
-
-
-    // This startup parameter enables experimental document-level locking features
-    // It should be removed once full document-level locking is checked-in.
-    MONGO_EXPORT_STARTUP_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
 
     static LockManager* _singleton = NULL;
 
@@ -519,34 +556,17 @@ namespace mongo {
         return _releaseInternal(lr);
     }
 
-#if 0
     /*
      * release all resource acquired by a transaction, returning the count
      */
-    size_t LockManager::release(Transaction* holder) {
+    size_t LockManager::releaseTxLocks(Transaction* holder) {
         {
             boost::unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown(holder);
         }
-
-        TxLockMap::iterator lockIdsHeld = _xaLocks.find(holder);
-        if (lockIdsHeld == _xaLocks.end()) { return 0; }
-        size_t numLocksReleased = 0;
-        for (set<LockId>::iterator nextLockId = lockIdsHeld->second.begin();
-             nextLockId != lockIdsHeld->second.end(); ++nextLockId) {
-            _releaseInternal(*nextLockId);
-
-            _decStatsForMode(_locks[*nextLockId]->mode);
-
-            if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
-                (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
-                _policyLock.notify_one();
-            }
-            numLocksReleased++;
-        }
-        return numLocksReleased;
+        return _releaseTxLocksInternal(holder);
     }
-#endif
+
     void LockManager::abort(Transaction* goner) {   
         {
             boost::unique_lock<boost::mutex> lk(_mutex);
@@ -603,6 +623,7 @@ namespace mongo {
         bool firstResource=true;
         result << "resources=" << ": {";
         for (unsigned slice=0; slice < kNumResourcePartitions; ++slice) {
+            result << "slice[" << slice << "]:";
             for (map<ResourceId, LockRequest*>::const_iterator nextResource = _resourceLocks[slice].begin();
                  nextResource != _resourceLocks[slice].end(); ++nextResource) {
                 if (firstResource) firstResource=false;
@@ -708,24 +729,7 @@ namespace mongo {
 
         goner->_state = Transaction::kAborted;
 
-        if (NULL == goner->_locks) {
-            // unusual, but possible to abort a transaction with no locks
-            throw AbortException();
-        }
-
-        // release all resources acquired by this transaction
-        // notifying any waiters that they can continue
-        //
-        LockRequest* nextLock = goner->_locks;
-        while (nextLock) {
-            // releaseInternal deletes nextLock, so get the next ptr here
-            LockRequest* newNextLock = nextLock->nextOfTransaction;
-            _releaseInternal(nextLock);
-            nextLock = newNextLock;
-        }
-
-        // erase aborted transaction's waiters
-        goner->_waiters.clear();
+        _releaseTxLocksInternal(goner);
 
         throw AbortException();
     }
@@ -904,7 +908,7 @@ namespace mongo {
         case kPolicyOldestTxFirst:
             for (; position; position=position->nextOnResource) {
                 if (lr->requestor < position->requestor &&
-                    (isCompatible(lr->mode, position->mode) || position->isBlocked())) {
+                    (isCompatible(position->mode, lr->mode) || position->isBlocked())) {
                     // smaller xid is older, so queue it before
                     position->insert(lr);
                     return;
@@ -916,7 +920,7 @@ namespace mongo {
             for (; position; position=position->nextOnResource) {
                 size_t nextRequestNumWaiters = position->requestor->_waiters.size();
                 if (lrNumWaiters > nextRequestNumWaiters &&
-                    (isCompatible(lr->mode, position->mode) || position->isBlocked())) {
+                    (isCompatible(position->mode,lr->mode) || position->isBlocked())) {
                     position->insert(lr);
                     return;
                 }
@@ -1148,14 +1152,20 @@ namespace mongo {
         if (resLocks == _resourceLocks[slice].end()) { return kLockResourceNotFound; }
 
         // look for an existing lock request from holder in mode
+        bool holderFound = false;
         for (LockRequest* nextLock = resLocks->second;
              nextLock; nextLock=nextLock->nextOnResource) {
-            if (nextLock->requestor == holder && nextLock->mode == mode) {
-                outLock = nextLock;
-                return kLockFound;
+            if (nextLock->requestor == holder) {
+                if (nextLock->mode == mode) {
+                    outLock = nextLock;
+                    return kLockFound;
+                }
+                else {
+                    holderFound = true;
+                }
             }
         }
-        return kLockModeNotFound;
+        return holderFound ? kLockModeNotFound : kLockResourceNotFound;
     }
 
     /*
@@ -1185,7 +1195,7 @@ namespace mongo {
             }
 
             // no conflict if we're compatible
-            if (isCompatible(mode, nextLock->mode)) continue;
+            if (isCompatible(nextLock->mode, mode)) continue;
 
             // no conflict if nextLock is blocked and we come before
             if (nextLock->isBlocked() && _comesBeforeUsingPolicy(requestor, mode, nextLock))
@@ -1198,48 +1208,66 @@ namespace mongo {
         return true;
     }
 
-    LockManager::LockStatus LockManager::_releaseInternal(LockRequest* lr) {
+    /**
+     *  release all locks acquired by a transaction, and clear set of waiters
+     */
+    size_t LockManager::_releaseTxLocksInternal(Transaction* holder) {
+        // release all resources acquired by this transaction
+        // notifying any waiters that they can continue
+        //
+        LockRequest* nextLock = holder->_locks;
+        size_t numLocksReleased = 0;
+        while (nextLock) {
+            // releaseInternal deletes nextLock, so get the next ptr here
+            LockRequest* newNextLock = nextLock->nextOfTransaction;
+            LockManager::LockStatus status = _releaseInternal(nextLock, true /* isTxEnding */ );
+            if (kLockReleased == status) {
+                numLocksReleased++;
+            }
+            nextLock = newNextLock;
+        }
+
+        // erase aborted transaction's waiters
+        holder->_waiters.clear();
+
+        return numLocksReleased;
+    }
+
+    /**
+     *  normally decrement lr's lock count, and if zero, wake up sleepers and delete lr
+     */
+    LockManager::LockStatus LockManager::_releaseInternal(LockRequest* lr, bool isTxEnding) {
         Transaction* holder = lr->requestor;
-        const LockMode& mode = lr->mode;
 
         if ((kPolicyWritersOnly == _policy && 0 == _numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _numActiveWrites())) {
             _policyLock.notify_one();
         }
 
+        
+        if (! isTxEnding) {
+            // don't decrement count when isTxEnding
+            if (--lr->count > 0) {
+                return kLockCountDecremented;
+            }
+            else if (use2PL) {
+                // delay wakeing sleepers and cleanup until isTxEnding
+                return kLockFound;
+            }
+        }
+
         LockRequest* queue = _resourceLocks[lr->slice][lr->resId];
-        if (NULL == queue) {
-            return kLockResourceNotFound;
-        }
+        invariant(queue);
 
-        bool foundLock = false;
-        bool foundResource = false;
 
-        LockRequest* nextLock = queue;
 
-        // find the position of the lock to release in the queue
-        for(; !foundLock && nextLock; nextLock=nextLock->nextOnResource) {
-            if (lr != nextLock) {
-                if (nextLock->requestor == holder) {
-                    foundResource = true;
-                }
-            }
-            else {
-                // this is our lock.
-                if (--nextLock->count > 0) { return kLockCountDecremented; }
+        // find the sleepers on this queue.  They are lock requests that follow lr
+        // on the queue, which are incompatible with lr's mode.
 
-                foundLock = true;
-                break; // don't increment nextLock again
-            }
-        }
+        LockRequest* nextLock = lr; // use nextLock to find sleepers
 
-        if (! foundLock) {
-            // can't release a lock that hasn't been acquired in the specified mode
-            return foundResource ? kLockModeNotFound : kLockResourceNotFound;
-        }
-
-        if (isShared(mode)) {
-            // skip over any remaining shared requests. they can't be waiting for us.
+        if (isShared(lr->mode)) {
+            // skip over any remaining shared requests. they can't be waiting on lr if it's shared
             for (; nextLock; nextLock=nextLock->nextOnResource) {
                 if (isExclusive(nextLock->mode)) {
                     break;
@@ -1247,11 +1275,10 @@ namespace mongo {
             }
         }
 
-        // everything left on the queue potentially conflicts with the lock just
-        // released, unless it's an up/down-grade of that lock.  So iterate, and
-        // when Transactions differ, decrement sleepCount, wake those with zero counts, and
-        // decrement their sleep counts, waking sleepers with zero counts, and
-        // cleanup state used for deadlock detection
+        // everything left on the queue potentially conflicts with lr, unless it's
+        // an up/down-grade of that lr.  So iterate, and when transactions differ
+        // decrement sleepCount, wake those with zero counts, and cleanup state
+        // used for deadlock detection
 
         for (; nextLock; nextLock=nextLock->nextOnResource) {
             LockRequest* nextSleeper = nextLock;
