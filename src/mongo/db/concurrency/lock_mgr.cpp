@@ -634,7 +634,7 @@ namespace mongo {
         size_t resIdValue = resId;
         size_t resIdHash = 0;
         size_t mask = 0xf;
-        for (unsigned ix=0; ix < 2*sizeof(size_t); ++ix) {
+        for (unsigned ix=0; ix < 2*sizeof(uint64_t); ++ix) {
             resIdHash += (resIdValue >> ix*4) & mask;
         }
         return resIdHash % kNumResourcePartitions;
@@ -814,10 +814,12 @@ namespace mongo {
             while (lr->isBlocked()) {
                 Timer timer;
                 lr->lock.wait(guard);
+                log() << "awakening" << endl;
                 _stats[lr->slice].incTimeBlocked(timer.millis());
             }
 
             queue = conflictPosition = _findQueue(lr->slice, lr->resId);
+            invariant(queue && (kShared == queue->mode || kExclusive == queue->mode));
             resourceStatus = _conflictExists(lr->requestor, lr->mode, lr->resId, lr->slice,
                                              queue, conflictPosition);
         } while (hasConflict(resourceStatus));
