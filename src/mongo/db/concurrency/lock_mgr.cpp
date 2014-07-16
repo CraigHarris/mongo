@@ -814,7 +814,6 @@ namespace mongo {
             while (lr->isBlocked()) {
                 Timer timer;
                 lr->lock.wait(guard);
-                log() << "awakening" << endl;
                 _stats[lr->slice].incTimeBlocked(timer.millis());
             }
 
@@ -1198,7 +1197,7 @@ namespace mongo {
         // find the sleepers waiting for lr.  They are lock requests that follow lr
         // on the queue, which are incompatible with lr's mode.
 
-        LockRequest* nextLock = lr;
+        LockRequest* nextLock = lr->nextOnResource;
 
         if (isShared(lr->mode)) {
             // skip over any remaining shared requests. they can't be waiting for us.
@@ -1208,6 +1207,10 @@ namespace mongo {
                 }
             }
         }
+
+        // release the lock
+        _removeFromResourceQueue(lr);
+        holder->removeLock(lr);
 
         // everything left on the queue potentially conflicts with the lock just
         // released, unless it's an up/down-grade of that lock.  So iterate, and
@@ -1250,10 +1253,6 @@ namespace mongo {
             }
         }
 #endif
-
-        // release the lock
-        _removeFromResourceQueue(lr);
-        holder->removeLock(lr);
 
         return kLockReleased;
     }
