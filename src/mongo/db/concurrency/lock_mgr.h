@@ -229,6 +229,9 @@ namespace mongo {
         // LockManager doesnt accept new requests from completed transactions
         TxState _state;
 
+        // synchronize access to _locks;
+        mutable boost::mutex _locksMutex;
+
         // For cleanup and abort processing, references all LockRequests made by a transaction
         LockRequest* _locks;
 

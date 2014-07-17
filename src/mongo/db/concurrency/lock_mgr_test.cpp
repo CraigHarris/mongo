@@ -455,7 +455,7 @@ TEST(LockManagerTest, TxDeadlock) {
     ClientTransaction a3(&lm, 6);
     ClientTransaction a4(&lm, 7);
     ClientTransaction a5(&lm, 8);
-#if 0
+#if 1
     // simple deadlock test 1
     t1.acquire(kShared, 1, ACQUIRED);
     a1.acquire(kShared, 2, ACQUIRED);

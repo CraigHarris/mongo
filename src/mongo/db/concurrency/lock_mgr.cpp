@@ -137,6 +137,7 @@ namespace mongo {
     void Transaction::setPriority(int newPriority) { _priority = newPriority; }
 
     void Transaction::removeLock(LockRequest* lr) {
+        boost::unique_lock<boost::mutex> lk(_locksMutex);
         if (lr->nextOfTransaction) {
             lr->nextOfTransaction->prevOfTransaction = lr->prevOfTransaction;
         }
@@ -152,6 +153,7 @@ namespace mongo {
     }
 
     void Transaction::addLock(LockRequest* lr) {
+        boost::unique_lock<boost::mutex> lk(_locksMutex);
         lr->nextOfTransaction = _locks;
 
         if (_locks) {
@@ -176,6 +178,7 @@ namespace mongo {
 
         result << ",locks: {";
         bool firstLock=true;
+        boost::unique_lock<boost::mutex> lk(_locksMutex);
         for (LockRequest* nextLock = _locks; nextLock; nextLock=nextLock->nextOfTransaction) {
             if (firstLock) firstLock=false;
             else result << ",";
@@ -355,6 +358,7 @@ namespace mongo {
                  nextWaiter != _systemTransaction->_waiters.end(); ++nextWaiter) {
 
                 // iterate over the locks acquired by the blocked transactions
+                boost::unique_lock<boost::mutex> lk((*nextWaiter)->_locksMutex);
                 for (LockRequest* nextLock = (*nextWaiter)->_locks; nextLock;
                      nextLock = nextLock->nextOfTransaction) {
                     if (nextLock->isBlocked() && nextLock->shouldAwake()) {
@@ -711,14 +715,10 @@ namespace mongo {
 
         goner->_state = Transaction::kAborted;
 
-        if (NULL == goner->_locks) {
-            // unusual, but possible to abort a transaction with no locks
-            throw AbortException();
-        }
-
         // release all resources acquired by this transaction
         // notifying any waiters that they can continue
         //
+        boost::unique_lock<boost::mutex> lk(goner->_locksMutex);
         LockRequest* nextLock = goner->_locks;
         while (nextLock) {
             if (slice != nextLock->slice) {
