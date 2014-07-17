@@ -718,22 +718,23 @@ namespace mongo {
         // release all resources acquired by this transaction
         // notifying any waiters that they can continue
         //
+        LockRequest* nextLock=NULL;
+        {
         boost::unique_lock<boost::mutex> lk(goner->_locksMutex);
-        LockRequest* nextLock = goner->_locks;
+        nextLock = goner->_locks;
+        }
         while (nextLock) {
+            // _releaseInternal may free nextLock
+            LockRequest* newNextLock = nextLock->nextOfTransaction;
             if (slice != nextLock->slice) {
                 boost::unique_lock<boost::mutex> lk(_resourceMutexes[nextLock->slice]);
-                // releaseInternal deletes nextLock, so get the next ptr here
-                LockRequest* newNextLock = nextLock->nextOfTransaction;
                 _releaseInternal(nextLock);
-                nextLock = newNextLock;
             }
             else {
-                // releaseInternal deletes nextLock, so get the next ptr here
-                LockRequest* newNextLock = nextLock->nextOfTransaction;
+                // we already have a lock on this slice
                 _releaseInternal(nextLock);
-                nextLock = newNextLock;
             }
+            nextLock = newNextLock;
         }
 
         // erase aborted transaction's waiters
