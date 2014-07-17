@@ -508,7 +508,7 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.release(kExclusive, 1);
     t1.wakened();
     t1.release(kShared, 1);
-#if 0
+#if 1
     // test for missing deadlocks
     t1.acquire(kShared, 1, ACQUIRED);
     t2.acquire(kShared, 2, ACQUIRED); // setup for deadlock with a4
