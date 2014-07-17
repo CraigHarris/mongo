@@ -640,7 +640,7 @@ TEST(LockManagerTest, TxUpgrade) {
     t1.wakened(); // with t3's shared lock released, t1 wakes
     t1.release(kExclusive, 1);
     t1.release(kShared, 1);
-
+#if 0
     // failure to upgrade
     t1.acquire(kShared, 1, ACQUIRED);
     a2.acquire(kShared, 1, ACQUIRED);
@@ -658,6 +658,10 @@ TEST(LockManagerTest, TxUpgrade) {
     a3.acquire(kShared, 1, ACQUIRED);
     t2.release(kShared, 1); // t1 still blocked on a3
     a3.acquire(kExclusive, 1, ABORTED);
+#else
+    a2.quit();
+    a3.quit();
+#endif
 
     t1.quit();
     t2.quit();
