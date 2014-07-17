@@ -825,9 +825,10 @@ namespace mongo {
         }
 
         _stats[lr->slice].incBlocks();
-
+#if 0
         // this loop typically executes once
         do {
+#endif
             // set up for future deadlock detection add requestor to blockers' waiters
             //
             for (LockRequest* nextBlocker = queue; nextBlocker != conflictPosition; 
@@ -850,11 +851,12 @@ namespace mongo {
                 lr->lock.wait(guard);
                 _stats[lr->slice].incTimeBlocked(timer.millis());
             }
-
+#if 0
             queue = conflictPosition = _findQueue(lr->slice, lr->resId);
             resourceStatus = _conflictExists(lr->requestor, lr->mode, lr->resId,
                                              lr->slice, conflictPosition);
         } while (hasConflict(resourceStatus));
+#endif
     }
 
     /*
