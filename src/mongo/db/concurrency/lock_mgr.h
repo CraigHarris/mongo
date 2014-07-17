@@ -577,7 +577,7 @@ namespace mongo {
                              LockRequest*& outLock) const;
 
         /**
-         *
+         * find the first lock on resId or NULL if no locks
          */
         LockRequest* _findQueue(unsigned slice, const ResourceId& resId) const;
 

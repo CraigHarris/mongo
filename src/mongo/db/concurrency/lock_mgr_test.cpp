@@ -97,7 +97,7 @@ namespace mongo {
             buffer[_writePos++].rspCode = rspCode;
             _writePos %= 10;
             _count++;
-            _empty.notify_all();
+            _empty.notify_one();
         }
 
         TxResponse* consume() {
@@ -107,7 +107,7 @@ namespace mongo {
             TxResponse* result = &buffer[_readPos++];
             _readPos %= 10;
             _count--;
-            _full.notify_all();
+            _full.notify_one();
             return result;
         }
 
@@ -142,7 +142,7 @@ public:
         _writePos++;
         _writePos %= 10;
         _count++;
-        _empty.notify_all();
+        _empty.notify_one();
     }
 
     TxRequest* consume() {
@@ -152,7 +152,7 @@ public:
         TxRequest* result = &buffer[_readPos++];
         _readPos %= 10;
         _count--;
-        _full.notify_all();
+        _full.notify_one();
         return result;
     }
 
@@ -475,7 +475,7 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.wakened(); // with a2's locks released, t2 should wake
     t2.release(kExclusive, 1);
     t2.release(kShared, 2);
-
+#if 0
     // three way deadlock
     t1.acquire(kShared, 1, ACQUIRED);
     t2.acquire(kShared, 2, ACQUIRED);
@@ -490,7 +490,9 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.release(kExclusive, 3);
     t1.release(kShared, 1);
     t1.release(kExclusive, 2);
-
+#else
+    a3.quit();
+#endif
     // test for phantom deadlocks
     t1.acquire(kShared, 1, ACQUIRED);
     t2.acquire(kExclusive, 1, BLOCKED);
@@ -502,7 +504,7 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.release(kExclusive, 1);
     t1.wakened();
     t1.release(kShared, 1);
-
+#if 0
     // test for missing deadlocks
     t1.acquire(kShared, 1, ACQUIRED);
     t2.acquire(kShared, 2, ACQUIRED); // setup for deadlock with a4
@@ -530,6 +532,10 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.wakened();
     t2.release(kShared, 2);
     t2.release(kExclusive, 1);
+#else
+    a4.quit();
+    a5.quit();
+#endif
 
     t1.quit();
     t2.quit();

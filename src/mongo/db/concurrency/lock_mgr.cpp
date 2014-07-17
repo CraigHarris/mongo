@@ -38,7 +38,6 @@
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
-#include "mongo/util/time_support.h"
 
 using std::endl;
 using std::exception;
@@ -249,7 +248,9 @@ namespace mongo {
     }
 
     bool LockRequest::shouldAwake() {
+        // no evidence of underflow, but protect here
         if (0 == sleepCount) return true;
+
         return 0 == --sleepCount;
     }
 
@@ -274,6 +275,7 @@ namespace mongo {
     }
 
     /*---------- LockManager public functions (mutex guarded) ---------*/
+
 
     // This parameter enables experimental document-level locking
     // It should be removed once full document-level locking is checked-in.
@@ -359,7 +361,7 @@ namespace mongo {
 
                         // each transaction can only be blocked by one request at time
                         // this one must be due to policy that's now changed
-                        nextLock->lock.notify_all();
+                        nextLock->lock.notify_one();
                     }
                 }
             }
@@ -541,7 +543,7 @@ namespace mongo {
 
             if ((kPolicyWritersOnly == _policy && 0 == _stats.numActiveReads()) ||
                 (kPolicyReadersOnly == _policy && 0 == _stats.numActiveWrites())) {
-                _policyLock.notify_all();
+                _policyLock.notify_one();
             }
             numLocksReleased++;
         }
@@ -850,7 +852,6 @@ namespace mongo {
             }
 
             queue = conflictPosition = _findQueue(lr->slice, lr->resId);
-            invariant(queue && (kShared == queue->mode || kExclusive == queue->mode));
             resourceStatus = _conflictExists(lr->requestor, lr->mode, lr->resId,
                                              lr->slice, conflictPosition);
         } while (hasConflict(resourceStatus));
@@ -1219,7 +1220,7 @@ namespace mongo {
 
         if ((kPolicyWritersOnly == _policy && 0 == _numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _numActiveWrites())) {
-            _policyLock.notify_all();
+            _policyLock.notify_one();
         }
 
 
@@ -1272,7 +1273,7 @@ namespace mongo {
 
             // wake up sleepy heads
             if (nextSleeper->shouldAwake()) {
-                nextSleeper->lock.notify_all();
+                nextSleeper->lock.notify_one();
             }
         }
 
