@@ -479,7 +479,7 @@ TEST(LockManagerTest, TxDeadlock) {
     a1.quit();
     a2.quit();
 #endif
-#if 0
+#if 1
     // three way deadlock
     t1.acquire(kShared, 1, ACQUIRED);
     t2.acquire(kShared, 2, ACQUIRED);
