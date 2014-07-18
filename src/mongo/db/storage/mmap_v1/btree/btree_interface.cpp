@@ -124,7 +124,7 @@ namespace mongo {
                 : _txn(txn),
                   _btree(btree),
                   _direction(direction),
-                  _bucket(btree->getHead()), // XXX this shouldn't be nessisary, but is.
+                  _bucket(btree->getHead(txn)), // XXX this shouldn't be nessisary, but is.
                   _ofs(0) {
             }
 

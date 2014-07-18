@@ -145,6 +145,13 @@ namespace mongo {
          */
         virtual int quantizeExtentSize( int size ) const;
 
+        /**
+         * @param extentLoc - a locked extent
+         * side effects: result is locked, and lock on extentLoc is released
+         */
+        DiskLoc getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
+        DiskLoc getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
+
         // see cacheHint methods
         enum HintType { Sequential, Random };
         class CacheHint {

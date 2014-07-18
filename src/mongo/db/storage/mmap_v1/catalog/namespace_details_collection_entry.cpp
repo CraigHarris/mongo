@@ -102,6 +102,7 @@ namespace mongo {
                 return false;
             }
 
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->multiKeyIndexBits);
             *txn->recoveryUnit()->writing(&_details->multiKeyIndexBits) |= mask;
         }
         else {
@@ -112,6 +113,7 @@ namespace mongo {
 
             // Invert mask: all 1's except a 0 at the ith bit
             mask = ~mask;
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->multiKeyIndexBits);
             *txn->recoveryUnit()->writing(&_details->multiKeyIndexBits) &= mask;
         }
 
@@ -136,6 +138,7 @@ namespace mongo {
                                                                const DiskLoc& newHead ) {
         int idxNo = _findIndexNumber( idxName );
         invariant( idxNo >= 0 );
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->idx( idxNo ).head));
         *txn->recoveryUnit()->writing( &_details->idx( idxNo ).head) = newHead;
     }
 
@@ -249,9 +252,13 @@ namespace mongo {
             id = &_details->idx(getTotalIndexCount(), false);
         }
 
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &id->info);
         *txn->recoveryUnit()->writing( &id->info ) = systemIndexesEntry.getValue();
+
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &id->head);
         *txn->recoveryUnit()->writing( &id->head ) = DiskLoc();
 
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->indexBuildsInProgress);
         txn->recoveryUnit()->writingInt( _details->indexBuildsInProgress ) += 1;
 
         // 3) indexes entry in .ns file
@@ -278,7 +285,11 @@ namespace mongo {
 
             // flip main meta data
             IndexDetails temp = _details->idx(idxNo);
+
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->idx(idxNo));
             *txn->recoveryUnit()->writing(&_details->idx(idxNo)) = _details->idx(toIdxNo);
+
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->idx(toIdxNo));
             *txn->recoveryUnit()->writing(&_details->idx(toIdxNo)) = temp;
 
             // flip multi key bits
@@ -290,7 +301,10 @@ namespace mongo {
             invariant( idxNo = _findIndexNumber( indexName ) );
         }
 
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->indexBuildsInProgress);
         txn->recoveryUnit()->writingInt( _details->indexBuildsInProgress ) -= 1;
+
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->nIndexes);
         txn->recoveryUnit()->writingInt( _details->nIndexes ) += 1;
 
         invariant( isIndexReady( indexName ) );
@@ -316,12 +330,15 @@ namespace mongo {
             massert( 16631, "index does not have an 'expireAfterSeconds' field", false );
             break;
         case NumberInt:
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, reinterpret_cast<int*>(nonConstPtr));
             *txn->recoveryUnit()->writing(reinterpret_cast<int*>(nonConstPtr)) = newExpireSeconds;
             break;
         case NumberDouble:
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, reinterpret_cast<double*>(nonConstPtr));
             *txn->recoveryUnit()->writing(reinterpret_cast<double*>(nonConstPtr)) = newExpireSeconds;
             break;
         case NumberLong:
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, reinterpret_cast<long long*>(nonConstPtr));
             *txn->recoveryUnit()->writing(reinterpret_cast<long long*>(nonConstPtr)) = newExpireSeconds;
             break;
         default:

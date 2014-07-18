@@ -49,8 +49,8 @@ namespace mongo {
         HeadManagerImpl(IndexCatalogEntry* ice) : _catalogEntry(ice) { }
         virtual ~HeadManagerImpl() { }
 
-        const DiskLoc getHead() const {
-            return _catalogEntry->head();
+        const DiskLoc getHead(OperationContext* txn) const {
+            return _catalogEntry->head(txn);
         }
 
         void setHead(OperationContext* txn, const DiskLoc newHead) {
@@ -94,7 +94,7 @@ namespace mongo {
         _isMultikey = _catalogIsMultikey();
     }
 
-    const DiskLoc& IndexCatalogEntry::head() const {
+    const DiskLoc& IndexCatalogEntry::head( OperationContext* txn ) const {
         DEV verify( _head == _catalogHead() );
         return _head;
     }
@@ -144,7 +144,7 @@ namespace mongo {
         return _collection->isIndexReady( _descriptor->indexName() );
     }
 
-    DiskLoc IndexCatalogEntry::_catalogHead() const {
+    DiskLoc IndexCatalogEntry::_catalogHead( OperationContext* txn ) const {
         return _collection->getIndexHead( _descriptor->indexName() );
     }
 

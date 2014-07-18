@@ -45,21 +45,35 @@ namespace mongo {
                                                              const CollectionScanParams::Direction& dir)
         : _txn(txn), _curr(start), _recordStore(collection), _direction(dir) {
 
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = _txn->getTransaction();
+
         if (_curr.isNull()) {
 
             const ExtentManager* em = _recordStore->_extentManager;
 
-            if ( _recordStore->details()->firstExtent(txn).isNull() ) {
-                // nothing in the collection
-                verify( _recordStore->details()->lastExtent(txn).isNull() );
-            }
-            else if (CollectionScanParams::FORWARD == _direction) {
+
+            if (CollectionScanParams::FORWARD == _direction) {
+                DiskLoc firstExtentLoc = _recordStore->details()->firstExtent(_txn);
+                if ( firstExtentLoc.isNull() ) {
+                    // nothing in the collection
+                    DiskLoc lastExtentLoc = _recordStore->details()->lastExtent(_txn);
+                    verify( lastExtentLoc.isNull() );
+
+                    // don't need to release locks on null first/last extent locs
+                    return;
+                }
 
                 // Find a non-empty extent and start with the first record in it.
-                Extent* e = em->getExtent( _recordStore->details()->firstExtent(txn) );
+                Extent* e = em->getExtent( firstExtentLoc );
 
+                DiskLoc oldExtentLoc = firstExtentLoc;
                 while (e->firstRecord.isNull() && !e->xnext.isNull()) {
+                    DiskLoc newExtentLoc = e->xnext;
+                    lm.acquire( tx, kShared, newExtentLoc );
                     e = em->getExtent( e->xnext );
+                    lm.release( tx, kShared, oldExtentLoc );
+                    oldExtentLoc = newExtentLoc;
                 }
 
                 // _curr may be set to DiskLoc() here if e->lastRecord isNull but there is no
@@ -69,12 +83,20 @@ namespace mongo {
             else {
                 // Walk backwards, skipping empty extents, and use the last record in the first
                 // non-empty extent we see.
-                Extent* e = em->getExtent( _recordStore->details()->lastExtent(txn) );
+                DiskLoc lastExtentLoc = _recordStore->details()->lastExtent(_txn);
+                if ( lastExtentLoc.isNull() ) { return; }
+
+                Extent* e = em->getExtent( lastExtentLoc );
 
                 // TODO ELABORATE
                 // Does one of e->lastRecord.isNull(), e.firstRecord.isNull() imply the other?
+                DiskLoc oldExtentLoc = lastExtentLoc;
                 while (e->lastRecord.isNull() && !e->xprev.isNull()) {
+                    DiskLoc newExtentLoc = e->xprev;
+                    lm.acquire( tx, kShared, newExtentLoc );
                     e = em->getExtent( e->xprev );
+                    lm.release( tx, kShared, oldExtentLoc );
+                    oldExtentLoc = newExtentLoc;
                 }
 
                 // _curr may be set to DiskLoc() here if e->lastRecord isNull but there is no
@@ -82,6 +104,7 @@ namespace mongo {
                 _curr = e->lastRecord;
             }
         }
+        lm.acquire(tx, kShared, _curr);
     }
 
     bool SimpleRecordStoreV1Iterator::isEOF() {
@@ -112,6 +135,7 @@ namespace mongo {
             // We don't care about the return of getNext so much as the side effect of moving _curr
             // to the 'next' thing.
             getNext();
+            LockManager::getSingleton().release( _txn->getTransaction(), kShared, dl );
         }
     }
 

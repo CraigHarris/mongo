@@ -47,10 +47,10 @@ namespace mongo {
     public:
         virtual ~RecordStoreV1MetaData(){}
 
-        virtual const DiskLoc& capExtent() const = 0;
+        virtual const DiskLoc& capExtent( OperationContext* txn ) const = 0;
         virtual void setCapExtent( OperationContext* txn, const DiskLoc& loc ) = 0;
 
-        virtual const DiskLoc& capFirstNewRecord() const = 0;
+        virtual const DiskLoc& capFirstNewRecord( OperationContext* txn ) const = 0;
         virtual void setCapFirstNewRecord( OperationContext* txn, const DiskLoc& loc ) = 0;
 
         bool capLooped() const { return capFirstNewRecord().isValid(); }

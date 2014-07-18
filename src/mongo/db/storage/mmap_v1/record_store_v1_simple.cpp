@@ -204,6 +204,8 @@ namespace mongo {
         if ( loc.isNull() )
             return loc;
 
+        lm.acquire(tx, kShared, loc);
+
         // determine if we should chop up
 
         DeletedRecord *r = drec(loc);
@@ -254,12 +256,9 @@ namespace mongo {
     StatusWith<DiskLoc> SimpleRecordStoreV1::allocRecord( OperationContext* txn,
                                                           int lengthWithHeaders,
                                                           bool enforceQuota ) {
-        LockManager& lm = LockManager::getSingleton();
-        Transaction* tx = txn->getTransaction();
 
         DiskLoc loc = _allocFromExistingExtents( txn, lengthWithHeaders );
         if ( !loc.isNull() ) {
-            lm.acquire( tx, kExclusive, loc );
             return StatusWith<DiskLoc>( loc );
         }
 
@@ -273,7 +272,6 @@ namespace mongo {
         loc = _allocFromExistingExtents( txn, lengthWithHeaders );
         if ( !loc.isNull() ) {
             // got on first try
-            lm.acquire( tx, kExclusive, loc );
             return StatusWith<DiskLoc>( loc );
         }
 
@@ -291,7 +289,6 @@ namespace mongo {
 
             loc = _allocFromExistingExtents( txn, lengthWithHeaders );
             if ( ! loc.isNull() ) {
-                lm.acquire( tx, kExclusive, loc );
                 return StatusWith<DiskLoc>( loc );
             }
         }

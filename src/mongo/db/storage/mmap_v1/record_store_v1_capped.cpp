@@ -107,7 +107,7 @@ namespace mongo {
         { // do allocation
 
             // signal done allocating new extents.
-            if ( !cappedLastDelRecLastExtent().isValid() )
+            if ( !cappedLastDelRecLastExtent(txn).isValid() )
                 setLastDelRecLastExtent( txn, DiskLoc() );
 
             invariant( lenToAlloc < 400000000 );
@@ -265,7 +265,7 @@ namespace mongo {
         vector<DiskLoc> drecs;
 
         // Pull out capExtent's DRs from deletedList
-        DiskLoc i = cappedFirstDeletedInCurExtent();
+        DiskLoc i = cappedFirstDeletedInCurExtent(txn);
         for (; !i.isNull() && inCapExtent( i ); i = deletedRecordFor( i )->nextDeleted() ) {
             DDD( "\t" << i );
             drecs.push_back( i );
@@ -307,19 +307,19 @@ namespace mongo {
 
     }
 
-    const DiskLoc &CappedRecordStoreV1::cappedFirstDeletedInCurExtent() const {
-        if ( cappedLastDelRecLastExtent().isNull() )
+    const DiskLoc &CappedRecordStoreV1::cappedFirstDeletedInCurExtent(OperationContext* txn) const {
+        if ( cappedLastDelRecLastExtent(txn).isNull() )
             return cappedListOfAllDeletedRecords();
         else
-            return drec(cappedLastDelRecLastExtent())->nextDeleted();
+            return drec(cappedLastDelRecLastExtent(txn))->nextDeleted();
     }
 
     void CappedRecordStoreV1::setFirstDeletedInCurExtent( OperationContext* txn,
                                                           const DiskLoc& loc ) {
-        if ( cappedLastDelRecLastExtent().isNull() )
+        if ( cappedLastDelRecLastExtent(txn).isNull() )
             setListOfAllDeletedRecords( txn, loc );
         else
-            *txn->recoveryUnit()->writing( &drec(cappedLastDelRecLastExtent())->nextDeleted() ) = loc;
+            *txn->recoveryUnit()->writing( &drec(cappedLastDelRecLastExtent(txn))->nextDeleted() ) = loc;
     }
 
     void CappedRecordStoreV1::cappedCheckMigrate(OperationContext* txn) {
@@ -333,7 +333,7 @@ namespace mongo {
                     continue;
                 DiskLoc last = first;
                 for (; !drec(last)->nextDeleted().isNull(); last = drec(last)->nextDeleted() );
-                *txn->recoveryUnit()->writing(&drec(last)->nextDeleted()) = cappedListOfAllDeletedRecords();
+                *txn->recoveryUnit()->writing(&drec(last)->nextDeleted()) = cappedListOfAllDeletedRecords(txn);
                 setListOfAllDeletedRecords( txn, first );
                 _details->setDeletedListEntry(txn, i, DiskLoc());
             }
@@ -372,7 +372,7 @@ namespace mongo {
         if ( _details->capExtent() == _details->lastExtent(txn) )
             setLastDelRecLastExtent( txn, DiskLoc() );
         else {
-            DiskLoc i = cappedFirstDeletedInCurExtent();
+            DiskLoc i = cappedFirstDeletedInCurExtent(txn);
             for (; !i.isNull() && nextIsInCapExtent( i ); i = drec(i)->nextDeleted() );
             setLastDelRecLastExtent( txn, i );
         }
@@ -389,8 +389,8 @@ namespace mongo {
     }
 
     DiskLoc CappedRecordStoreV1::__capAlloc( OperationContext* txn, int len ) {
-        DiskLoc prev = cappedLastDelRecLastExtent();
-        DiskLoc i = cappedFirstDeletedInCurExtent();
+        DiskLoc prev = cappedLastDelRecLastExtent(txn);
+        DiskLoc i = cappedFirstDeletedInCurExtent(txn);
         DiskLoc ret;
         for (; !i.isNull() && inCapExtent( i ); prev = i, i = drec(i)->nextDeleted() ) {
             // We need to keep at least one DR per extent in cappedListOfAllDeletedRecords(),
@@ -426,7 +426,7 @@ namespace mongo {
             // until the last deleted record for the extent prior
             // to the new capExtent is found.  Then set
             // cappedLastDelRecLastExtent() to that deleted record.
-            DiskLoc i = cappedListOfAllDeletedRecords();
+            DiskLoc i = cappedListOfAllDeletedRecords(txn);
             for( ;
                  !drec(i)->nextDeleted().isNull() &&
                      !inCapExtent( drec(i)->nextDeleted() );
@@ -444,7 +444,13 @@ namespace mongo {
                                                   const char* ns,
                                                   DiskLoc end,
                                                   bool inclusive) {
-        invariant( cappedLastDelRecLastExtent().isValid() );
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+        {
+            DiskLoc lastExt = cappedLastDelRecLastExtent(txn);
+            invariant( lastExt.isValid() );
+            lm.release( tx, kShared, lastExt );
+        }
 
         // We iteratively remove the newest document until the newest document
         // is 'end', then we remove 'end' if requested.
@@ -457,6 +463,7 @@ namespace mongo {
             txn->recoveryUnit()->commitIfNeeded();
             // 'curr' will point to the newest document in the collection.
             DiskLoc curr = theCapExtent()->lastRecord;
+            lm.acquire( tx, kShared, curr );
             invariant( !curr.isNull() );
             if ( curr == end ) {
                 if ( inclusive ) {
@@ -519,12 +526,12 @@ namespace mongo {
                 // In this case we will keep the initial capExtent and specify
                 // that all records contained within are on the fresh rather than
                 // stale side of the extent.
-                DiskLoc newCapExtent = _details->capExtent();
+                DiskLoc newCapExtent = _details->capExtent(txn);
                 do {
                     // Find the previous extent, looping if necessary.
                     newCapExtent = ( newCapExtent == _details->firstExtent(txn) ) ?
                         _details->lastExtent(txn) :
-                        _extentManager->getExtent(newCapExtent)->xprev;
+                        _extentManager->getPrevExtent(txn, newCapExtent);
                     _extentManager->getExtent(newCapExtent)->assertOk();
                 }
                 while ( _extentManager->getExtent(newCapExtent)->firstRecord.isNull() );
@@ -541,7 +548,9 @@ namespace mongo {
         }
     }
 
-    const DiskLoc& CappedRecordStoreV1::cappedListOfAllDeletedRecords() const {
+    const DiskLoc& CappedRecordStoreV1::cappedListOfAllDeletedRecords(OperationContext* txn) const {
+        LockManager::getSingleton().acquire(txn->getTransaction(),
+                                            kShared, _details->deletedListEntry(0);
         return _details->deletedListEntry(0);
     }
 
@@ -550,7 +559,9 @@ namespace mongo {
         return _details->setDeletedListEntry(txn, 0, loc);
     }
 
-    const DiskLoc& CappedRecordStoreV1::cappedLastDelRecLastExtent() const {
+    const DiskLoc& CappedRecordStoreV1::cappedLastDelRecLastExtent( OperationContext* txn ) const {
+        LockManager::getSingleton().acquire(txn->getTransaction(),
+                                            kShared, _details->deletedListEntry(1));
         return _details->deletedListEntry(1);
     }
 
@@ -564,23 +575,33 @@ namespace mongo {
     }
 
     void CappedRecordStoreV1::addDeletedRec( OperationContext* txn, const DiskLoc& dloc ) {
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+
+        lm.acquire(tx, kExclusive, dloc);
         DeletedRecord* d = txn->recoveryUnit()->writing( drec( dloc ) );
 
         DEBUGGING log() << "TEMP: add deleted rec " << dloc.toString() << ' ' << hex << d->extentOfs() << endl;
-        if ( !cappedLastDelRecLastExtent().isValid() ) {
+        if ( !cappedLastDelRecLastExtent(txn).isValid() ) {
             // Initial extent allocation.  Insert at end.
             d->nextDeleted() = DiskLoc();
-            if ( cappedListOfAllDeletedRecords().isNull() )
+            if ( cappedListOfAllDeletedRecords(txn).isNull() )
                 setListOfAllDeletedRecords( txn, dloc );
             else {
-                DiskLoc i = cappedListOfAllDeletedRecords();
-                for (; !drec(i)->nextDeleted().isNull(); i = drec(i)->nextDeleted() )
-                    ;
+                DiskLoc i = cappedListOfAllDeletedRecords(txn);
+                while (!drec(i)->nextDeleted().isNull()) {
+                    DiskLoc newDL = drec(i)->nextDeleted();
+                    lm.acquire(tx, kShared, newDL);
+                    lm.release(tx, kShared, i);
+                    i = newDL;
+                }
+                lm.acquire(tx, kExclusive, i);
+                lm.release(tx, kShared, i);
                 *txn->recoveryUnit()->writing(&drec(i)->nextDeleted()) = dloc;
             }
         }
         else {
-            d->nextDeleted() = cappedFirstDeletedInCurExtent();
+            d->nextDeleted() = cappedFirstDeletedInCurExtent(txn);
             setFirstDeletedInCurExtent( txn, dloc );
             // always compact() after this so order doesn't matter
         }
@@ -596,14 +617,19 @@ namespace mongo {
     vector<RecordIterator*> CappedRecordStoreV1::getManyIterators( OperationContext* txn ) const {
         OwnedPointerVector<RecordIterator> iterators;
 
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+
         if (!_details->capLooped()) {
             // if we haven't looped yet, just spit out all extents (same as non-capped impl)
             const Extent* ext;
-            for (DiskLoc extLoc = details()->firstExtent(txn); !extLoc.isNull(); extLoc = ext->xnext) {
+            for (DiskLoc extLoc = details()->firstExtent(txn);
+                 !extLoc.isNull(); extLoc = _extentManager->getNextExtent(txn, extLoc)) {
                 ext = _getExtent(txn, extLoc);
                 if (ext->firstRecord.isNull())
                     continue;
 
+                lm.acquire(tx, kShared, ext->firstRecord);
                 iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(txn,
                                                                                ext->firstRecord,
                                                                                this));
@@ -612,7 +638,7 @@ namespace mongo {
         else {
             // if we've looped we need to iterate the extents, starting and ending with the
             // capExtent
-            const DiskLoc capExtent = details()->capExtent();
+            const DiskLoc capExtent = details()->capExtent(txn);
             invariant(!capExtent.isNull());
             invariant(capExtent.isValid());
 
@@ -620,30 +646,42 @@ namespace mongo {
             DiskLoc extLoc = capExtent;
             {
                 const Extent* ext = _getExtent(txn, extLoc);
-                if (ext->firstRecord != details()->capFirstNewRecord()) {
+                DiskLoc capFirstNewRecord = details()->capFirstNewRecord(txn);
+                if (ext->firstRecord != capFirstNewRecord) {
                     // this means there is old data in capExtent
+
+                    lm.acquire(tx, kShared, ext->firstRecord);
                     iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(txn,
                                                                                    ext->firstRecord,
                                                                                    this));
                 }
+                lm.release(tx, kShared, capFirstNewRecord);
 
-                extLoc = ext->xnext.isNull() ? details()->firstExtent(txn) : ext->xnext;
+                DiskLoc oldExtLoc = extLoc;
+                extLoc = ext->xnext.isNull()
+                    ? details()->firstExtent(txn)
+                    : _extentManager->getNextExtent(txn, extLoc);
+                lm.release(tx, kShared, oldExtLoc);
             }
 
             // Next handle all the other extents
             while (extLoc != capExtent) {
                 const Extent* ext = _getExtent(txn, extLoc);
+                lm.acquire(tx, kShared, ext->firstRecord);
                 iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(txn,
                                                                                ext->firstRecord,
                                                                                this));
-
-                extLoc = ext->xnext.isNull() ? details()->firstExtent(txn) : ext->xnext;
+                DiskLoc oldExtLoc = extLoc;
+                extLoc = ext->xnext.isNull()
+                    ? details()->firstExtent(txn)
+                    : _extentManager->getNextExtent(txn, extLoc);
+                lm.release(tx, kShared, oldExtLoc);
             }
 
             // Finally handle the "new" data in the capExtent
             iterators.push_back(
                 new RecordStoreV1Base::IntraExtentIterator(txn,
-                                                           details()->capFirstNewRecord(),
+                                                           details()->capFirstNewRecord(txn),
                                                            this));
         }
 
@@ -665,7 +703,7 @@ namespace mongo {
             int i = 0;
             for ( DiskLoc e = _details->firstExtent(txn);
                   !e.isNull();
-                  e = _extentManager->getExtent( e )->xnext, ++i ) {
+                  e = _extentManager->getNextExtent( txn, e ), ++i ) {
                 buf << "  Extent " << i;
                 if ( e == _details->capExtent() )
                     buf << " (capExtent)";
@@ -691,12 +729,15 @@ namespace mongo {
                                               const DiskLoc &startExtent ) const {
         for (DiskLoc i = startExtent.isNull() ? _details->firstExtent(txn) : startExtent;
                 !i.isNull();
-             i = _extentManager->getExtent( i )->xnext ) {
+             i = _extentManager->getNextExtent( txn, i )) {
 
             Extent* e = _extentManager->getExtent( i );
 
-            if ( !e->firstRecord.isNull() )
+            if ( !e->firstRecord.isNull() ) {
+                LockManager::getSingleton().acquire( txn->getTransaction(), kShared, e->lastRecord );
+                LockManager::getSingleton().release( txn->getTransaction(), kShared, i );
                 return e->firstRecord;
+            }
         }
         return DiskLoc();
     }
@@ -705,11 +746,14 @@ namespace mongo {
                                              const DiskLoc &startExtent ) const {
         for (DiskLoc i = startExtent.isNull() ? _details->lastExtent(txn) : startExtent;
                 !i.isNull();
-             i = _extentManager->getExtent( i )->xprev ) {
+             i = _extentManager->getPrevExtent( txn, i )) {
 
             Extent* e = _extentManager->getExtent( i );
-            if ( !e->lastRecord.isNull() )
+            if ( !e->lastRecord.isNull() ) {
+                LockManager::getSingleton().acquire( txn->getTransaction(), kShared, e->lastRecord );
+                LockManager::getSingleton().release( txn->getTransaction(), kShared, i );
                 return e->lastRecord;
+            }
         }
         return DiskLoc();
     }

@@ -69,7 +69,7 @@ namespace mongo {
 
         /// ---------------------
 
-        const DiskLoc& head() const;
+        const DiskLoc& head( OperationContext* txn ) const;
 
         void setHead( OperationContext* txn, DiskLoc newHead );
 

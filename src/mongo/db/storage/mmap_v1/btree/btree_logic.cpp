@@ -255,6 +255,7 @@ namespace mongo {
     template <class BtreeLayout>
     typename BtreeLogic<BtreeLayout>::BucketType*
     BtreeLogic<BtreeLayout>::btreemod(OperationContext* txn, BucketType* bucket) {
+        LockManager::getSingleton().acquire( txn->getTransaction(), kExclusive, bucket );
         txn->recoveryUnit()->writingPtr(bucket, BtreeLayout::BucketSize);
         return bucket;
     }
@@ -441,12 +442,16 @@ namespace mongo {
 
         invariant(getBucket(bucketLoc) == bucket);
 
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+
         {
             // declare that we will write to [k(keypos),k(n)]
             char* start = reinterpret_cast<char*>(&getKeyHeader(bucket, keypos));
             char* end = reinterpret_cast<char*>(&getKeyHeader(bucket, bucket->n + 1));
 
             // Declare that we will write to [k(keypos),k(n)]
+            lm.acquire( tx, kExclusive, start );
             txn->recoveryUnit()->writingPtr(start, end - start);
         }
 
@@ -457,6 +462,7 @@ namespace mongo {
         }
 
         size_t writeLen = sizeof(bucket->emptySize) + sizeof(bucket->topSize) + sizeof(bucket->n);
+        lm.acquire( tx, kExclusive, &bucket->emptySize );
         txn->recoveryUnit()->writingPtr(&bucket->emptySize, writeLen);
         bucket->emptySize -= sizeof(KeyHeaderType);
         bucket->n++;
@@ -467,6 +473,7 @@ namespace mongo {
         kn.recordLoc = recordLoc;
         kn.setKeyDataOfs((short) _alloc(bucket, key.dataSize()));
         char *p = dataAt(bucket, kn.keyDataOfs());
+        lm.acquire( tx, kExclusive, p );
         txn->recoveryUnit()->writingPtr(p, key.dataSize());
         memcpy(p, key.data(), key.dataSize());
         return true;
@@ -1098,7 +1105,7 @@ namespace mongo {
         // XXX should lock result of getRootLoc inside getRootLoc
         SharedResourceLock(txn->getTransaction(), getRootLoc());
 
-        DiskLoc bucket = _locate(txn, getRootLoc(), key, &position, &found, minDiskLoc, 1);
+        DiskLoc bucket = _locate(txn, getRootLoc(txn), key, &position, &found, minDiskLoc, 1);
 
         while (!bucket.isNull()) {
             FullKey fullKey = getFullKey(getBucket(bucket), position);
@@ -1131,9 +1138,9 @@ namespace mongo {
         bool found;
 
         // XXX should lock root inside getRootLoc
-        SharedResourceLock(txn->getTransaction(), getRootLoc());
+        SharedResourceLock(txn->getTransaction(), getRootLoc(txn));
 
-        DiskLoc posLoc = _locate(txn, getRootLoc(), key, &position, &found, minDiskLoc, 1);
+        DiskLoc posLoc = _locate(txn, getRootLoc(txn), key, &position, &found, minDiskLoc, 1);
 
         while (!posLoc.isNull()) {
             FullKey fullKey = getFullKey(getBucket(posLoc), position);
@@ -1284,14 +1291,17 @@ namespace mongo {
     void BtreeLogic<BtreeLayout>::delBucket(OperationContext* txn,
                                             BucketType* bucket,
                                             const DiskLoc bucketLoc) {
-        invariant(bucketLoc != getRootLoc());
+        invariant(bucketLoc != getRootLoc(txn));
 
         _bucketDeletion->aboutToDeleteBucket(bucketLoc);
 
-        // lock the parent for writing. XXX could just lock the key in the parent
-        ExclusiveResourceLock parentLock(txn->getTransaction(), bucket->parent);
+        // lock the parent for writing. 
+        SharedResourceLock parentLock(txn->getTransaction(), bucket->parent);
         BucketType* p = getBucket(bucket->parent);
         int parentIdx = indexInParent(txn, bucket, bucketLoc);
+        LockManager::getSingleton().acquire(txn->getTransaction(),
+                                            kExclusive,
+                                            &childLocForPos(p, parentIdx));
         *txn->recoveryUnit()->writing(&childLocForPos(p, parentIdx)) = DiskLoc();
         deallocBucket(txn, bucket, bucketLoc);
     }
@@ -1463,21 +1473,27 @@ namespace mongo {
                                                        BucketType* bucket,
                                                        const DiskLoc bucketLoc) {
 
+        LockManager& lm = LockManager::getSingleton();
+        Transaction* tx = txn->getTransaction();
+
         invariant(bucket->n == 0 && !bucket->nextChild.isNull() );
         if (bucket->parent.isNull()) {
-            invariant(getRootLoc() == bucketLoc);
+            invariant(getRootLoc(txn) == bucketLoc);
             _headManager->setHead(txn, bucket->nextChild);
         }
         else {
-            ExclusiveResourceLock parentLock(txn->getTransaction(), bucket->parent);
+            SharedResourceLock parentLock(txn->getTransaction(), bucket->parent);
             BucketType* parentBucket = getBucket(bucket->parent);
             int bucketIndexInParent = indexInParent(txn, bucket, bucketLoc);
+
+            lm.acquire(tx, kExclusive, &childLocForPos(parentBucket, bucketIndexInParent));
             *txn->recoveryUnit()->writing(&childLocForPos(parentBucket, bucketIndexInParent)) =
                 bucket->nextChild;
         }
 
         {
-            ExclusiveResourceLock childLock(txn->getTransaction(), bucket->nextChild);
+            SharedResourceLock childLock(txn->getTransaction(), bucket->nextChild);
+            lm.acquire(tx, kExclusive, &getBucket(bucket->nextChild)->parent);
             *txn->recoveryUnit()->writing(&getBucket(bucket->nextChild)->parent) = bucket->parent;
         }
         _bucketDeletion->aboutToDeleteBucket(bucketLoc);
@@ -1844,23 +1860,23 @@ namespace mongo {
 
         // acquire a read lock on the btree root node.  this will be released in _locate
         // after locking the appropriate child bucket
-        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, getRootLoc());
+        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, getRootLoc(txn));
 
         // _locate will acquire a shared/read lock on loc. Locks on the ancestors of loc
         // will have been released.
-        DiskLoc loc = _locate(txn, getRootLoc(), ownedKey, &pos, &found, recordLoc, 1);
+        DiskLoc loc = _locate(txn, getRootLoc(txn), ownedKey, &pos, &found, recordLoc, 1);
         if (found) {
             ExclusiveResourceLock(txn->getTransaction(), loc);
             BucketType* bucket = btreemod(txn, getBucket(loc));
             delKeyAtPos(txn, bucket, loc, pos);
-            assertValid(_indexName, getRoot(), _ordering);
+            assertValid(_indexName, getRoot(txn), _ordering);
         }
         return found;
     }
 
     template <class BtreeLayout>
     bool BtreeLogic<BtreeLayout>::isEmpty() const {
-        return getRoot()->n == 0;
+        return getRoot(txn)->n == 0;
     }
 
     /**
@@ -1883,7 +1899,8 @@ namespace mongo {
         for (int i = firstIndex; i <= lastIndex; i++) {
             const DiskLoc childLoc = childLocForPos(bucket, i);
             if (!childLoc.isNull()) {
-                ExclusiveResourceLock childLock(txn->getTransaction(), childLoc);
+                LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive
+                                                     &getBucket(childLoc)->parent);
                 *txn->recoveryUnit()->writing(&getBucket(childLoc)->parent) = bucketLoc;
             }
         }
@@ -1951,7 +1968,7 @@ namespace mongo {
             invariant(kn->prevChildBucket == leftChildLoc);
             *txn->recoveryUnit()->writing(&bucket->nextChild) = rightChildLoc;
             if (!rightChildLoc.isNull()) {
-                ExclusiveResourceLock parentLock(txn->getTransaction(), getBucket(rightChildLoc)->parent);
+                ExclusiveResourceLock parentLock(txn->getTransaction(), &getBucket(rightChildLoc)->parent);
                 *txn->recoveryUnit()->writing(&getBucket(rightChildLoc)->parent) = bucketLoc;
             }
         }
@@ -1965,7 +1982,7 @@ namespace mongo {
             // Intent declared in basicInsert()
             *const_cast<LocType*>(pc) = rightChildLoc;
             if (!rightChildLoc.isNull()) {
-                ExclusiveResourceLock parentLock(txn->getTransaction(), getBucket(rightChildLoc)->parent);
+                ExclusiveResourceLock parentLock(txn->getTransaction(), &getBucket(rightChildLoc)->parent);
                 *txn->recoveryUnit()->writing(&getBucket(rightChildLoc)->parent) = bucketLoc;
             }
         }
@@ -1983,7 +2000,6 @@ namespace mongo {
 
         int split = splitPos(bucket, keypos);
         DiskLoc rLoc = _addBucket(txn);
-        ExclusiveResourceLock rLocLock(txn->getTransaction(), rLoc);
         BucketType* r = btreemod(txn, getBucket(rLoc));
 
         for (int i = split + 1; i < bucket->n; i++) {
@@ -2017,6 +2033,7 @@ namespace mongo {
         else {
             // set this before calling _insert - if it splits it will do fixParent() logic and
             // change the value.
+            ExclusiveResourceLock(txn->getTransaction(), &getBucket(rLoc)->parent);
             *txn->recoveryUnit()->writing(&getBucket(rLoc)->parent) = bucket->parent;
             _insert(txn,
                     getBucket(bucket->parent),
@@ -2054,7 +2071,7 @@ namespace mongo {
 
     template <class BtreeLayout>
     Status BtreeLogic<BtreeLayout>::initAsEmpty(OperationContext* txn) {
-        if (!_headManager->getHead().isNull()) {
+        if (!_headManager->getHead(txn).isNull()) {
             return Status(ErrorCodes::InternalError, "index already initialized");
         }
 
@@ -2099,10 +2116,14 @@ namespace mongo {
     }
 
     template <class BtreeLayout>
-    DiskLoc BtreeLogic<BtreeLayout>::getDiskLoc(const DiskLoc& bucketLoc, const int keyOffset) const {
+    DiskLoc BtreeLogic<BtreeLayout>::getDiskLoc(OperationContext* txn,
+                                                const DiskLoc& bucketLoc,
+                                                const int keyOffset) const {
         invariant(!bucketLoc.isNull());
         BucketType* bucket = getBucket(bucketLoc);
-        return getKeyHeader(bucket, keyOffset).recordLoc;
+        KeyHeaderType& kht = getKeyHeader(bucket, keyOffset);
+        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, kht.recordLoc);
+        return kht.recordLoc;
     }
 
     template <class BtreeLayout>
@@ -2138,7 +2159,7 @@ namespace mongo {
                                                     bool strict,
                                                     bool dumpBuckets,
                                                     unsigned depth) {
-        return _fullValidate(txn, getRootLoc(), unusedCount, strict, dumpBuckets, depth);
+        return _fullValidate(txn, getRootLoc(txn), unusedCount, strict, dumpBuckets, depth);
     }
 
     template <class BtreeLayout>
@@ -2283,15 +2304,15 @@ namespace mongo {
         }
 
         Status status = _insert(txn,
-                                getRoot(),
-                                getRootLoc(),
+                                getRoot(txn),
+                                getRootLoc(txn),
                                 key,
                                 value,
                                 dupsAllowed,
                                 DiskLoc(),
                                 DiskLoc());
 
-        assertValid(_indexName, getRoot(), _ordering);
+        assertValid(_indexName, getRoot(txn), _ordering);
         return status;
     }
 
@@ -2319,6 +2340,7 @@ namespace mongo {
                 LOG(4) << "btree _insert: reusing unused key" << endl;
                 massert(17433, "_insert: reuse key but lchild is not null", leftChild.isNull());
                 massert(17434, "_insert: reuse key but rchild is not null", rightChild.isNull());
+                ExclusiveResourceLock(txn->getTransaction(), &header);
                 txn->recoveryUnit()->writing(&header)->setUsed();
                 return Status::OK();
             }
@@ -2335,7 +2357,6 @@ namespace mongo {
             return Status::OK();
         }
         else {
-            SharedResourceLock childLock(txn->getTransaction(), childLoc);
             return _insert(txn,
                            getBucket(childLoc),
                            childLoc,
@@ -2446,7 +2467,7 @@ namespace mongo {
         bool found = false;
         KeyDataOwnedType owned(key);
 
-        *bucketLocOut = _locate(txn, getRootLoc(), owned, posOut, &found, recordLoc, direction);
+        *bucketLocOut = _locate(txn, getRootLoc(txn), owned, posOut, &found, recordLoc, direction);
 
         if (!found) {
             return false;
@@ -2540,14 +2561,14 @@ namespace mongo {
 
     template <class BtreeLayout>
     typename BtreeLogic<BtreeLayout>::BucketType*
-    BtreeLogic<BtreeLayout>::getRoot() const {
-        return getBucket(_headManager->getHead());
+    BtreeLogic<BtreeLayout>::getRoot(OperationContext* txn) const {
+        return getBucket(_headManager->getHead(txn));
     }
 
     template <class BtreeLayout>
     DiskLoc
-    BtreeLogic<BtreeLayout>::getRootLoc() const {
-        return _headManager->getHead();
+    BtreeLogic<BtreeLayout>::getRootLoc(OperationContext* txn) const {
+        return _headManager->getHead(txn);
     }
 
     template <class BtreeLayout>

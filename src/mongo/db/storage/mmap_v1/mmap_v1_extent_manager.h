@@ -150,6 +150,13 @@ namespace mongo {
 
         virtual CacheHint* cacheHint( const DiskLoc& extentLoc, const HintType& hint );
 
+        /**
+         * @param extentLoc - a locked extent
+         * side effects: result is locked, and lock on extentLoc is released
+         */
+        DiskLoc getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
+        DiskLoc getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
+
     private:
 
         /**

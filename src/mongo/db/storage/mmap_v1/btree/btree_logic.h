@@ -180,11 +180,13 @@ namespace mongo {
                                bool dumpBuckets,
                                unsigned depth);
 
-        DiskLoc getDiskLoc(const DiskLoc& bucketLoc, const int keyOffset) const;
+        DiskLoc getDiskLoc(OperationContext* txn,
+                           const DiskLoc& bucketLoc,
+                           const int keyOffset) const;
 
         BSONObj getKey(const DiskLoc& bucketLoc, const int keyOffset) const;
 
-        DiskLoc getHead() const { return _headManager->getHead(); }
+        DiskLoc getHead( OperationContext* txn ) const { return _headManager->getHead(txn); }
 
         Status touch(OperationContext* txn) const;
 
@@ -568,9 +570,9 @@ namespace mongo {
 
         BucketType* getBucket(const DiskLoc dl) const;
 
-        BucketType* getRoot() const;
+        BucketType* getRoot(OperationContext* txn) const;
 
-        DiskLoc getRootLoc() const;
+        DiskLoc getRootLoc(OperationContext* txn) const;
 
         //
         // Data

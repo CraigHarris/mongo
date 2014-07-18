@@ -69,7 +69,8 @@ namespace mongo {
                                         const StringData& indexName,
                                         bool multikey = true) = 0;
 
-        virtual DiskLoc getIndexHead( const StringData& indexName ) const = 0;
+        virtual DiskLoc getIndexHead( OperationContext* txn,
+                                      const StringData& indexName ) const = 0;
 
         virtual void setIndexHead( OperationContext* txn,
                                    const StringData& indexName,

@@ -559,4 +559,20 @@ namespace mongo {
             fassertFailed( 14026 );
         }
     }
+
+    DiskLoc MmapV1ExtentManager::getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) {
+        if (extentLoc.isNull()) return extentLoc;
+        DiskLoc result = getExtent( extentLoc )->xnext;
+        LockManager::getSingleton().acquire( txn->getTransaction(), kShared, result );
+        LockManager::getSingleton().release( txn->getTransaction(), kShared, extentLoc );
+        return result;
+    }
+
+    DiskLoc MmapV1ExtentManager::getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) {
+        if (extentLoc.isNull()) return extentLoc;
+        DiskLoc result = getExtent( extentLoc )->xprev;
+        LockManager::getSingleton().acquire( txn->getTransaction(), kShared, result );
+        LockManager::getSingleton().release( txn->getTransaction(), kShared, extentLoc );
+        return result;
+    }
 }

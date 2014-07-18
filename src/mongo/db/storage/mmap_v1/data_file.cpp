@@ -169,7 +169,10 @@ namespace mongo {
         int offset = header()->unused.getOfs();
 
         DataFileHeader *h = header();
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &h->unused);
         *txn->recoveryUnit()->writing(&h->unused) = DiskLoc( fileNo, offset + size );
+
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &h->unusedLength);
         txn->recoveryUnit()->writingInt(h->unusedLength) = h->unusedLength - size;
 
         return DiskLoc( fileNo, offset );
@@ -205,6 +208,7 @@ namespace mongo {
             // to the global dur dirty list rather than going through the OperationContext.
             getDur().createdFile(filename, filelength);
             verify( HeaderSize == 8192 );
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, this);
             DataFileHeader *h = getDur().writing(this);
             h->fileLength = filelength;
             h->version = PDFILE_VERSION;
@@ -224,7 +228,11 @@ namespace mongo {
         if ( freeListStart == minDiskLoc ) {
             // we are upgrading from 2.4 to 2.6
             invariant( freeListEnd == minDiskLoc ); // both start and end should be (0,0) or real
+
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &freeListStart);
             *txn->recoveryUnit()->writing( &freeListStart ) = DiskLoc();
+
+            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &freeListEnd);
             *txn->recoveryUnit()->writing( &freeListEnd ) = DiskLoc();
         }
     }

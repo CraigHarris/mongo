@@ -48,6 +48,9 @@ namespace mongo {
 
         if (_curr.isNull()) {
 
+            LockManager& lm = LockManager::getSingleton();
+            Transaction* tx = _txn->getTransaction();
+
             const RecordStoreV1MetaData* nsd = _recordStore->details();
 
             // If a start position isn't specified, we fill one out from the start of the
@@ -63,6 +66,7 @@ namespace mongo {
                     // Copied verbatim from ForwardCappedCursor::init.
                     // TODO ELABORATE
                     _curr = _getExtent( nsd->capExtent() )->firstRecord;
+                    lm.acquire( tx, kShared, _curr );
                     if (!_curr.isNull() && _curr == nsd->capFirstNewRecord()) {
                         _curr = _getExtent( nsd->capExtent() )->lastRecord;
                         _curr = nextLoop(_curr);
@@ -77,9 +81,11 @@ namespace mongo {
                 }
                 else {
                     _curr = _getExtent( nsd->capExtent() )->lastRecord;
+                    lm.acquire( tx, kShared, _curr );
                 }
             }
         }
+        LockManager::getSingleton().acquire(_txn->getTransaction(), kShared, _curr);
     }
 
     bool CappedRecordStoreV1Iterator::isEOF() { return _curr.isNull(); }

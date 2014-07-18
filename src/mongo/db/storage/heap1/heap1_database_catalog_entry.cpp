@@ -254,7 +254,8 @@ namespace mongo {
         return true;
     }
 
-    DiskLoc Heap1DatabaseCatalogEntry::Entry::getIndexHead( const StringData& idxName ) const {
+    DiskLoc Heap1DatabaseCatalogEntry::Entry::getIndexHead( OperationContext* txn,
+                                                            const StringData& idxName ) const {
         Indexes::const_iterator i = indexes.find( idxName.toString() );
         invariant( i != indexes.end() );
         return i->second->head;
