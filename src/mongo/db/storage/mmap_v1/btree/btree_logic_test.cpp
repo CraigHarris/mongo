@@ -109,7 +109,8 @@ namespace mongo {
         }
 
         BucketType* head() const {
-            return _helper.btree.getBucket(_helper.headManager.getHead());
+            OperationContextNoop txn;
+            return _helper.btree.getBucket(_helper.headManager.getHead(&txn));
         }
 
         void forcePackBucket(const DiskLoc bucketLoc) {
@@ -193,7 +194,7 @@ namespace mongo {
             this->insert(key, this->_helper.dummyDiskLoc);
 
             this->checkValidNumKeys(1);
-            this->locate(key, 0, true, this->_helper.headManager.getHead(), 1);
+            this->locate(key, 0, true, this->_helper.headManager.getHead(&txn), 1);
 
             this->unindex(key);
 
@@ -278,9 +279,9 @@ namespace mongo {
                 this->insert(k, this->_helper.dummyDiskLoc);
             }
 
-            locateExtended(1, 'a', 'b', this->_helper.headManager.getHead());
-            locateExtended(1, 'c', 'd', this->_helper.headManager.getHead());
-            locateExtended(1, 'e', 'f', this->_helper.headManager.getHead());
+            locateExtended(1, 'a', 'b', this->_helper.headManager.getHead(&txn));
+            locateExtended(1, 'c', 'd', this->_helper.headManager.getHead(&txn));
+            locateExtended(1, 'e', 'f', this->_helper.headManager.getHead(&txn));
             locateExtended(1, 'g', 'g' + 1, DiskLoc()); // of course, 'h' isn't in the index.
 
             // old behavior
@@ -290,9 +291,9 @@ namespace mongo {
             //       locateExtended( -1, 'g', 'f', dl() );
 
             locateExtended(-1, 'a', 'a' - 1, DiskLoc()); // of course, 'a' - 1 isn't in the index
-            locateExtended(-1, 'c', 'b', this->_helper.headManager.getHead());
-            locateExtended(-1, 'e', 'd', this->_helper.headManager.getHead());
-            locateExtended(-1, 'g', 'f', this->_helper.headManager.getHead());
+            locateExtended(-1, 'c', 'b', this->_helper.headManager.getHead(&txn));
+            locateExtended(-1, 'e', 'd', this->_helper.headManager.getHead(&txn));
+            locateExtended(-1, 'g', 'f', this->_helper.headManager.getHead(&txn));
         }
 
     private:
@@ -331,7 +332,7 @@ namespace mongo {
             // 'E' is the split point and should be in the head the rest should be ~50/50
             const BSONObj splitPoint = simpleKey('E', 800);
             this->_helper.btree.locate(&txn, splitPoint, this->_helper.dummyDiskLoc, 1, &pos, &loc);
-            ASSERT_EQUALS(this->_helper.headManager.getHead(), loc);
+            ASSERT_EQUALS(this->_helper.headManager.getHead(&txn), loc);
             ASSERT_EQUALS(0, pos);
 
             // Find the one before 'E'
@@ -381,7 +382,7 @@ namespace mongo {
             // 'H' is the maximum 'large' interval key, 90% should be < 'H' and 10% larger
             const BSONObj splitPoint = simpleKey('H', 800);
             this->_helper.btree.locate(&txn, splitPoint, this->_helper.dummyDiskLoc, 1, &pos, &loc);
-            ASSERT_EQUALS(this->_helper.headManager.getHead(), loc);
+            ASSERT_EQUALS(this->_helper.headManager.getHead(&txn), loc);
             ASSERT_EQUALS(0, pos);
 
             // Find the one before 'H'
@@ -867,11 +868,11 @@ namespace mongo {
             const BSONObj& topKey = biggestKey('m');
 
             DiskLoc leftChild = this->newBucket();
-            builder.push(this->_helper.headManager.getHead(), topKey, leftChild);
+            builder.push(this->_helper.headManager.getHead(&txn), topKey, leftChild);
             _count++;
 
             DiskLoc rightChild = this->newBucket();
-            this->setBucketNextChild(this->_helper.headManager.getHead(), rightChild);
+            this->setBucketNextChild(this->_helper.headManager.getHead(&txn), rightChild);
 
             _count += builder.fillBucketToExactSize(leftChild, leftSize(), 'a');
             _count += builder.fillBucketToExactSize(rightChild, rightSize(), 'n');
@@ -1093,11 +1094,13 @@ namespace mongo {
         virtual bool merge() const { return false; }
 
         virtual void initCheck() {
-            _oldTop = this->getKey(this->_helper.headManager.getHead(), 0).data.toBson();
+            OperationContextNoop txn;
+            _oldTop = this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson();
         }
 
         virtual void validate() {
-            ASSERT_NOT_EQUALS(_oldTop, this->getKey(this->_helper.headManager.getHead(), 0).data.toBson());
+            OperationContextNoop txn;
+            ASSERT_NOT_EQUALS(_oldTop, this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson());
         }
 
     private:
@@ -1116,11 +1119,13 @@ namespace mongo {
         virtual bool merge() const { return false; }
 
         virtual void initCheck() {
-            _oldTop = this->getKey(this->_helper.headManager.getHead(), 0).data.toBson();
+            OperationContextNoop txn;
+            _oldTop = this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson();
         }
 
         virtual void validate() { 
-            ASSERT_TRUE(_oldTop != this->getKey(this->_helper.headManager.getHead(), 0).data.toBson());
+            OperationContextNoop txn;
+            ASSERT_TRUE(_oldTop != this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson());
         }
 
     private:
@@ -1294,7 +1299,7 @@ namespace mongo {
             const BSONObj k = BSON("" << "a");
             ASSERT(this->unindex(k));
 
-            this->forcePackBucket(this->_helper.headManager.getHead());
+            this->forcePackBucket(this->_helper.headManager.getHead(&txn));
 
             typename BtreeLogicTestBase<OnDiskFormat>::BucketType* headBucket = this->head();
 
@@ -1323,7 +1328,7 @@ namespace mongo {
             const BSONObj k = BSON("" << "a");
             ASSERT(this->unindex(k));
 
-            this->forcePackBucket(this->_helper.headManager.getHead());
+            this->forcePackBucket(this->_helper.headManager.getHead(&txn));
 
             typename BtreeLogicTestBase<OnDiskFormat>::BucketType* headBucket = this->head();
 
@@ -1350,7 +1355,7 @@ namespace mongo {
             ASSERT_EQUALS(4, this->_helper.recordStore.numRecords());
 
             // force parent pack
-            this->forcePackBucket(this->_helper.headManager.getHead());
+            this->forcePackBucket(this->_helper.headManager.getHead(&txn));
 
             const BSONObj k = BSON("" << bigNumString(0x40, 800));
             ASSERT(this->unindex(k));
@@ -1410,7 +1415,7 @@ namespace mongo {
 
             ASSERT_EQUALS(expectedSeparator(),
                           this->bucketRebalancedSeparatorPos(
-                                    this->_helper.headManager.getHead(), 0));
+                                    this->_helper.headManager.getHead(&txn), 0));
         }
 
         virtual string treeSpec() const = 0;
@@ -1496,11 +1501,13 @@ namespace mongo {
         virtual int rightSize() const { return MergeSizeJustRightRight<OnDiskFormat>::rightSize() + 1; }
 
         virtual void initCheck() {
-            _oldTop = this->getKey(this->_helper.headManager.getHead(), 0).data.toBson();
+            OperationContextNoop txn;
+            _oldTop = this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson();
         }
 
         virtual void validate() {
-            ASSERT_EQUALS(_oldTop, this->getKey(this->_helper.headManager.getHead(), 0).data.toBson());
+            OperationContextNoop txn;
+            ASSERT_EQUALS(_oldTop, this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson());
         }
 
         virtual bool merge() const { return false; }
@@ -1515,9 +1522,10 @@ namespace mongo {
         virtual int leftSize() const { return MergeSizeJustRightRight<OnDiskFormat>::leftSize() + 1; }
 
         virtual void validate() {
+            OperationContextNoop txn;
             // Different top means we rebalanced
             ASSERT_NOT_EQUALS(this->_oldTop, 
-                              this->getKey(this->_helper.headManager.getHead(), 0).data.toBson());
+                              this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson());
         }
     };
 
@@ -1525,12 +1533,14 @@ namespace mongo {
     class NoMoveAtLowWaterMarkLeft : public MergeSizeJustRightLeft<OnDiskFormat> {
         virtual int leftSize() const { return MergeSizeJustRightLeft<OnDiskFormat>::leftSize() + 1; }
         virtual void initCheck() {
-            this->_oldTop = this->getKey(this->_helper.headManager.getHead(), 0).data.toBson();
+            OperationContextNoop txn;
+            this->_oldTop = this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson();
         }
 
         virtual void validate() {
+            OperationContextNoop txn;
             ASSERT_EQUALS(this->_oldTop,
-                          this->getKey(this->_helper.headManager.getHead(), 0).data.toBson());
+                          this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson());
         }
         virtual bool merge() const { return false; }
 
@@ -1544,9 +1554,10 @@ namespace mongo {
         virtual int rightSize() const { return MergeSizeJustRightLeft<OnDiskFormat>::rightSize() + 1; }
 
         virtual void validate() {
+            OperationContextNoop txn;
             // Different top means we rebalanced
             ASSERT_NOT_EQUALS(this->_oldTop,
-                              this->getKey(this->_helper.headManager.getHead(), 0).data.toBson());
+                              this->getKey(this->_helper.headManager.getHead(&txn), 0).data.toBson());
         }
     };
 
@@ -1731,7 +1742,7 @@ namespace mongo {
             builder.makeTree("{a:null,c:{b:null},d:null}");
 
             const DiskLoc prevChildBucket = 
-                            this->getKey(this->_helper.headManager.getHead(), 1).prevChildBucket;
+                            this->getKey(this->_helper.headManager.getHead(&txn), 1).prevChildBucket;
             this->markKeyUnused(prevChildBucket, 0);
 
             long long unused = 0;
@@ -1874,7 +1885,7 @@ namespace mongo {
             builder.checkStructure("{a:null,d:{c:{b:null}},e:null}");
 
             // Check 'unused' key
-            ASSERT(this->getKey(this->_helper.headManager.getHead(), 1).recordLoc.getOfs() & 1);
+            ASSERT(this->getKey(this->_helper.headManager.getHead(&txn), 1).recordLoc.getOfs() & 1);
         }
     };
 
@@ -1906,7 +1917,7 @@ namespace mongo {
             builder.checkStructure("{a:null,_:{c:null,_:{d:null}}}");
 
             // Check 'unused' key
-            ASSERT(this->getKey(this->_helper.headManager.getHead(), 0).recordLoc.getOfs() & 1);
+            ASSERT(this->getKey(this->_helper.headManager.getHead(&txn), 0).recordLoc.getOfs() & 1);
         }
     };
 

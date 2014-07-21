@@ -106,13 +106,14 @@ namespace mongo {
          * @param loc - has to be for a specific Record (not an Extent)
          * Note(erh) see comment on recordFor
          */
-        virtual Extent* extentForV1( const DiskLoc& loc ) const = 0;
+        virtual Extent* extentForV1( OperationContext* txn, const DiskLoc& loc ) const = 0;
 
         /**
          * @param loc - has to be for a specific Record (not an Extent)
          * Note(erh) see comment on recordFor
          */
-        virtual DiskLoc extentLocForV1( const DiskLoc& loc ) const = 0;
+        virtual DiskLoc extentLocForV1( OperationContext* txn,
+                                        const DiskLoc& loc ) const = 0;
 
         /**
          * @param loc - has to be for a specific Extent

@@ -121,7 +121,7 @@ namespace mongo {
 
     template <class OnDiskFormat>
     void ArtificialTreeBuilder<OnDiskFormat>::checkStructure(const string &spec) const {
-        checkStructure(fromjson(spec), _helper->headManager.getHead());
+        checkStructure(fromjson(spec), _helper->headManager.getHead(_txn));
     }
 
     template <class OnDiskFormat>

@@ -213,13 +213,16 @@ namespace mongo {
         return reinterpret_cast<Record*>( df->p() + ofs );
     }
 
-    DiskLoc MmapV1ExtentManager::extentLocForV1( const DiskLoc& loc ) const {
+    DiskLoc MmapV1ExtentManager::extentLocForV1( OperationContext* txn,
+                                                 const DiskLoc& loc ) const {
         Record* record = recordForV1( loc );
-        return DiskLoc( loc.a(), record->extentOfs() );
+        DiskLoc result( loc.a(), record->extentOfs() );
+        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, result);
+        return result;
     }
 
-    Extent* MmapV1ExtentManager::extentForV1( const DiskLoc& loc ) const {
-        DiskLoc extentLoc = extentLocForV1( loc );
+    Extent* MmapV1ExtentManager::extentForV1( OperationContext* txn, const DiskLoc& loc ) const {
+        DiskLoc extentLoc = extentLocForV1( txn, loc );
         return getExtent( extentLoc );
     }
 

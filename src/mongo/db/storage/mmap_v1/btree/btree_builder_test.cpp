@@ -85,21 +85,21 @@ namespace mongo {
             }
 
             // The root of the index has not yet been set.
-            ASSERT( _helper.headManager.getHead().isNull() );
+            ASSERT( _helper.headManager.getHead(&txn).isNull() );
             // Register a request to kill the current operation.
             txn.kill();
             if ( _mayInterrupt ) {
                 // Call commit on the builder, which will be aborted due to the kill request.
                 ASSERT_THROWS( builder->commit( _mayInterrupt ), UserException );
                 // The root of the index is not set because commit() did not complete.
-                ASSERT( _helper.headManager.getHead().isNull() );
+                ASSERT( _helper.headManager.getHead(&txn).isNull() );
             }
             else {
                 // Call commit on the builder, which will not be aborted because mayInterrupt is
                 // false.
                 builder->commit( _mayInterrupt );
                 // The root of the index is set because commit() completed.
-                ASSERT( !_helper.headManager.getHead().isNull() );
+                ASSERT( !_helper.headManager.getHead(&txn).isNull() );
             }
         }
 

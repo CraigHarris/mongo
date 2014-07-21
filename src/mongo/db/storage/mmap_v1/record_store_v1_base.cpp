@@ -135,7 +135,7 @@ namespace mongo {
 
     DiskLoc RecordStoreV1Base::_getExtentLocForRecord( OperationContext* txn, const DiskLoc& loc ) const {
         LockManager& lm = LockManager::getSingleton();
-        DiskLoc result = _extentManager->extentLocForV1( loc );
+        DiskLoc result = _extentManager->extentLocForV1( txn, loc );
         lm.acquire(txn->getTransaction(), kShared, result);
         return result;
     }
