@@ -73,12 +73,12 @@ namespace mongo {
         ResourceId(const void* loc) : _rid(*(uint64_t*)loc) { }
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
         bool operator==(const ResourceId& other) const { return _rid == other._rid; }
-        operator size_t() const { return _rid; }
+        operator uint64_t() const { return _rid; }
 
     private:
         uint64_t _rid;
     };
-    static const ResourceId kReservedResourceId = 0;
+    static const ResourceId kReservedResourceId;
 
 
     /**

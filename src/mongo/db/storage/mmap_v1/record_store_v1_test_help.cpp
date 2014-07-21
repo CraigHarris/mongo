@@ -287,11 +287,17 @@ namespace mongo {
     }
 
     DiskLoc DummyExtentManager::getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
-        return extentLoc;
+        if (static_cast<size_t>(extentLoc.a()) < _extents.size()-1) {
+            return DiskLoc(extentLoc.a()+1, 0);
+        }
+        return DiskLoc();
     }
 
     DiskLoc DummyExtentManager::getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
-        return extentLoc;
+        if (static_cast<size_t>(extentLoc.a()) > 0) {
+            return DiskLoc(extentLoc.a()-1, 0);
+        }
+        return DiskLoc();
     }
 
 namespace {
