@@ -276,7 +276,7 @@ namespace mongo {
 
     // This startup parameter enables experimental document-level locking features
     // It should be removed once full document-level locking is checked-in.
-    MONGO_EXPORT_STARTUP_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
+    MONGO_EXPORT_STARTUP_SERVER_PARAMETER(useExperimentalDocLocking, bool, true);
 
     static LockManager* _singleton = NULL;
 

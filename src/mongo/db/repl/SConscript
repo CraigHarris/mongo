@@ -32,7 +32,9 @@ env.Library('repl_coordinator_impl',
 env.CppUnitTest('repl_coordinator_impl_test',
                 'repl_coordinator_impl_test.cpp',
                 LIBDEPS=['repl_coordinator_impl',
-                         'replmocks'])
+                         'replmocks',
+                         '$BUILD_DIR/mongo/db/concurrency/lock_mgr',
+                        ])
 
 env.Library('repl_coordinator_interface',
             ['repl_coordinator.cpp',],
