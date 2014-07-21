@@ -172,7 +172,7 @@ namespace mongo {
                      const BSONObj& key,
                      const DiskLoc& recordLoc);
 
-        bool isEmpty() const;
+        bool isEmpty(OperationContext* txn) const;
 
         long long fullValidate(OperationContext*,
                                long long *unusedCount,

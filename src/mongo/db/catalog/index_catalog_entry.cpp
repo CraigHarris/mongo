@@ -1,7 +1,7 @@
 // index_catalog_entry.cpp
 
 /**
-*    Copyright (C) 2013 10gen Inc.
+*    Copyright (C) 2013-2014 MongoDB Inc.
 *
 *    This program is free software: you can redistribute it and/or  modify
 *    it under the terms of the GNU Affero General Public License, version 3,
@@ -85,17 +85,17 @@ namespace mongo {
         delete _descriptor;
     }
 
-    void IndexCatalogEntry::init( IndexAccessMethod* accessMethod ) {
+    void IndexCatalogEntry::init( OperationContext* txn, IndexAccessMethod* accessMethod ) {
         verify( _accessMethod == NULL );
         _accessMethod = accessMethod;
 
         _isReady = _catalogIsReady();
-        _head = _catalogHead();
+        _head = _catalogHead(txn);
         _isMultikey = _catalogIsMultikey();
     }
 
     const DiskLoc& IndexCatalogEntry::head( OperationContext* txn ) const {
-        DEV verify( _head == _catalogHead() );
+        DEV verify( _head == _catalogHead(txn) );
         return _head;
     }
 
@@ -145,7 +145,7 @@ namespace mongo {
     }
 
     DiskLoc IndexCatalogEntry::_catalogHead( OperationContext* txn ) const {
-        return _collection->getIndexHead( _descriptor->indexName() );
+        return _collection->getIndexHead( txn, _descriptor->indexName() );
     }
 
     bool IndexCatalogEntry::_catalogIsMultikey() const {

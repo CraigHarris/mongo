@@ -744,7 +744,7 @@ namespace mongo {
                     }
                 }
 
-                if ( isCapped() && !_details->capLooped() ) {
+                if ( isCapped() && !_details->capLooped(txn) ) {
                     output->append("cappedOutOfOrder", outOfOrder);
                     if ( outOfOrder > 1 ) {
                         results->valid = false;
@@ -770,7 +770,7 @@ namespace mongo {
             // 55555555555555555555555555
             BSONArrayBuilder deletedListArray;
             for ( int i = 0; i < Buckets; i++ ) {
-                deletedListArray << _details->deletedListEntry(i).isNull();
+                deletedListArray << _details->deletedListEntry(txn, i).isNull();
             }
 
             int ndel = 0;
@@ -778,7 +778,7 @@ namespace mongo {
             BSONArrayBuilder delBucketSizes;
             int incorrect = 0;
             for ( int i = 0; i < Buckets; i++ ) {
-                DiskLoc loc = _details->deletedListEntry(i);
+                DiskLoc loc = _details->deletedListEntry(txn, i);
                 SharedResourceLock(tx, loc);
                 try {
                     int k = 0;

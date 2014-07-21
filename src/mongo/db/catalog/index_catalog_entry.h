@@ -1,7 +1,7 @@
 // index_catalog_entry.h
 
 /**
-*    Copyright (C) 2013 10gen Inc.
+*    Copyright (C) 2013-2014 MongoDB Inc.
 *
 *    This program is free software: you can redistribute it and/or  modify
 *    it under the terms of the GNU Affero General Public License, version 3,
@@ -57,7 +57,7 @@ namespace mongo {
 
         const string& ns() const { return _ns; }
 
-        void init( IndexAccessMethod* accessMethod );
+        void init( OperationContext* txn, IndexAccessMethod* accessMethod );
 
         IndexDescriptor* descriptor() { return _descriptor; }
         const IndexDescriptor* descriptor() const { return _descriptor; }
@@ -89,7 +89,7 @@ namespace mongo {
     private:
 
         bool _catalogIsReady() const;
-        DiskLoc _catalogHead() const;
+        DiskLoc _catalogHead(OperationContext* txn) const;
         bool _catalogIsMultikey() const;
 
         // -----

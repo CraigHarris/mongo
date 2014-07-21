@@ -93,7 +93,8 @@ namespace mongo {
 
         virtual IndexAccessMethod* initiateBulk(OperationContext* txn);
 
-        virtual Status commitBulk( IndexAccessMethod* bulk,
+        virtual Status commitBulk( OperationContext* txn,
+                                   IndexAccessMethod* bulk,
                                    bool mayInterrupt,
                                    std::set<DiskLoc>* dups );
 

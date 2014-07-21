@@ -305,7 +305,7 @@ namespace mongo {
 
     IndexAccessMethod* BtreeBasedAccessMethod::initiateBulk(OperationContext* txn) {
         // If there's already data in the index, don't do anything.
-        if (!_newInterface->isEmpty()) {
+        if (!_newInterface->isEmpty(txn)) {
             return NULL;
         }
 
@@ -315,10 +315,11 @@ namespace mongo {
                                               _descriptor);
     }
 
-    Status BtreeBasedAccessMethod::commitBulk(IndexAccessMethod* bulkRaw,
+    Status BtreeBasedAccessMethod::commitBulk(OperationContext* txn,
+                                              IndexAccessMethod* bulkRaw,
                                               bool mayInterrupt,
                                               set<DiskLoc>* dupsToDrop) {
-        if (!_newInterface->isEmpty()) {
+        if (!_newInterface->isEmpty(txn)) {
             return Status(ErrorCodes::InternalError, "trying to commit but has data already");
         }
 

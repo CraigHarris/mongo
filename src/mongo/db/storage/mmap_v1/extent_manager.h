@@ -1,7 +1,7 @@
 // extent_manager.h
 
 /**
-*    Copyright (C) 2013 10gen Inc.
+*    Copyright (C) 2013-2014 MongoDB Inc.
 *
 *    This program is free software: you can redistribute it and/or  modify
 *    it under the terms of the GNU Affero General Public License, version 3,
@@ -149,8 +149,8 @@ namespace mongo {
          * @param extentLoc - a locked extent
          * side effects: result is locked, and lock on extentLoc is released
          */
-        DiskLoc getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
-        DiskLoc getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const;
+        virtual DiskLoc getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const=0;
+        virtual DiskLoc getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const=0;
 
         // see cacheHint methods
         enum HintType { Sequential, Random };

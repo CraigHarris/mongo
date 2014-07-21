@@ -404,7 +404,8 @@ namespace mongo {
         invariant( minor == PDFILE_VERSION_MINOR_22_AND_OLDER );
 
         DataFile* df = _extentManager.getFile( opCtx, 0 );
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &df->getHeader()->versionMinor);
+        LockManager::getSingleton().acquire(opCtx->getTransaction(), kExclusive,
+                                            &df->getHeader()->versionMinor);
         opCtx->recoveryUnit()->writingInt(df->getHeader()->versionMinor) =
             PDFILE_VERSION_MINOR_24_AND_NEWER;
     }

@@ -63,7 +63,7 @@ namespace mongo {
         // XXX: Due to the way bulk building works, we may already have an empty root bucket that we
         // must now dispose of. This isn't the case in some unit tests that use the Builder directly
         // rather than going through an IndexAccessMethod.
-        DiskLoc oldHead = _logic->_headManager->getHead();
+        DiskLoc oldHead = _logic->_headManager->getHead(txn);
         if (!oldHead.isNull()) {
             _logic->_headManager->setHead(_txn, DiskLoc());
             _logic->_recordStore->deleteRecord(_txn, oldHead);
@@ -1103,7 +1103,7 @@ namespace mongo {
         bool found;
 
         // XXX should lock result of getRootLoc inside getRootLoc
-        SharedResourceLock(txn->getTransaction(), getRootLoc());
+        SharedResourceLock(txn->getTransaction(), getRootLoc(txn));
 
         DiskLoc bucket = _locate(txn, getRootLoc(txn), key, &position, &found, minDiskLoc, 1);
 
@@ -1875,7 +1875,7 @@ namespace mongo {
     }
 
     template <class BtreeLayout>
-    bool BtreeLogic<BtreeLayout>::isEmpty() const {
+    bool BtreeLogic<BtreeLayout>::isEmpty(OperationContext* txn) const {
         return getRoot(txn)->n == 0;
     }
 
@@ -1899,7 +1899,7 @@ namespace mongo {
         for (int i = firstIndex; i <= lastIndex; i++) {
             const DiskLoc childLoc = childLocForPos(bucket, i);
             if (!childLoc.isNull()) {
-                LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive
+                LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive,
                                                      &getBucket(childLoc)->parent);
                 *txn->recoveryUnit()->writing(&getBucket(childLoc)->parent) = bucketLoc;
             }

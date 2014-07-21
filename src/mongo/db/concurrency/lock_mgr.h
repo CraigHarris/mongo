@@ -729,7 +729,7 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           *(size_t*)&loc) { }
+                           loc) { }
     };
 
     class ExclusiveResourceLock : public ResourceLock {
@@ -750,6 +750,6 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
-                           *(size_t*)&loc) { }
+                           loc) { }
     };
 } // namespace mongo

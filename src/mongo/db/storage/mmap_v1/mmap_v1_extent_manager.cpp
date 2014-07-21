@@ -560,7 +560,7 @@ namespace mongo {
         }
     }
 
-    DiskLoc MmapV1ExtentManager::getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) {
+    DiskLoc MmapV1ExtentManager::getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
         if (extentLoc.isNull()) return extentLoc;
         DiskLoc result = getExtent( extentLoc )->xnext;
         LockManager::getSingleton().acquire( txn->getTransaction(), kShared, result );
@@ -568,7 +568,7 @@ namespace mongo {
         return result;
     }
 
-    DiskLoc MmapV1ExtentManager::getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) {
+    DiskLoc MmapV1ExtentManager::getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
         if (extentLoc.isNull()) return extentLoc;
         DiskLoc result = getExtent( extentLoc )->xprev;
         LockManager::getSingleton().acquire( txn->getTransaction(), kShared, result );

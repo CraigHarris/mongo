@@ -68,7 +68,8 @@ namespace mongo {
         // Stuff below here is a no-op of one form or another.
         //
 
-        virtual Status commitBulk(IndexAccessMethod* bulk,
+        virtual Status commitBulk(OperationContext* txn,
+                                  IndexAccessMethod* bulk,
                                   bool mayInterrupt,
                                   std::set<DiskLoc>* dups) {
             invariant(this == bulk);

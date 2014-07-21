@@ -410,7 +410,7 @@ namespace mongo {
         // Broadcast the mutation so that query results stay correct.
         _cursorCache.invalidateDocument(loc, INVALIDATION_MUTATION);
 
-        ExclusiveResourceLock lk(txn->getTransaction(), *(size_t*)&loc);
+        ExclusiveResourceLock lk(txn->getTransaction(), loc);
         return _recordStore->updateWithDamages( txn, loc, damangeSource, damages );
     }
 

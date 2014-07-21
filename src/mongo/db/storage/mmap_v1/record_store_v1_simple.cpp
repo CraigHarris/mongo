@@ -100,7 +100,7 @@ namespace mongo {
             DiskLoc bestPrevRec;
             int bestmatchlen = INT_MAX; // sentinel meaning we haven't found a record big enough
             int b = bucket(lenToAlloc);
-            DiskLoc cur = _details->deletedListEntry(b);
+            DiskLoc cur = _details->deletedListEntry(txn, b);
             DiskLoc prevRec;
             
             lm.acquire( tx, kShared, cur );
@@ -137,7 +137,7 @@ namespace mongo {
                         freelistIterations.increment( 1 + chain );
                         return DiskLoc();
                     }
-                    cur = _details->deletedListEntry(b);
+                    cur = _details->deletedListEntry(txn, b);
                     lm.acquire( tx, kShared, cur );
                     prev = 0;
                     continue;
@@ -191,7 +191,7 @@ namespace mongo {
             else {
                 // should be the front of a free-list
                 int myBucket = bucket(bmr->lengthWithHeaders());
-                invariant( _details->deletedListEntry(myBucket) == bestmatch );
+                invariant( _details->deletedListEntry(txn, myBucket) == bestmatch );
                 _details->setDeletedListEntry(txn, myBucket, bmr->nextDeleted());
             }
             *txn->recoveryUnit()->writing(&bmr->nextDeleted()) = DiskLoc().setInvalid(); // defensive.
@@ -307,7 +307,7 @@ namespace mongo {
         DEBUGGING log() << "TEMP: add deleted rec " << dloc.toString() << ' ' << hex << d->extentOfs() << endl;
 
         int b = bucket(d->lengthWithHeaders());
-        *txn->recoveryUnit()->writing(&d->nextDeleted()) = _details->deletedListEntry(b);
+        *txn->recoveryUnit()->writing(&d->nextDeleted()) = _details->deletedListEntry(txn, b);
         _details->setDeletedListEntry(txn, b, dloc);
     }
 

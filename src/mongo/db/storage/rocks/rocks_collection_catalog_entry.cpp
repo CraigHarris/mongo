@@ -108,7 +108,8 @@ namespace mongo {
         return md.indexes[offset].multikey;
     }
 
-    DiskLoc RocksCollectionCatalogEntry::getIndexHead( const StringData& indexName ) const {
+    DiskLoc RocksCollectionCatalogEntry::getIndexHead( OperationContext* txn,
+                                                       const StringData& indexName ) const {
         MetaData md;
         _getMetaData( &md );
         int offset = md.findIndexOffset( indexName );

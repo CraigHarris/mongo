@@ -120,9 +120,11 @@ namespace mongo {
         return true;
     }
 
-    DiskLoc NamespaceDetailsCollectionCatalogEntry::getIndexHead( const StringData& idxName ) const {
+    DiskLoc NamespaceDetailsCollectionCatalogEntry::getIndexHead( OperationContext* txn,
+                                                                  const StringData& idxName ) const {
         int idxNo = _findIndexNumber( idxName );
         invariant( idxNo >= 0 );
+        LockManager::getSingleton().acquire( txn->getTransaction(), kShared, _details->idx( idxNo ).head );
         return _details->idx( idxNo ).head;
     }
 
@@ -138,7 +140,7 @@ namespace mongo {
                                                                const DiskLoc& newHead ) {
         int idxNo = _findIndexNumber( idxName );
         invariant( idxNo >= 0 );
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->idx( idxNo ).head));
+        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->idx( idxNo ).head);
         *txn->recoveryUnit()->writing( &_details->idx( idxNo ).head) = newHead;
     }
 
