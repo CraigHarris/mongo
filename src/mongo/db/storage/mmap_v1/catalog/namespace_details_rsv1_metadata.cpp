@@ -47,8 +47,7 @@ namespace mongo {
     }
 
     void NamespaceDetailsRSV1MetaData::setCapExtent( OperationContext* txn, const DiskLoc& loc ) {
-        LockManager& lm = LockManager::getSingleton();
-        lm.acquire(txn->getTransaction(), kExclusive, &_details->capExtent);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->capExtent);
         *txn->recoveryUnit()->writing( &_details->capExtent ) = loc;
     }
 
@@ -61,8 +60,7 @@ namespace mongo {
 
     void NamespaceDetailsRSV1MetaData::setCapFirstNewRecord( OperationContext* txn,
                                                              const DiskLoc& loc ) {
-        LockManager& lm = LockManager::getSingleton();
-        lm.acquire(txn->getTransaction(), kExclusive, &_details->capFirstNewRecord);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->capFirstNewRecord);
         *txn->recoveryUnit()->writing( &_details->capFirstNewRecord ) = loc;
     }
 
@@ -81,8 +79,7 @@ namespace mongo {
                                                        long long dataSizeIncrement,
                                                        long long numRecordsIncrement ) {
         // durability todo : this could be a bit annoying / slow to record constantly
-        LockManager& lm = LockManager::getSingleton();
-        lm.acquire(txn->getTransaction(), kExclusive, &_details->stats);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->stats);
         NamespaceDetails::Stats* s = txn->recoveryUnit()->writing( &_details->stats );
         s->datasize += dataSizeIncrement;
         s->nrecords += numRecordsIncrement;
@@ -91,8 +88,7 @@ namespace mongo {
     void NamespaceDetailsRSV1MetaData::setStats( OperationContext* txn,
                                                  long long dataSize,
                                                  long long numRecords ) {
-        LockManager& lm = LockManager::getSingleton();
-        lm.acquire(txn->getTransaction(), kExclusive, &_details->stats);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->stats);
         NamespaceDetails::Stats* s = txn->recoveryUnit()->writing( &_details->stats );
         s->datasize = dataSize;
         s->nrecords = numRecords;
@@ -109,8 +105,7 @@ namespace mongo {
     void NamespaceDetailsRSV1MetaData::setDeletedListEntry( OperationContext* txn,
                                                             int bucket,
                                                             const DiskLoc& loc ) {
-        LockManager& lm = LockManager::getSingleton();
-        lm.acquire(txn->getTransaction(), kExclusive, &_details->deletedList[bucket]);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->deletedList[bucket]);
         *txn->recoveryUnit()->writing( &_details->deletedList[bucket] ) = loc;
     }
 
@@ -127,8 +122,7 @@ namespace mongo {
     }
 
     void NamespaceDetailsRSV1MetaData::setFirstExtent( OperationContext* txn, const DiskLoc& loc ) {
-        LockManager& lm = LockManager::getSingleton();
-        lm.acquire(txn->getTransaction(), kExclusive, &_details->firstExtent);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->firstExtent);
         *txn->recoveryUnit()->writing( &_details->firstExtent ) = loc;
     }
 
@@ -139,7 +133,7 @@ namespace mongo {
     }
 
     void NamespaceDetailsRSV1MetaData::setLastExtent( OperationContext* txn, const DiskLoc& loc ) {
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->lastExtent);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->lastExtent);
         *txn->recoveryUnit()->writing( &_details->lastExtent ) = loc;
     }
 
@@ -159,7 +153,7 @@ namespace mongo {
         if ( ( _details->userFlags & flag ) == flag )
             return false;
 
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->userFlags);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->userFlags);
         txn->recoveryUnit()->writingInt( _details->userFlags) |= flag;
         _syncUserFlags( txn );
         return true;
@@ -169,7 +163,7 @@ namespace mongo {
         if ( ( _details->userFlags & flag ) == 0 )
             return false;
 
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->userFlags);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->userFlags);
         txn->recoveryUnit()->writingInt(_details->userFlags) &= ~flag;
         _syncUserFlags( txn );
         return true;
@@ -179,7 +173,7 @@ namespace mongo {
         if ( _details->userFlags == flags )
             return false;
 
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->userFlags);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->userFlags);
         txn->recoveryUnit()->writingInt(_details->userFlags) = flags;
         _syncUserFlags( txn );
         return true;
@@ -194,8 +188,7 @@ namespace mongo {
         if ( _details->lastExtentSize == newMax )
             return;
 
-        LockManager& lm = LockManager::getSingleton();
-        lm.acquire(txn->getTransaction(), kExclusive, &_details->lastExtentSize);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->lastExtentSize);
 
         txn->recoveryUnit()->writingInt(_details->lastExtentSize) = newMax;
     }
@@ -218,7 +211,7 @@ namespace mongo {
         if ( _details->isCapped )
             return;
 
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_details->paddingFactor);
+        ExclusiveResourceLock(txn->getTransaction(), &_details->paddingFactor);
         *txn->recoveryUnit()->writing(&_details->paddingFactor) = paddingFactor;
     }
 

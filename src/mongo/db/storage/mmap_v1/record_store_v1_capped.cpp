@@ -579,7 +579,7 @@ namespace mongo {
         LockManager& lm = LockManager::getSingleton();
         Transaction* tx = txn->getTransaction();
 
-        lm.acquire(tx, kExclusive, dloc);
+        ExclusiveResourceLock(tx, dloc);
         DeletedRecord* d = txn->recoveryUnit()->writing( drec( dloc ) );
 
         DEBUGGING log() << "TEMP: add deleted rec " << dloc.toString() << ' ' << hex << d->extentOfs() << endl;
@@ -596,7 +596,7 @@ namespace mongo {
                     lm.release(tx, kShared, i);
                     i = newDL;
                 }
-                lm.acquire(tx, kExclusive, i);
+                ExclusiveResourceLock(tx, i);
                 lm.release(tx, kShared, i);
                 *txn->recoveryUnit()->writing(&drec(i)->nextDeleted()) = dloc;
             }

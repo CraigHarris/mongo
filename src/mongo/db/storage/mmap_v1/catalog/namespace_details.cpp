@@ -109,7 +109,7 @@ namespace mongo {
         long ofs = e->ofsFrom(this);
         if( i == 0 ) {
             verify( _extraOffset == 0 );
-            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_extraOffset);
+            ExclusiveResourceLock(txn->getTransaction(), &_extraOffset);
             *txn->recoveryUnit()->writing(&_extraOffset) = ofs;
             verify( extra() == e );
         }
@@ -203,7 +203,7 @@ namespace mongo {
     }
 
     NamespaceDetails* NamespaceDetails::writingWithoutExtra( OperationContext* txn ) {
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, this);
+        ExclusiveResourceLock(txn->getTransaction(), this);
         return txn->recoveryUnit()->writing( this );
     }
 
@@ -211,7 +211,7 @@ namespace mongo {
     // XXX - this method should go away
     NamespaceDetails *NamespaceDetails::writingWithExtra( OperationContext* txn ) {
         for( Extra *e = extra(); e; e = e->next( this ) ) {
-            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, e);
+            ExclusiveResourceLock(txn->getTransaction(), e);
             txn->recoveryUnit()->writing( e );
         }
         return writingWithoutExtra( txn );
@@ -241,7 +241,7 @@ namespace mongo {
 
     void NamespaceDetails::Extra::setNext( OperationContext* txn,
                                            long ofs ) {
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &_next);
+        ExclusiveResourceLock(txn->getTransaction(), &_next);
         *txn->recoveryUnit()->writing(&_next) = ofs;
     }
 

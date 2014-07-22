@@ -200,7 +200,7 @@ namespace mongo {
             ofs = newOfs;
         }
 
-        LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, emptyLoc);
+        ExclusiveResourceLock(txn->getTransaction(), emptyLoc);
         DeletedRecord* empty = txn->recoveryUnit()->writing(drec(emptyLoc));
         empty->lengthWithHeaders() = delRecLength;
         empty->extentOfs() = e->myLoc.getOfs();
@@ -384,7 +384,7 @@ namespace mongo {
         {
             if ( todelete->prevOfs() != DiskLoc::NullOfs ) {
                 DiskLoc prev = getPrevRecordInExtent( txn, dl );
-                lm.acquire(tx, kExclusive, prev); // upgrade lock
+                ExclusiveResourceLock(tx, prev); // upgrade lock
                 lm.release(tx, kShared, prev); 
                 Record* prevRecord = recordFor( prev );
                 txn->recoveryUnit()->writingInt( prevRecord->nextOfs() ) = todelete->nextOfs();
@@ -392,7 +392,7 @@ namespace mongo {
 
             if ( todelete->nextOfs() != DiskLoc::NullOfs ) {
                 DiskLoc next = getNextRecord( txn, dl );
-                lm.acquire( tx, kExclusive, next );
+                ExclusiveResourceLock( tx, next );
                 lm.release( tx, kShared, next );
                 Record* nextRecord = recordFor( next );
                 txn->recoveryUnit()->writingInt( nextRecord->prevOfs() ) = todelete->prevOfs();

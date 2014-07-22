@@ -79,7 +79,7 @@ env.CppUnitTest(
         'record_store_v1_test_help'
         ]
     )
-
+"""
 env.CppUnitTest(
     target='record_store_v1_capped_test',
     source=['record_store_v1_capped_test.cpp',
@@ -88,7 +88,7 @@ env.CppUnitTest(
         'record_store_v1_test_help'
         ]
     )
-
+"""
 env.Library(
     target= 'btree',
     source= [

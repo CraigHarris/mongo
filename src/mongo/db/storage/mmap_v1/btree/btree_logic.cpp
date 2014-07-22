@@ -255,7 +255,7 @@ namespace mongo {
     template <class BtreeLayout>
     typename BtreeLogic<BtreeLayout>::BucketType*
     BtreeLogic<BtreeLayout>::btreemod(OperationContext* txn, BucketType* bucket) {
-        LockManager::getSingleton().acquire( txn->getTransaction(), kExclusive, bucket );
+        ExclusiveResourceLock( txn->getTransaction(), bucket );
         txn->recoveryUnit()->writingPtr(bucket, BtreeLayout::BucketSize);
         return bucket;
     }
@@ -442,7 +442,6 @@ namespace mongo {
 
         invariant(getBucket(bucketLoc) == bucket);
 
-        LockManager& lm = LockManager::getSingleton();
         Transaction* tx = txn->getTransaction();
 
         {
@@ -451,7 +450,7 @@ namespace mongo {
             char* end = reinterpret_cast<char*>(&getKeyHeader(bucket, bucket->n + 1));
 
             // Declare that we will write to [k(keypos),k(n)]
-            lm.acquire( tx, kExclusive, start );
+            ExclusiveResourceLock( tx, start );
             txn->recoveryUnit()->writingPtr(start, end - start);
         }
 
@@ -462,7 +461,7 @@ namespace mongo {
         }
 
         size_t writeLen = sizeof(bucket->emptySize) + sizeof(bucket->topSize) + sizeof(bucket->n);
-        lm.acquire( tx, kExclusive, &bucket->emptySize );
+        ExclusiveResourceLock( tx, &bucket->emptySize );
         txn->recoveryUnit()->writingPtr(&bucket->emptySize, writeLen);
         bucket->emptySize -= sizeof(KeyHeaderType);
         bucket->n++;
@@ -473,7 +472,7 @@ namespace mongo {
         kn.recordLoc = recordLoc;
         kn.setKeyDataOfs((short) _alloc(bucket, key.dataSize()));
         char *p = dataAt(bucket, kn.keyDataOfs());
-        lm.acquire( tx, kExclusive, p );
+        ExclusiveResourceLock( tx, p );
         txn->recoveryUnit()->writingPtr(p, key.dataSize());
         memcpy(p, key.data(), key.dataSize());
         return true;
@@ -1299,9 +1298,7 @@ namespace mongo {
         SharedResourceLock parentLock(txn->getTransaction(), bucket->parent);
         BucketType* p = getBucket(bucket->parent);
         int parentIdx = indexInParent(txn, bucket, bucketLoc);
-        LockManager::getSingleton().acquire(txn->getTransaction(),
-                                            kExclusive,
-                                            &childLocForPos(p, parentIdx));
+        ExclusiveResourceLock(txn->getTransaction(), &childLocForPos(p, parentIdx));
         *txn->recoveryUnit()->writing(&childLocForPos(p, parentIdx)) = DiskLoc();
         deallocBucket(txn, bucket, bucketLoc);
     }
@@ -1473,7 +1470,6 @@ namespace mongo {
                                                        BucketType* bucket,
                                                        const DiskLoc bucketLoc) {
 
-        LockManager& lm = LockManager::getSingleton();
         Transaction* tx = txn->getTransaction();
 
         invariant(bucket->n == 0 && !bucket->nextChild.isNull() );
@@ -1486,14 +1482,14 @@ namespace mongo {
             BucketType* parentBucket = getBucket(bucket->parent);
             int bucketIndexInParent = indexInParent(txn, bucket, bucketLoc);
 
-            lm.acquire(tx, kExclusive, &childLocForPos(parentBucket, bucketIndexInParent));
+            ExclusiveResourceLock(tx, &childLocForPos(parentBucket, bucketIndexInParent));
             *txn->recoveryUnit()->writing(&childLocForPos(parentBucket, bucketIndexInParent)) =
                 bucket->nextChild;
         }
 
         {
             SharedResourceLock childLock(txn->getTransaction(), bucket->nextChild);
-            lm.acquire(tx, kExclusive, &getBucket(bucket->nextChild)->parent);
+            ExclusiveResourceLock(tx, &getBucket(bucket->nextChild)->parent);
             *txn->recoveryUnit()->writing(&getBucket(bucket->nextChild)->parent) = bucket->parent;
         }
         _bucketDeletion->aboutToDeleteBucket(bucketLoc);
@@ -1899,8 +1895,7 @@ namespace mongo {
         for (int i = firstIndex; i <= lastIndex; i++) {
             const DiskLoc childLoc = childLocForPos(bucket, i);
             if (!childLoc.isNull()) {
-                LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive,
-                                                     &getBucket(childLoc)->parent);
+                ExclusiveResourceLock(txn->getTransaction(), &getBucket(childLoc)->parent);
                 *txn->recoveryUnit()->writing(&getBucket(childLoc)->parent) = bucketLoc;
             }
         }

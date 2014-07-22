@@ -159,10 +159,10 @@ namespace mongo {
         if( !details->firstExtent.isNull() ) {
             _extentManager.freeExtents(txn, details->firstExtent, details->lastExtent);
 
-            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &details->firstExtent);
+            ExclusiveResourceLock(txn->getTransaction(), &details->firstExtent);
             *txn->recoveryUnit()->writing( &details->firstExtent ) = DiskLoc().setInvalid();
 
-            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &details->lastExtent);
+            ExclusiveResourceLock(txn->getTransaction(), &details->lastExtent);
             *txn->recoveryUnit()->writing( &details->lastExtent ) = DiskLoc().setInvalid();
         }
 
@@ -226,7 +226,7 @@ namespace mongo {
                 int indexI = ce._findIndexNumber( indexName );
 
                 IndexDetails& indexDetails = details->idx(indexI);
-                LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive, &indexDetails.info);
+                ExclusiveResourceLock(txn->getTransaction(), &indexDetails.info);
                 *txn->recoveryUnit()->writing(&indexDetails.info) = newIndexSpecLoc.getValue(); // XXX: dur
             }
 
@@ -404,8 +404,7 @@ namespace mongo {
         invariant( minor == PDFILE_VERSION_MINOR_22_AND_OLDER );
 
         DataFile* df = _extentManager.getFile( opCtx, 0 );
-        LockManager::getSingleton().acquire(opCtx->getTransaction(), kExclusive,
-                                            &df->getHeader()->versionMinor);
+        ExclusiveResourceLock(opCtx->getTransaction(), &df->getHeader()->versionMinor);
         opCtx->recoveryUnit()->writingInt(df->getHeader()->versionMinor) =
             PDFILE_VERSION_MINOR_24_AND_NEWER;
     }
@@ -556,8 +555,8 @@ namespace mongo {
             }
         }
         else if ( options.cappedMaxDocs > 0 ) {
-            LockManager::getSingleton().acquire(txn->getTransaction(), kExclusive,
-                                                &_namespaceIndex.details( ns )->maxDocsInCapped );
+            ExclusiveResourceLock(txn->getTransaction(),
+                                  &_namespaceIndex.details( ns )->maxDocsInCapped );
             txn->recoveryUnit()->writingInt( _namespaceIndex.details( ns )->maxDocsInCapped ) =
                 options.cappedMaxDocs;
         }
