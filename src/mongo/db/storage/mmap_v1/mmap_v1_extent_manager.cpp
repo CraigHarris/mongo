@@ -217,7 +217,7 @@ namespace mongo {
                                                  const DiskLoc& loc ) const {
         Record* record = recordForV1( loc );
         DiskLoc result( loc.a(), record->extentOfs() );
-        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, result);
+        ACQUIRE_LOCK(txn->getTransaction(), kShared, result);
         return result;
     }
 
@@ -566,7 +566,7 @@ namespace mongo {
     DiskLoc MmapV1ExtentManager::getNextExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
         if (extentLoc.isNull()) return extentLoc;
         DiskLoc result = getExtent( extentLoc )->xnext;
-        LockManager::getSingleton().acquire( txn->getTransaction(), kShared, result );
+        ACQUIRE_LOCK( txn->getTransaction(), kShared, result );
         LockManager::getSingleton().release( txn->getTransaction(), kShared, extentLoc );
         return result;
     }
@@ -574,7 +574,7 @@ namespace mongo {
     DiskLoc MmapV1ExtentManager::getPrevExtent( OperationContext* txn, const DiskLoc& extentLoc ) const {
         if (extentLoc.isNull()) return extentLoc;
         DiskLoc result = getExtent( extentLoc )->xprev;
-        LockManager::getSingleton().acquire( txn->getTransaction(), kShared, result );
+        ACQUIRE_LOCK( txn->getTransaction(), kShared, result );
         LockManager::getSingleton().release( txn->getTransaction(), kShared, extentLoc );
         return result;
     }

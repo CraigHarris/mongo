@@ -464,7 +464,7 @@ namespace mongo {
             txn->recoveryUnit()->commitIfNeeded();
             // 'curr' will point to the newest document in the collection.
             DiskLoc curr = theCapExtent(txn)->lastRecord;
-            lm.acquire( tx, kShared, curr );
+            LM_ACQUIRE_LOCK( tx, kShared, curr );
             invariant( !curr.isNull() );
             if ( curr == end ) {
                 if ( inclusive ) {
@@ -550,7 +550,7 @@ namespace mongo {
     }
 
     const DiskLoc& CappedRecordStoreV1::cappedListOfAllDeletedRecords(OperationContext* txn) const {
-        LockManager::getSingleton().acquire(txn->getTransaction(),
+        ACQUIRE_LOCK(txn->getTransaction(),
                                             kShared, _details->deletedListEntry(txn, 0));
         return _details->deletedListEntry(txn, 0);
     }
@@ -561,7 +561,7 @@ namespace mongo {
     }
 
     const DiskLoc& CappedRecordStoreV1::cappedLastDelRecLastExtent( OperationContext* txn ) const {
-        LockManager::getSingleton().acquire(txn->getTransaction(),
+        ACQUIRE_LOCK(txn->getTransaction(),
                                             kShared, _details->deletedListEntry(txn, 1));
         return _details->deletedListEntry(txn, 1);
     }
@@ -592,7 +592,7 @@ namespace mongo {
                 DiskLoc i = cappedListOfAllDeletedRecords(txn);
                 while (!drec(i)->nextDeleted().isNull()) {
                     DiskLoc newDL = drec(i)->nextDeleted();
-                    lm.acquire(tx, kShared, newDL);
+                    LM_ACQUIRE_LOCK(tx, kShared, newDL);
                     lm.release(tx, kShared, i);
                     i = newDL;
                 }
@@ -630,7 +630,7 @@ namespace mongo {
                 if (ext->firstRecord.isNull())
                     continue;
 
-                lm.acquire(tx, kShared, ext->firstRecord);
+                LM_ACQUIRE_LOCK(tx, kShared, ext->firstRecord);
                 iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(txn,
                                                                                ext->firstRecord,
                                                                                this));
@@ -651,7 +651,7 @@ namespace mongo {
                 if (ext->firstRecord != capFirstNewRecord) {
                     // this means there is old data in capExtent
 
-                    lm.acquire(tx, kShared, ext->firstRecord);
+                    LM_ACQUIRE_LOCK(tx, kShared, ext->firstRecord);
                     iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(txn,
                                                                                    ext->firstRecord,
                                                                                    this));
@@ -668,7 +668,7 @@ namespace mongo {
             // Next handle all the other extents
             while (extLoc != capExtent) {
                 const Extent* ext = _getExtent(txn, extLoc);
-                lm.acquire(tx, kShared, ext->firstRecord);
+                LM_ACQUIRE_LOCK(tx, kShared, ext->firstRecord);
                 iterators.push_back(new RecordStoreV1Base::IntraExtentIterator(txn,
                                                                                ext->firstRecord,
                                                                                this));
@@ -735,7 +735,7 @@ namespace mongo {
             Extent* e = _extentManager->getExtent( i );
 
             if ( !e->firstRecord.isNull() ) {
-                LockManager::getSingleton().acquire( txn->getTransaction(), kShared, e->lastRecord );
+                ACQUIRE_LOCK( txn->getTransaction(), kShared, e->lastRecord );
                 LockManager::getSingleton().release( txn->getTransaction(), kShared, i );
                 return e->firstRecord;
             }
@@ -751,7 +751,7 @@ namespace mongo {
 
             Extent* e = _extentManager->getExtent( i );
             if ( !e->lastRecord.isNull() ) {
-                LockManager::getSingleton().acquire( txn->getTransaction(), kShared, e->lastRecord );
+                ACQUIRE_LOCK( txn->getTransaction(), kShared, e->lastRecord );
                 LockManager::getSingleton().release( txn->getTransaction(), kShared, i );
                 return e->lastRecord;
             }

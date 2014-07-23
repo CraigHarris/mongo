@@ -70,7 +70,7 @@ namespace mongo {
 
                 const Extent* e = em->getExtent(_currExtent, false);
                 _currRecord = (FORWARD_SCAN == _stage ? e->firstRecord : e->lastRecord);
-                LockManager::getSingleton().acquire(_txn->getTransaction(), kShared, _currRecord);
+                ACQUIRE_LOCK(_txn->getTransaction(), kShared, _currRecord);
             }
             else {
                 switch (_stage) {
@@ -131,7 +131,7 @@ namespace mongo {
                 //
                 const Extent* e = em->getExtent(_currExtent, false);
                 DiskLoc newExtentLoc = (FORWARD_SCAN == _stage ? e->xnext : e->xprev);
-                LockManager::getSingleton().acquire(_txn->getTransaction(), kShared, newExtentLoc );
+                ACQUIRE_LOCK(_txn->getTransaction(), kShared, newExtentLoc );
                 LockManager::getSingleton().release(_txn->getTransaction(), kShared, _currExtent );
                 _currExtent = newExtentLoc;
             }

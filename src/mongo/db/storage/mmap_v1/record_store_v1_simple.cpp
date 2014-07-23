@@ -97,13 +97,19 @@ namespace mongo {
             DiskLoc *prev = 0;
             DiskLoc *bestprev = 0;
             DiskLoc bestmatch;
-            DiskLoc bestPrevRec;
             int bestmatchlen = INT_MAX; // sentinel meaning we haven't found a record big enough
             int b = bucket(lenToAlloc);
-            DiskLoc cur = _details->deletedListEntry(txn, b);
+            DiskLoc cur = _details->deletedListEntry(txn, b); // kShared locked
             DiskLoc prevRec;
             
-            lm.acquire( tx, kShared, cur );
+
+            // Loop, searching for the bestmatch DiskLoc to return
+            // bestmatch and bestprev should be locked after the loop
+            // and nothing else should be locked.
+            //
+            // XXX: assess whether it's best to lock bestmatch shared
+            // until end of loop, or exclusively.
+
             int extra = 5; // look for a better fit, a little.
             int chain = 0;
             while ( 1 ) {
@@ -137,22 +143,24 @@ namespace mongo {
                         freelistIterations.increment( 1 + chain );
                         return DiskLoc();
                     }
-                    cur = _details->deletedListEntry(txn, b);
-                    lm.acquire( tx, kShared, cur );
+                    DiskLoc newCur = _details->deletedListEntry(txn, b);
+                    cur = newCur;
                     prev = 0;
                     continue;
                 }
                 DeletedRecord *r = drec(cur);
                 if ( r->lengthWithHeaders() >= lenToAlloc &&
                      r->lengthWithHeaders() < bestmatchlen ) {
+                    // better match than we have
                     bestmatchlen = r->lengthWithHeaders();
-                    lm.release( tx, kShared, bestmatch );
-                    lm.release( tx, kShared, bestPrevRec );
+
+                    LM_ACQUIRE_LOCK( tx, kExclusive, cur );
+                    lm.release( tx, kExclusive, bestmatch );
                     bestmatch = cur;
-                    bestPrevRec = prevRec;
+
+                    LM_ACQUIRE_LOCK( tx, kExclusive, prev );
+                    lm.release( tx, kExclusive, bestprev );
                     bestprev = prev;
-                    lm.acquire( tx, kShared, bestmatch );
-                    lm.acquire( tx, kShared, prevRec );
                     if (r->lengthWithHeaders() == lenToAlloc)
                         // exact match, stop searching
                         break;
@@ -164,22 +172,17 @@ namespace mongo {
                     //b++;
                     freelistIterations.increment( chain );
                     chain = 0;
+                    lm.release( tx, kShared, cur );
                     cur.Null();
                 }
                 else {
-                    lm.release( tx, kShared, prevRec );
-                    prevRec = cur;
                     prev = &r->nextDeleted();
+
+                    LM_ACQUIRE_LOCK( tx, kShared, r->nextDeleted() );
+                    lm.release( tx, kShared, cur );
                     cur = r->nextDeleted();
-                    lm.acquire( tx, kShared, cur );
                 }
             }
-
-            lm.acquire( tx, kExclusive, bestmatch );
-            ExclusiveResourceLock( tx, bestPrevRec );
-            lm.release( tx, kShared, bestmatch );
-            lm.release( tx, kShared, bestPrevRec );
-            lm.release( tx, kShared, prevRec );
             lm.release( tx, kShared, cur );
 
             // unlink ourself from the deleted list
@@ -187,6 +190,7 @@ namespace mongo {
             DeletedRecord *bmr = drec(bestmatch);
             if ( bestprev ) {
                 *txn->recoveryUnit()->writing(bestprev) = bmr->nextDeleted();
+                lm.release(tx, kExclusive, bestprev);
             }
             else {
                 // should be the front of a free-list
@@ -203,8 +207,6 @@ namespace mongo {
 
         if ( loc.isNull() )
             return loc;
-
-        lm.acquire(tx, kShared, loc);
 
         // determine if we should chop up
 
@@ -409,7 +411,7 @@ namespace mongo {
             long long nrecords = 0;
             DiskLoc L = e->firstRecord;
             if( !L.isNull() ) {
-                lm.acquire( tx, kExclusive, L );
+                LM_ACQUIRE_LOCK( tx, kExclusive, L );
                 while( 1 ) {
                     Record *recOld = recordFor(L);
                     RecordData oldData = recOld->toRecordData();
@@ -457,7 +459,7 @@ namespace mongo {
                     }
 
                     DiskLoc nextRecLoc = getNextRecordInExtent(txn, L);
-                    lm.acquire( tx, kExclusive, nextRecLoc );
+                    LM_ACQUIRE_LOCK( tx, kExclusive, nextRecLoc );
                     lm.release( tx, kExclusive, L );
                     L = nextRecLoc;
 

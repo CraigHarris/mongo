@@ -70,7 +70,7 @@ namespace mongo {
                 DiskLoc oldExtentLoc = firstExtentLoc;
                 while (e->firstRecord.isNull() && !e->xnext.isNull()) {
                     DiskLoc newExtentLoc = e->xnext;
-                    lm.acquire( tx, kShared, newExtentLoc );
+                    LM_ACQUIRE_LOCK( tx, kShared, newExtentLoc );
                     e = em->getExtent( e->xnext );
                     lm.release( tx, kShared, oldExtentLoc );
                     oldExtentLoc = newExtentLoc;
@@ -93,7 +93,7 @@ namespace mongo {
                 DiskLoc oldExtentLoc = lastExtentLoc;
                 while (e->lastRecord.isNull() && !e->xprev.isNull()) {
                     DiskLoc newExtentLoc = e->xprev;
-                    lm.acquire( tx, kShared, newExtentLoc );
+                    LM_ACQUIRE_LOCK( tx, kShared, newExtentLoc );
                     e = em->getExtent( e->xprev );
                     lm.release( tx, kShared, oldExtentLoc );
                     oldExtentLoc = newExtentLoc;
@@ -104,7 +104,7 @@ namespace mongo {
                 _curr = e->lastRecord;
             }
         }
-        lm.acquire(tx, kShared, _curr);
+        LM_ACQUIRE_LOCK(tx, kShared, _curr);
     }
 
     bool SimpleRecordStoreV1Iterator::isEOF() {

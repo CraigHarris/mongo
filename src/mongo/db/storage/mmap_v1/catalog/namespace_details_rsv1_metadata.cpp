@@ -42,7 +42,7 @@ namespace mongo {
 
     const DiskLoc& NamespaceDetailsRSV1MetaData::capExtent( OperationContext* txn ) const {
         SharedResourceLock(txn->getTransaction(), &_details->capExtent);
-        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, _details->capExtent);
+        ACQUIRE_LOCK(txn->getTransaction(), kShared, _details->capExtent);
         return _details->capExtent;
     }
 
@@ -54,7 +54,7 @@ namespace mongo {
     const DiskLoc& NamespaceDetailsRSV1MetaData::capFirstNewRecord( OperationContext* txn ) const {
         Transaction* tx = txn->getTransaction();
         SharedResourceLock(tx, &_details->capFirstNewRecord);
-        LockManager::getSingleton().acquire(tx, kShared, _details->capFirstNewRecord);
+        ACQUIRE_LOCK(tx, kShared, _details->capFirstNewRecord);
         return _details->capFirstNewRecord;
     }
 
@@ -98,7 +98,7 @@ namespace mongo {
                                                                    int bucket ) const {
         Transaction* tx = txn->getTransaction();
         SharedResourceLock(tx, &_details->deletedList[ bucket ]);
-        LockManager::getSingleton().acquire(tx, kShared, _details->deletedList[ bucket ]);
+        ACQUIRE_LOCK(tx, kShared, _details->deletedList[ bucket ]);
         return _details->deletedList[ bucket ];
     }
 
@@ -117,7 +117,7 @@ namespace mongo {
 
     const DiskLoc& NamespaceDetailsRSV1MetaData::firstExtent( OperationContext* txn ) const {
         SharedResourceLock(txn->getTransaction(), &_details->firstExtent);
-        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, _details->firstExtent);
+        ACQUIRE_LOCK(txn->getTransaction(), kShared, _details->firstExtent);
         return _details->firstExtent;
     }
 
@@ -128,7 +128,7 @@ namespace mongo {
 
     const DiskLoc& NamespaceDetailsRSV1MetaData::lastExtent( OperationContext* txn ) const {
         SharedResourceLock(txn->getTransaction(), &_details->lastExtent);
-        LockManager::getSingleton().acquire(txn->getTransaction(), kShared, _details->lastExtent);
+        ACQUIRE_LOCK(txn->getTransaction(), kShared, _details->lastExtent);
         return _details->lastExtent;
     }
 

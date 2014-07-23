@@ -66,7 +66,7 @@ namespace mongo {
                     // Copied verbatim from ForwardCappedCursor::init.
                     // TODO ELABORATE
                     _curr = _getExtent( nsd->capExtent(_txn) )->firstRecord;
-                    lm.acquire( tx, kShared, _curr );
+                    LM_ACQUIRE_LOCK( tx, kShared, _curr );
                     if (!_curr.isNull() && _curr == nsd->capFirstNewRecord(_txn)) {
                         _curr = _getExtent( nsd->capExtent(_txn) )->lastRecord;
                         _curr = nextLoop(_curr);
@@ -81,11 +81,11 @@ namespace mongo {
                 }
                 else {
                     _curr = _getExtent( nsd->capExtent(_txn) )->lastRecord;
-                    lm.acquire( tx, kShared, _curr );
+                    LM_ACQUIRE_LOCK( tx, kShared, _curr );
                 }
             }
         }
-        LockManager::getSingleton().acquire(_txn->getTransaction(), kShared, _curr);
+        ACQUIRE_LOCK(_txn->getTransaction(), kShared, _curr);
     }
 
     bool CappedRecordStoreV1Iterator::isEOF() { return _curr.isNull(); }

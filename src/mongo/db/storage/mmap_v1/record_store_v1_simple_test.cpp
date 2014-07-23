@@ -165,6 +165,8 @@ namespace {
 
         // The length of the allocated record is quantized.
         ASSERT_EQUALS( 320, rs.dataFor( result.getValue() ).size() + Record::HeaderSize );
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, result.getValue());
     }
 
     /**
@@ -186,6 +188,8 @@ namespace {
         // The length of the allocated record is not quantized.
         ASSERT_EQUALS( 300, rs.dataFor( result.getValue() ).size() + Record::HeaderSize );
 
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, result.getValue());
+
     }
 
     /** alloc() quantizes records in index collections to the nearest multiple of 4. */
@@ -202,6 +206,8 @@ namespace {
         ASSERT( result.isOK() );
 
         ASSERT_EQUALS( 300, rs.dataFor( result.getValue() ).size() + Record::HeaderSize );
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, result.getValue());
     }
 
     /** alloc() returns a non quantized record larger than the requested size. */
@@ -233,6 +239,8 @@ namespace {
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
         }
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, actualLocation.getValue());
     }
 
     /** alloc() returns a non quantized record equal to the requested size. */
@@ -264,6 +272,8 @@ namespace {
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
         }
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, actualLocation.getValue());
     }
 
     /**
@@ -298,6 +308,8 @@ namespace {
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
         }
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, actualLocation.getValue());
     }
 
     /**
@@ -336,6 +348,8 @@ namespace {
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
         }
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, actualLocation.getValue());
     }
 
     /**
@@ -374,6 +388,8 @@ namespace {
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
         }
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, actualLocation.getValue());
     }
 
     /** getRecordAllocationSize() returns its argument when the padding factor is 1.0. */
@@ -450,6 +466,8 @@ namespace {
         ASSERT_EQUALS( 1, md->numRecords() );
         RecordData recordData = rs.dataFor( result.getValue() );
         ASSERT_EQUALS( string("abc"), string(recordData.data()) );
+
+        LockManager::getSingleton().release(txn.getTransaction(), kExclusive, result.getValue());
     }
 
     // ----------------
@@ -498,6 +516,7 @@ namespace {
                 {}
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0, 1200));
         }
     }
 
@@ -551,6 +570,9 @@ namespace {
                 {}
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,1200));
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,1600));
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,1100));
         }
     }
 
@@ -658,6 +680,9 @@ namespace {
                 {}
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,8000));
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,1100));
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,9000));
         }
     }
 
@@ -770,6 +795,9 @@ namespace {
                 {}
             };
             assertStateV1RS(&txn, recs, drecs, &em, md);
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,7100));
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,8000));
+            LockManager::getSingleton().release(txn.getTransaction(), kExclusive, DiskLoc(0,7000));
         }
     }
 }
