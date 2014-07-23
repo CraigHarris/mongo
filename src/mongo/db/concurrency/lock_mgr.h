@@ -30,6 +30,7 @@
 
 #include <boost/thread/condition_variable.hpp>
 #include <boost/thread/mutex.hpp>
+#include <boost/thread/recursive_mutex.hpp>
 #include <iterator>
 #include <map>
 #include <set>
@@ -65,7 +66,8 @@ namespace mongo {
     class ResourceId {
     public:
         ResourceId() : _rid(0) { }
-        ResourceId(uint64_t rid) : _rid(rid) { }
+        explicit ResourceId(uint64_t rid) : _rid(rid) { }
+        ResourceId(const void* loc) : _rid(reinterpret_cast<uint64_t>(loc)) { }
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
         bool operator==(const ResourceId& other) const { return _rid == other._rid; }
         operator uint64_t() const { return _rid; }
@@ -73,7 +75,7 @@ namespace mongo {
     private:
         uint64_t _rid;
     };
-    static const ResourceId kReservedResourceId = 0;
+    static const ResourceId kReservedResourceId;
 
 
     /**
@@ -187,6 +189,14 @@ namespace mongo {
 	void addLock(LockRequest* lr);
 
         /**
+         * waiter functions
+         */
+        size_t numWaiters() const;
+        bool hasWaiter(const Transaction* other) const;
+        void removeWaiterAndItsWaiters(const Transaction* other);
+        void removeAllWaiters();
+
+        /**
          * should be age of the transaction.  currently using txId as a proxy.
          */
         bool operator<(const Transaction& other) const;
@@ -214,10 +224,6 @@ namespace mongo {
 
         // uniquely identify the transaction
         unsigned _txId;
-#ifdef REGISTER_TRANSACTIONS
-        // for mutex parallelism while handling transactions
-        unsigned _txSlice;
-#endif
 
         // transaction priorities:
         //     0 => neutral, use LockManager's default _policy
@@ -229,8 +235,9 @@ namespace mongo {
         // LockManager doesnt accept new requests from completed transactions
         TxState _state;
 
-        // synchronize access to _locks;
-        mutable boost::mutex _locksMutex;
+        // synchronize access to transaction's _locks and _waiters
+        // which are modified by the lock manager
+        mutable boost::recursive_mutex _txMutex;
 
         // For cleanup and abort processing, references all LockRequests made by a transaction
         LockRequest* _locks;
@@ -721,12 +728,12 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           (uint64_t)resource) { }
+                           resource) { }
         SharedResourceLock(Transaction* requestor, uint64_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           resource) { }
+                           ResourceId(resource)) { }
     };
 
     class ExclusiveResourceLock : public ResourceLock {
@@ -735,11 +742,11 @@ namespace mongo {
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
-                           (uint64_t)resource) { }
+                           resource) { }
         ExclusiveResourceLock(Transaction* requestor, uint64_t resource)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
-                           resource) { }
+                           ResourceId(resource)) { }
     };
 } // namespace mongo

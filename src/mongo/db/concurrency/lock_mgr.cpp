@@ -109,9 +109,6 @@ namespace mongo {
     /*---------- Transaction functions ----------*/
     Transaction::Transaction(unsigned txId, int priority)
         : _txId(txId)
-#ifdef REGISTER_TRANSACTION
-        , _txSlice(LockManager::partitionTransaction(txId))
-#endif
         , _priority(priority)
         , _state((0==txId) ? kInvalid : kActive)
         , _locks(NULL) { }
@@ -137,29 +134,58 @@ namespace mongo {
     void Transaction::setPriority(int newPriority) { _priority = newPriority; }
 
     void Transaction::removeLock(LockRequest* lr) {
-        boost::unique_lock<boost::mutex> lk(_locksMutex);
         if (lr->nextOfTransaction) {
             lr->nextOfTransaction->prevOfTransaction = lr->prevOfTransaction;
         }
+
         if (lr->prevOfTransaction) {
             lr->prevOfTransaction->nextOfTransaction = lr->nextOfTransaction;
         }
         else {
+            boost::recursive_mutex::scoped_lock lk(_txMutex);
             _locks = lr->nextOfTransaction;
         }
+
         lr->nextOfTransaction = NULL;
         lr->prevOfTransaction = NULL;
         if (lr->heapAllocated) delete lr;
     }
 
     void Transaction::addLock(LockRequest* lr) {
-        boost::unique_lock<boost::mutex> lk(_locksMutex);
+        boost::recursive_mutex::scoped_lock lk(_txMutex);
         lr->nextOfTransaction = _locks;
 
         if (_locks) {
             _locks->prevOfTransaction = lr;
         }
         _locks = lr;
+    }
+
+    bool Transaction::hasWaiter(const Transaction* other) const {
+        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        return _waiters.find(other) != _waiters.cend();
+    }
+
+    size_t Transaction::numWaiters() const {
+        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        return _waiters.size();
+    }
+
+    void Transaction::removeAllWaiters() {
+        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        _waiters.clear();
+    }
+
+    void Transaction::removeWaiterAndItsWaiters(const Transaction* other) {
+        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        multiset<Transaction*>::iterator otherWaiter = _waiters.find(other);
+        if (otherWaiter == _waiters.end()) return;
+        _waiters.erase(_waiters.find(other));
+        boost::recursive_mutex::scoped_lock other_lk(other->_txMutex);
+        multiset<Transaction*>::iterator nextOtherWaiters = other->_waiters.begin();
+        for(; nextOtherWaiters != other->_waiters.end(); ++nextOtherWaiters) {
+            _waiters.erase(*nextOtherWaiter);
+        }
     }
 
     void Transaction::_addWaiter(Transaction* waiter) {
@@ -170,15 +196,12 @@ namespace mongo {
     string Transaction::toString() const {
         stringstream result;
         result << "<xid:" << _txId
-#ifdef REGISTER_TRANSACTIONS
-               << ",slice:" << _txSlice
-#endif
                << ",priority:" << _priority
                << ",state:" << ((kActive == _state) ? "active" : "completed");
 
         result << ",locks: {";
         bool firstLock=true;
-        boost::unique_lock<boost::mutex> lk(_locksMutex);
+        boost::recursive_mutex::scoped_lock lk(_txMutex);
         for (LockRequest* nextLock = _locks; nextLock; nextLock=nextLock->nextOfTransaction) {
             if (firstLock) firstLock=false;
             else result << ",";
@@ -358,7 +381,7 @@ namespace mongo {
                  nextWaiter != _systemTransaction->_waiters.end(); ++nextWaiter) {
 
                 // iterate over the locks acquired by the blocked transactions
-                boost::unique_lock<boost::mutex> lk((*nextWaiter)->_locksMutex);
+                boost::recursive_mutex::scoped_lock lk((*nextWaiter)->_txMutex);
                 for (LockRequest* nextLock = (*nextWaiter)->_locks; nextLock;
                      nextLock = nextLock->nextOfTransaction) {
                     if (nextLock->isBlocked() && nextLock->shouldAwake()) {
@@ -369,7 +392,7 @@ namespace mongo {
                     }
                 }
             }
-            _systemTransaction->_waiters.clear();
+            _systemTransaction->removeAllWaiters();
         }
 
         // if moving to {READERS,WRITERS}_ONLY, block until no incompatible locks
@@ -718,11 +741,8 @@ namespace mongo {
         // release all resources acquired by this transaction
         // notifying any waiters that they can continue
         //
-        LockRequest* nextLock=NULL;
-        {
-        boost::unique_lock<boost::mutex> lk(goner->_locksMutex);
-        nextLock = goner->_locks;
-        }
+        boost::recursive_mutex::scoped_lock lk(goner->_txMutex);
+        LockRequest* nextLock = goner->_locks;
         while (nextLock) {
             // _releaseInternal may free nextLock
             LockRequest* newNextLock = nextLock->nextOfTransaction;
@@ -738,7 +758,7 @@ namespace mongo {
         }
 
         // erase aborted transaction's waiters
-        goner->_waiters.clear();
+        goner->removeAllWaiters();
 
         throw AbortException();
     }
@@ -927,9 +947,9 @@ namespace mongo {
             }
             break;
         case kPolicyBlockersFirst: {
-            size_t lrNumWaiters = lr->requestor->_waiters.size();
+            size_t lrNumWaiters = lr->requestor->numWaiters();
             for (; position; position=position->nextOnResource) {
-                size_t nextRequestNumWaiters = position->requestor->_waiters.size();
+                size_t nextRequestNumWaiters = position->requestor->numWaiters();
                 if (lrNumWaiters > nextRequestNumWaiters &&
                     (isCompatible(lr->mode, position->mode) || position->isBlocked())) {
                     position->insert(lr);
@@ -982,7 +1002,7 @@ namespace mongo {
         case kPolicyOldestTxFirst:
             return *requestor < *oldRequest->requestor;
         case kPolicyBlockersFirst: {
-            return requestor->_waiters.size() > oldRequest->requestor->_waiters.size();
+            return requestor->numWaiters() > oldRequest->requestor->numWaiters();
         }
         default:
             return false;
@@ -1113,7 +1133,7 @@ namespace mongo {
             }
 
             // there's a conflict, check for deadlock
-            if (requestor->_waiters.find(nextLock->requestor) != requestor->_waiters.end()) {
+            if (requestor->hasWaiter(nextLock->requestor)) {
                 // the transaction that would block requestor is already blocked by requestor
                 // if requestor waited for nextLockRequest, there would be a deadlock
                 //
@@ -1137,7 +1157,7 @@ namespace mongo {
             }
 
             // there's a conflict, check for deadlock
-            if (requestor->_waiters.find(nextLock->requestor) != requestor->_waiters.end()) {
+            if (requestor->hasWaiter(nextLock->requestor)) {
                 // the transaction that would block requestor is already blocked by requestor
                 // if requestor waited for nextLockRequest, there would be a deadlock
                 //
@@ -1226,7 +1246,6 @@ namespace mongo {
             _policyLock.notify_one();
         }
 
-
         if (--lr->count > 0) { return kLockCountDecremented; }
 
         // find the sleepers waiting for lr.  They are lock requests that follow lr
@@ -1260,19 +1279,7 @@ namespace mongo {
             invariant(nextSleeper->isBlocked());
 
             // remove nextSleeper and its dependents from holder's waiters
-
-            if (holder->_waiters.find(nextSleeper->requestor) != holder->_waiters.end()) {
-                // every sleeper should be among holders waiters, but a previous sleeper might have
-                // had the nextSleeper as a dependent as well, in which case nextSleeper was removed
-                // previously, hence the test for finding nextSleeper among holder's waiters
-                //
-                Transaction* sleepersTx = nextSleeper->requestor;
-                holder->_waiters.erase(holder->_waiters.find(sleepersTx));
-                multiset<Transaction*>::iterator nextSleepersWaiter = sleepersTx->_waiters.begin();
-                for(; nextSleepersWaiter != sleepersTx->_waiters.end(); ++nextSleepersWaiter) {
-                    holder->_waiters.erase(*nextSleepersWaiter);
-                }
-            }
+            holder->removeWaiterAndItsWaiters(nextSleeper->requestor);
 
             // wake up sleepy heads
             if (nextSleeper->shouldAwake()) {
@@ -1280,28 +1287,12 @@ namespace mongo {
             }
         }
 
-#ifdef VERIFY_LOCK_MANAGER
-        if (holder->_waiters.empty()) {
-            for (set<Transaction*>::iterator nextTx = _activeTransactions.begin();
-                 nextTx != _activeTransactions.end(); ++nextTx) {
-                verify( (*nextTx)->_waiters.find(holder) == (*nextTx)->_waiters.end());
-            }
-        }
-#endif
-
         return kLockReleased;
     }
 
     void LockManager::_throwIfShuttingDown(const Transaction* tx) const {
 
-        if (_shuttingDown && (_timer.millis() >= _millisToQuiesce))
-
-#ifdef LOCK_MANAGER_TRANSACTION_REGISTRATION
-            ||
-            _activeTransactions[tx->txSlice].find(tx) == _activeTransactions[tx->txSlice].end()))
-#endif
-        {
-
+        if (_shuttingDown && (_timer.millis() >= _millisToQuiesce)) {
             throw AbortException(); // XXX should this be something else? ShutdownException?
         }
     }
