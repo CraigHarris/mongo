@@ -658,6 +658,11 @@ TEST(LockManagerTest, TxUpgrade) {
     a3.acquire(kShared, 1, ACQUIRED);
     t2.release(kShared, 1); // t1 still blocked on a3
     a3.acquire(kExclusive, 1, ABORTED);
+/*
+    t1.wakened();
+    t1.release(kExclusive, 1);
+    t1.release(kShared, 1);
+*/
 #else
     a2.quit();
     a3.quit();
