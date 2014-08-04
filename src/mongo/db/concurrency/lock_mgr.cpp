@@ -157,12 +157,12 @@ namespace mongo {
     Transaction::~Transaction() {
         if (kCommitted == _state) {
             if (use2PL) {
-                LockManager::getSingleton().releaseTxLocks(this, kTxCommitted);
+                LockManager::getSingleton().releaseTxLocks(this, LockManager::kTxCommitting);
             }
             invariant(NULL == _locks);
         }
         else if (NULL != _locks) {
-            LockManager::getSingleton().releaseTxLocks(this, kTxAborted);
+            LockManager::getSingleton().releaseTxLocks(this, LockManager::kTxAborting);
         }
     }
 
@@ -226,7 +226,7 @@ namespace mongo {
 
     bool Transaction::hasWaiter(const Transaction* other) const {
         boost::recursive_mutex::scoped_lock lk(_txMutex);
-        return _waiters.find(other) != _waiters.cend();
+        return _waiters.find(other) != _waiters.end();
     }
 
     size_t Transaction::numWaiters() const {
@@ -241,13 +241,13 @@ namespace mongo {
 
     void Transaction::removeWaiterAndItsWaiters(const Transaction* other) {
         boost::recursive_mutex::scoped_lock lk(_txMutex);
-        multiset<Transaction*>::iterator otherWaiter = _waiters.find(other);
+        multiset<const Transaction*>::iterator otherWaiter = _waiters.find(other);
         if (otherWaiter == _waiters.end()) return;
         _waiters.erase(_waiters.find(other));
         boost::recursive_mutex::scoped_lock other_lk(other->_txMutex);
-        multiset<Transaction*>::iterator nextOtherWaiters = other->_waiters.begin();
+        multiset<const Transaction*>::iterator nextOtherWaiters = other->_waiters.begin();
         for(; nextOtherWaiters != other->_waiters.end(); ++nextOtherWaiters) {
-            _waiters.erase(*nextOtherWaiter);
+            _waiters.erase(*nextOtherWaiters);
         }
     }
 
@@ -269,7 +269,7 @@ namespace mongo {
 
         result << ">,waiters: {";
         bool firstWaiter=true;
-        for (multiset<Transaction*>::const_iterator nextWaiter = _waiters.begin();
+        for (multiset<const Transaction*>::const_iterator nextWaiter = _waiters.begin();
              nextWaiter != _waiters.end(); ++nextWaiter) {
             if (firstWaiter) firstWaiter=false;
             else result << ",";
@@ -358,11 +358,7 @@ namespace mongo {
         this->nextOnResource = lr;
     }
 
-    /*---------- LockManager public functions (mutex guarded) ---------*/
-
-    // This parameter enables experimental document-level locking
-    // It should be removed once full document-level locking is checked-in.
-    MONGO_EXPORT_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
+    /*---------- LockManager public functions (mutex guarded) ---------*/;
 
     static LockManager* _singleton = NULL;
 
@@ -434,7 +430,7 @@ namespace mongo {
             // Awaken requests that were blocked on the old policy.
             // iterate over TxIds blocked on kReservedTxId (these are blocked on policy)
 
-            for (multiset<Transaction*>::iterator nextWaiter = _systemTransaction->_waiters.begin();
+            for (multiset<const Transaction*>::iterator nextWaiter = _systemTransaction->_waiters.begin();
                  nextWaiter != _systemTransaction->_waiters.end(); ++nextWaiter) {
 
                 // iterate over the locks acquired by the blocked transactions
@@ -772,7 +768,7 @@ namespace mongo {
      * any waiters that they can retry their resource acquisition.  cleanup
      * and throw an AbortException.
      */
-    void LockManager::_abortInternal<(Transaction* goner, unsigned slice) {
+    void LockManager::_abortInternal(Transaction* goner, unsigned slice) {
 
         goner->_state = Transaction::kAborted;
 
@@ -1264,36 +1260,26 @@ namespace mongo {
         // release all resources acquired by this transaction
         // notifying any waiters that they can continue
         //
-        boost::recursive_mutex::scoped_lock lk(goner->_txMutex);
-        LockRequest* nextLock = goner->_locks;
+        boost::recursive_mutex::scoped_lock lk(holder->_txMutex);
+        size_t numLocksReleased = 0;
+        LockRequest* nextLock = holder->_locks;
         while (nextLock) {
             // _releaseInternal may free nextLock
             LockRequest* newNextLock = nextLock->nextOfTransaction;
+            LockManager::LockStatus status;
             if (slice != nextLock->slice) {
                 boost::unique_lock<boost::mutex> lk(_resourceMutexes[nextLock->slice]);
-                _releaseInternal(nextLock, context);
+                status = _releaseInternal(nextLock, context);
             }
             else {
                 // we already have a lock on this slice
-                _releaseInternal(nextLock, context);
+                status = _releaseInternal(nextLock, context);
             }
-            nextLock = newNextLock;
-        }
-
-        LockRequest* nextLock = holder->_locks;
-        size_t numLocksReleased = 0;
-        while (nextLock) {
-            // releaseInternal deletes nextLock, so get the next ptr here
-            LockRequest* newNextLock = nextLock->nextOfTransaction;
-            LockManager::LockStatus status = _releaseInternal(nextLock, true /* isTxEnding */ );
             if (kLockReleased == status) {
                 numLocksReleased++;
             }
             nextLock = newNextLock;
         }
-
-        // erase aborted transaction's waiters
-        holder->_waiters.clear();
 
         return numLocksReleased;
     }

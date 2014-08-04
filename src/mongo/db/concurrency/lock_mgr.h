@@ -239,6 +239,7 @@ namespace mongo {
         std::string toString() const;
 
     private:
+        friend class LockManager;
 
         /**
          * it might be useful to reject lock manager requests from inactive TXs.
@@ -251,7 +252,7 @@ namespace mongo {
         };
 
         // identify the transaction
-        const unsigned _txId;
+        unsigned _txId;
 
         // transaction priorities:
         //     0 => neutral, use LockManager's default _policy
@@ -283,7 +284,7 @@ namespace mongo {
         // consulted/updated when there's a lock conflict.  When there are many more documents
         // than transactions, the set will usually be empty.
         //
-        std::multiset<Transaction*> _waiters;
+        std::multiset<const Transaction*> _waiters;
     };
 
     /**
@@ -422,6 +423,12 @@ namespace mongo {
 
     public:
 
+        enum ReleaseContext {
+            kTxActive,
+            kTxCommitting,
+            kTxAborting
+        };
+
         /**
          * Singleton factory - retrieves a common instance of LockManager
          */
@@ -506,7 +513,7 @@ namespace mongo {
          * release all resources acquired by a transaction
          * returns number of locks released
          */
-        size_t releaseTxLocks(Transaction* holder);
+        size_t releaseTxLocks(Transaction* holder, ReleaseContext context);
 
         /**
          * called internally for deadlock
@@ -543,12 +550,6 @@ namespace mongo {
                       const ResourceId& resId) const;
 
     private: // alphabetical
-
-        enum ReleaseMode {
-            kTxActive,
-            kTxCommitting,
-            kTxAborting
-        };
 
         /**
          * called by public ::abort and internally upon deadlock
