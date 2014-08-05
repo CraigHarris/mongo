@@ -277,25 +277,27 @@ TEST(LockManagerTest, TxError) {
     LockManager lm;
     LockManager::LockStatus status;
     Transaction tx(1);
+    ResourceId r1(static_cast<int>(1));
+    ResourceId r2(static_cast<int>(2));
 
     // release a lock on a resource we haven't locked
-    lm.acquire(&tx, kShared, 2);
-    status = lm.release(&tx, kShared, 1); // this is in error
+    lm.acquire(&tx, kShared, r2);
+    status = lm.release(&tx, kShared, r1); // this is in error
     ASSERT(LockManager::kLockResourceNotFound == status);
-    status = lm.release(&tx, kShared, 2);
+    status = lm.release(&tx, kShared, r2);
     ASSERT(LockManager::kLockReleased == status);
 
     // release a record we've locked in a different mode
-    lm.acquire(&tx, kShared, 1);
-    status = lm.release(&tx, kExclusive, 1); // this is in error
+    lm.acquire(&tx, kShared, r1);
+    status = lm.release(&tx, kExclusive, r1); // this is in error
     ASSERT(LockManager::kLockModeNotFound == status);
-    status = lm.release(&tx, kShared, 1);
+    status = lm.release(&tx, kShared, r1);
     ASSERT(LockManager::kLockReleased == status);
 
-    lm.acquire(&tx, kExclusive, 1);
-    status = lm.release(&tx, kShared, 1); // this is in error
+    lm.acquire(&tx, kExclusive, r1);
+    status = lm.release(&tx, kShared, r1); // this is in error
     ASSERT(LockManager::kLockModeNotFound == status);
-    status = lm.release(&tx, kExclusive, 1);
+    status = lm.release(&tx, kExclusive, r1);
     ASSERT(LockManager::kLockReleased == status);
 
     // attempt to acquire on a transaction that aborted
@@ -303,7 +305,7 @@ TEST(LockManagerTest, TxError) {
         lm.abort(&tx);
     } catch (const LockManager::AbortException& err) { }
     try {
-        lm.acquire(&tx, kShared, 1); // error
+        lm.acquire(&tx, kShared, r1); // error
         ASSERT(false);
     } catch (const LockManager::AbortException& error) {
     }
@@ -312,7 +314,7 @@ TEST(LockManagerTest, TxError) {
 TEST(LockManagerTest, SingleTx) {
     LockManager lm;
     Transaction t1(1);
-    ResourceId r1 = 1;
+    ResourceId r1(static_cast<int>(1));
     LockManager::LockStatus status;
 
     // acquire a shared record lock
@@ -398,48 +400,50 @@ TEST(LockManagerTest, TxConflict) {
     LockManager lm;
     ClientTransaction t1(&lm, 1);
     ClientTransaction t2(&lm, 2);
+    ResourceId r1(static_cast<int>(1));
+    ResourceId r2(static_cast<int>(2));
 
     // no conflicts with shared locks on same/different objects
 
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 2, ACQUIRED);
-    t1.acquire(kShared, 2, ACQUIRED);
-    t2.acquire(kShared, 1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r2, ACQUIRED);
+    t1.acquire(kShared, r2, ACQUIRED);
+    t2.acquire(kShared, r1, ACQUIRED);
 
-    t1.release(kShared, 1);
-    t1.release(kShared, 2);
-    t2.release(kShared, 1);
-    t2.release(kShared, 2);
+    t1.release(kShared, r1);
+    t1.release(kShared, r2);
+    t2.release(kShared, r1);
+    t2.release(kShared, r2);
 
 
     // no conflicts with exclusive locks on different objects
-    t1.acquire(kExclusive, 1, ACQUIRED);
-    t2.acquire(kExclusive, 2, ACQUIRED);
-    t1.release(kExclusive, 1);
-    t2.release(kExclusive, 2);
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t2.acquire(kExclusive, r2, ACQUIRED);
+    t1.release(kExclusive, r1);
+    t2.release(kExclusive, r2);
 
 
     // shared then exclusive conflict
-    t1.acquire(kShared, 1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
     // t2's request is incompatible with t1's lock, so it should block
-    t2.acquire(kExclusive, 1, BLOCKED);
-    t1.release(kShared, 1);
+    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.release(kShared, r1);
     t2.wakened(); // with t1's lock released, t2 should wake
-    t2.release(kExclusive, 1);
+    t2.release(kExclusive, r1);
 
     // exclusive then shared conflict
-    t1.acquire(kExclusive, 1, ACQUIRED);
-    t2.acquire(kShared, 1, BLOCKED);
-    t1.release(kExclusive, 1);
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t2.acquire(kShared, r1, BLOCKED);
+    t1.release(kExclusive, r1);
     t2.wakened();
-    t2.release(kShared, 1);
+    t2.release(kShared, r1);
 
     // exclusive then exclusive conflict
-    t1.acquire(kExclusive, 1, ACQUIRED);
-    t2.acquire(kExclusive, 1, BLOCKED);
-    t1.release(kExclusive, 1);
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.release(kExclusive, r1);
     t2.wakened();
-    t2.release(kExclusive, 1);
+    t2.release(kExclusive, r1);
 
     t1.quit();
     t2.quit();
@@ -455,87 +459,91 @@ TEST(LockManagerTest, TxDeadlock) {
     ClientTransaction a3(&lm, 6);
     ClientTransaction a4(&lm, 7);
     ClientTransaction a5(&lm, 8);
+
+    ResourceId r1(static_cast<int>(1));
+    ResourceId r2(static_cast<int>(2));
+    ResourceId r3(static_cast<int>(3));
 #if 1
     // simple deadlock test 1
-    t1.acquire(kShared, 1, ACQUIRED);
-    a1.acquire(kShared, 2, ACQUIRED);
-    t1.acquire(kExclusive, 2, BLOCKED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    a1.acquire(kShared, r2, ACQUIRED);
+    t1.acquire(kExclusive, r2, BLOCKED);
     // a1's request would form a dependency cycle, so it should abort
-    a1.acquire(kExclusive, 1, ABORTED);
+    a1.acquire(kExclusive, r1, ABORTED);
     t1.wakened(); // with t2's locks released, t1 should wake
-    t1.release(kExclusive, 2);
-    t1.release(kShared, 1);
+    t1.release(kExclusive, r2);
+    t1.release(kShared, r1);
 
     // simple deadlock test 2
-    a2.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 2, ACQUIRED);
-    t2.acquire(kExclusive, 1, BLOCKED);
+    a2.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r2, ACQUIRED);
+    t2.acquire(kExclusive, r1, BLOCKED);
     // a2's request would form a dependency cycle, so it should abort
-    a2.acquire(kExclusive, 2, ABORTED);
+    a2.acquire(kExclusive, r2, ABORTED);
     t2.wakened(); // with a2's locks released, t2 should wake
-    t2.release(kExclusive, 1);
-    t2.release(kShared, 2);
+    t2.release(kExclusive, r1);
+    t2.release(kShared, r2);
 #else
     a1.quit();
     a2.quit();
 #endif
 #if 1
     // three way deadlock
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 2, ACQUIRED);
-    a3.acquire(kShared, 3, ACQUIRED);
-    t1.acquire(kExclusive, 2, BLOCKED);
-    t2.acquire(kExclusive, 3, BLOCKED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r2, ACQUIRED);
+    a3.acquire(kShared, r3, ACQUIRED);
+    t1.acquire(kExclusive, r2, BLOCKED);
+    t2.acquire(kExclusive, r3, BLOCKED);
     // a3's request would form a dependency cycle, so it should abort
-    a3.acquire(kExclusive, 1, ABORTED);;
+    a3.acquire(kExclusive, r1, ABORTED);;
     t2.wakened(); // with a3's lock release, t2 should wake
-    t2.release(kShared, 2);
+    t2.release(kShared, r2);
     t1.wakened(); // with t2's locks released, t1 should wake
-    t2.release(kExclusive, 3);
-    t1.release(kShared, 1);
-    t1.release(kExclusive, 2);
+    t2.release(kExclusive, r3);
+    t1.release(kShared, r1);
+    t1.release(kExclusive, r2);
 #else
     a3.quit();
 #endif
     // test for phantom deadlocks
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kExclusive, 1, BLOCKED);
-    t1.release(kShared, 1);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.release(kShared, r1);
     t2.wakened();
     // at this point, t2 should no longer be waiting for t1
     // so it should be OK for t1 to wait for t2
-    t1.acquire(kShared, 1, BLOCKED);
-    t2.release(kExclusive, 1);
+    t1.acquire(kShared, r1, BLOCKED);
+    t2.release(kExclusive, r1);
     t1.wakened();
-    t1.release(kShared, 1);
+    t1.release(kShared, r1);
 #if 1
     // test for missing deadlocks
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 2, ACQUIRED); // setup for deadlock with a4
-    t2.acquire(kExclusive, 1, BLOCKED); // block on t1
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r2, ACQUIRED); // setup for deadlock with a4
+    t2.acquire(kExclusive, r1, BLOCKED); // block on t1
     // after this, because readers first policy, t2 should
     // also be waiting on a4.
-    a4.acquire(kShared, 1, ACQUIRED);
+    a4.acquire(kShared, r1, ACQUIRED);
     // after this, t2 should be waiting ONLY on a4
-    t1.release(kShared, 1);
+    t1.release(kShared, r1);
     // So a4 should not be allowed to wait on t2's resource.
-    a4.acquire(kExclusive, 2, ABORTED);
+    a4.acquire(kExclusive, r2, ABORTED);
     t2.wakened();
-    t2.release(kShared, 2);
-    t2.release(kExclusive, 1);
+    t2.release(kShared, r2);
+    t2.release(kExclusive, r1);
 
     // test for missing deadlocks: due to downgrades
-    a5.acquire(kExclusive, 1, ACQUIRED);
-    a5.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 2, ACQUIRED); // setup for deadlock with a5
-    t2.acquire(kExclusive, 1, BLOCKED); // block on a5
-    a5.release(kExclusive, 1);
+    a5.acquire(kExclusive, r1, ACQUIRED);
+    a5.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r2, ACQUIRED); // setup for deadlock with a5
+    t2.acquire(kExclusive, r1, BLOCKED); // block on a5
+    a5.release(kExclusive, r1);
     // at this point, t2 should still be blocked on a5's downgraded lock
     // So a5 should not be allowed to wait on t2's resource.
-    a5.acquire(kExclusive, 2, ABORTED);
+    a5.acquire(kExclusive, r2, ABORTED);
     t2.wakened();
-    t2.release(kShared, 2);
-    t2.release(kExclusive, 1);
+    t2.release(kShared, r2);
+    t2.release(kExclusive, r1);
 #else
     a4.quit();
     a5.quit();
@@ -549,53 +557,54 @@ TEST(LockManagerTest, TxDowngrade) {
     LockManager lm;
     ClientTransaction t1(&lm, 1);
     ClientTransaction t2(&lm, 2);
+    ResourceId r1(static_cast<int>(1));
 
-    t1.acquire(kExclusive, 1, ACQUIRED);
-    t1.acquire(kShared, 1, ACQUIRED); // downgrade
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED); // downgrade
     // t1 still has exclusive on resource 1, so t2 must wait
-    t2.acquire(kShared, 1, BLOCKED);
-    t1.release(kExclusive, 1);
+    t2.acquire(kShared, r1, BLOCKED);
+    t1.release(kExclusive, r1);
     t2.wakened(); // with the exclusive lock released, t2 wakes
-    t1.release(kShared, 1);
-    t2.release(kShared, 1);
+    t1.release(kShared, r1);
+    t2.release(kShared, r1);
 
-    t1.acquire(kExclusive, 1, ACQUIRED);
-    t1.acquire(kShared, 1, ACQUIRED); // downgrade
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED); // downgrade
     // t1 still has exclusive on resource 1, so t2 must wait
-    t2.acquire(kShared, 1, BLOCKED);
-    t1.release(kShared, 1);
+    t2.acquire(kShared, r1, BLOCKED);
+    t1.release(kShared, r1);
     // with t1 still holding exclusive on resource 1, t2 still blocked
-    t1.release(kExclusive, 1);
+    t1.release(kExclusive, r1);
     t2.wakened(); // with the exclusive lock released, t2 wakes
-    t2.release(kShared, 1);
+    t2.release(kShared, r1);
 
-    t1.acquire(kExclusive, 1, ACQUIRED);
+    t1.acquire(kExclusive, r1, ACQUIRED);
     // t1 has exclusive on resource 1, so t2 must wait
-    t2.acquire(kShared, 1, BLOCKED);
+    t2.acquire(kShared, r1, BLOCKED);
     // even though t2 is waiting for resource 1, t1 can still use it shared,
     // because it already owns exclusive lock and can't block on itself
-    t1.acquire(kShared, 1, ACQUIRED);
-    t1.release(kExclusive, 1);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t1.release(kExclusive, r1);
     t2.wakened(); // with the exclusive lock released, t2 wakes
-    t1.release(kShared, 1);
-    t2.release(kShared, 1);
+    t1.release(kShared, r1);
+    t2.release(kShared, r1);
 
     // t2 acquires exclusive during t1's downgrade
-    t1.acquire(kExclusive, 1, ACQUIRED);
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kExclusive, 1, BLOCKED);
-    t1.release(kExclusive, 1);
-    t1.release(kShared, 1);
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.release(kExclusive, r1);
+    t1.release(kShared, r1);
     t2.wakened();
-    t2.release(kExclusive, 1);
+    t2.release(kExclusive, r1);
 
-    t1.acquire(kExclusive, 1, ACQUIRED);
-    t2.acquire(kExclusive, 1, BLOCKED);
-    t1.acquire(kShared, 1, ACQUIRED);
-    t1.release(kExclusive, 1);
-    t1.release(kShared, 1);
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t1.release(kExclusive, r1);
+    t1.release(kShared, r1);
     t2.wakened();
-    t2.release(kExclusive, 1);
+    t2.release(kExclusive, r1);
 
     t1.quit();
     t2.quit();
@@ -610,58 +619,60 @@ TEST(LockManagerTest, TxUpgrade) {
     ClientTransaction a2(&lm, 4);
     ClientTransaction a3(&lm, 5);
 
+    ResourceId r1(static_cast<int>(1));
+
     // test upgrade succeeds, blocks subsequent reads
-    t1.acquire(kShared, 1, ACQUIRED);
-    t1.acquire(kExclusive, 1, ACQUIRED); // upgrade
-    t2.acquire(kShared, 1, BLOCKED);
-    t1.release(kExclusive, 1);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t1.acquire(kExclusive, r1, ACQUIRED); // upgrade
+    t2.acquire(kShared, r1, BLOCKED);
+    t1.release(kExclusive, r1);
     t2.wakened();
-    t1.release(kShared, 1);
-    t2.release(kShared, 1);
+    t1.release(kShared, r1);
+    t2.release(kShared, r1);
 
     // test upgrade blocks, then wakes
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r1, ACQUIRED);
     // t1 can't use resource 1 exclusively yet, because t2 is using it
-    t1.acquire(kExclusive, 1, BLOCKED);
-    t2.release(kShared, 1);
+    t1.acquire(kExclusive, r1, BLOCKED);
+    t2.release(kShared, r1);
     t1.wakened(); // with t2's shared lock released, t1 wakes
-    t1.release(kExclusive, 1);
-    t1.release(kShared, 1);
+    t1.release(kExclusive, r1);
+    t1.release(kShared, r1);
 
     // test upgrade blocks on several, then wakes
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r1, ACQUIRED);
     // t1 can't use resource 1 exclusively yet, because t2 is using it
-    t1.acquire(kExclusive, 1, BLOCKED);
-    t3.acquire(kShared, 1, ACQUIRED); // additional blocker
-    t2.release(kShared, 1); // t1 still blocked
-    t3.release(kShared, 1);
+    t1.acquire(kExclusive, r1, BLOCKED);
+    t3.acquire(kShared, r1, ACQUIRED); // additional blocker
+    t2.release(kShared, r1); // t1 still blocked
+    t3.release(kShared, r1);
     t1.wakened(); // with t3's shared lock released, t1 wakes
-    t1.release(kExclusive, 1);
-    t1.release(kShared, 1);
+    t1.release(kExclusive, r1);
+    t1.release(kShared, r1);
 #if 1
     // failure to upgrade
-    t1.acquire(kShared, 1, ACQUIRED);
-    a2.acquire(kShared, 1, ACQUIRED);
-    t1.acquire(kExclusive, 1, BLOCKED);
-    a2.acquire(kExclusive, 1, ABORTED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    a2.acquire(kShared, r1, ACQUIRED);
+    t1.acquire(kExclusive, r1, BLOCKED);
+    a2.acquire(kExclusive, r1, ABORTED);
     // with a2's abort, t1 can wake
     t1.wakened();
-    t1.release(kShared, 1);
-    t1.release(kExclusive, 1);
+    t1.release(kShared, r1);
+    t1.release(kExclusive, r1);
 
     // failure to upgrade
-    t1.acquire(kShared, 1, ACQUIRED);
-    t2.acquire(kShared, 1, ACQUIRED);
-    t1.acquire(kExclusive, 1, BLOCKED);
-    a3.acquire(kShared, 1, ACQUIRED);
-    t2.release(kShared, 1); // t1 still blocked on a3
-    a3.acquire(kExclusive, 1, ABORTED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r1, ACQUIRED);
+    t1.acquire(kExclusive, r1, BLOCKED);
+    a3.acquire(kShared, r1, ACQUIRED);
+    t2.release(kShared, r1); // t1 still blocked on a3
+    a3.acquire(kExclusive, r1, ABORTED);
 /*
     t1.wakened();
-    t1.release(kExclusive, 1);
-    t1.release(kShared, 1);
+    t1.release(kExclusive, r1);
+    t1.release(kShared, r1);
 */
 #else
     a2.quit();
@@ -674,6 +685,8 @@ TEST(LockManagerTest, TxUpgrade) {
 }
 
 TEST(LockManagerTest, TxPolicy) {
+    ResourceId r1(static_cast<int>(1));
+    ResourceId r2(static_cast<int>(2));
 
     {
         // Test FirstComeFirstServe policy
@@ -682,26 +695,26 @@ TEST(LockManagerTest, TxPolicy) {
         ClientTransaction t2(&lm_first, 2);
         ClientTransaction t3(&lm_first, 3);
         // test1
-        t1.acquire(kExclusive, 1, ACQUIRED);
-        t2.acquire(kShared, 1, BLOCKED);
-        t3.acquire(kExclusive, 1, BLOCKED);
-        t1.release(kExclusive, 1);
+        t1.acquire(kExclusive, r1, ACQUIRED);
+        t2.acquire(kShared, r1, BLOCKED);
+        t3.acquire(kExclusive, r1, BLOCKED);
+        t1.release(kExclusive, r1);
         // t2 should wake first, because its request came before t3's
         t2.wakened();
-        t2.release(kShared, 1);
+        t2.release(kShared, r1);
         t3.wakened();
-        t3.release(kExclusive, 1);
+        t3.release(kExclusive, r1);
 
         // test2
-        t1.acquire(kExclusive, 1, ACQUIRED);
-        t3.acquire(kExclusive, 1, BLOCKED);
-        t2.acquire(kShared, 1, BLOCKED);
-        t1.release(kExclusive, 1);
+        t1.acquire(kExclusive, r1, ACQUIRED);
+        t3.acquire(kExclusive, r1, BLOCKED);
+        t2.acquire(kShared, r1, BLOCKED);
+        t1.release(kExclusive, r1);
         // t3 should wake first, because its request came before t2's
         t3.wakened();
-        t3.release(kExclusive, 1);
+        t3.release(kExclusive, r1);
         t2.wakened();
-        t2.release(kShared, 1);
+        t2.release(kShared, r1);
 
         t1.quit();
         t2.quit();
@@ -717,17 +730,17 @@ TEST(LockManagerTest, TxPolicy) {
         ClientTransaction t2(&lm_readers, 2);
         ClientTransaction t3(&lm_readers, 3);
 
-        t1.acquire(kExclusive, 1, ACQUIRED);
-        t3.acquire(kExclusive, 1, BLOCKED);
-        t2.acquire(kShared, 1, BLOCKED);
-        t1.release(kExclusive, 1);
+        t1.acquire(kExclusive, r1, ACQUIRED);
+        t3.acquire(kExclusive, r1, BLOCKED);
+        t2.acquire(kShared, r1, BLOCKED);
+        t1.release(kExclusive, r1);
 
         // t2 should wake first, even though t3 came first in time
         // because t2 is a reader and t3 is a writer
         t2.wakened();
-        t2.release(kShared, 1);
+        t2.release(kShared, r1);
         t3.wakened();
-        t3.release(kExclusive, 1);
+        t3.release(kExclusive, r1);
 
         t1.quit();
         t2.quit();
@@ -744,29 +757,29 @@ TEST(LockManagerTest, TxPolicy) {
         ClientTransaction t3(&lm_oldest, 3);
 
         // test 1
-        t1.acquire(kExclusive, 1, ACQUIRED);
-        t3.acquire(kExclusive, 1, BLOCKED);
-        t2.acquire(kShared, 1, BLOCKED);
-        t1.release(kExclusive, 1);
+        t1.acquire(kExclusive, r1, ACQUIRED);
+        t3.acquire(kExclusive, r1, BLOCKED);
+        t2.acquire(kShared, r1, BLOCKED);
+        t1.release(kExclusive, r1);
 
         // t2 should wake first, even though t3 came first in time
         // because t2 is older than t3
         t2.wakened();
-        t2.release(kShared, 1);
+        t2.release(kShared, r1);
         t3.wakened();
-        t3.release(kExclusive, 1);
+        t3.release(kExclusive, r1);
 
         // test 2
-        t1.acquire(kExclusive, 1, ACQUIRED);
-        t2.acquire(kShared, 1, BLOCKED);
-        t3.acquire(kExclusive, 1, BLOCKED);
-        t1.release(kExclusive, 1);
+        t1.acquire(kExclusive, r1, ACQUIRED);
+        t2.acquire(kShared, r1, BLOCKED);
+        t3.acquire(kExclusive, r1, BLOCKED);
+        t1.release(kExclusive, r1);
 
         // t2 should wake first, because it's older than t3
         t2.wakened();
-        t2.release(kShared, 1);
+        t2.release(kShared, r1);
         t3.wakened();
-        t3.release(kExclusive, 1);
+        t3.release(kExclusive, r1);
 
         t1.quit();
         t2.quit();
@@ -783,35 +796,35 @@ TEST(LockManagerTest, TxPolicy) {
         // BIGGEST_BLOCKER_FIRST policy
 
         // set up t3 as the biggest blocker
-        t3.acquire(kExclusive, 2, ACQUIRED);
-        t4.acquire(kExclusive, 2, BLOCKED);
+        t3.acquire(kExclusive, r2, ACQUIRED);
+        t4.acquire(kExclusive, r2, BLOCKED);
 
         // test 1
-        t1.acquire(kExclusive, 1, ACQUIRED);
-        t3.acquire(kExclusive, 1, BLOCKED);
-        t2.acquire(kShared, 1, BLOCKED);
-        t1.release(kExclusive, 1);
+        t1.acquire(kExclusive, r1, ACQUIRED);
+        t3.acquire(kExclusive, r1, BLOCKED);
+        t2.acquire(kShared, r1, BLOCKED);
+        t1.release(kExclusive, r1);
         // t3 should wake first, because it's a bigger blocker than t2
         t3.wakened();
-        t3.release(kExclusive, 1);
+        t3.release(kExclusive, r1);
         t2.wakened();
-        t2.release(kShared, 1);
+        t2.release(kShared, r1);
 
         // test 2
-        t1.acquire(kExclusive, 1, ACQUIRED);
-        t2.acquire(kShared, 1, BLOCKED);
-        t3.acquire(kExclusive, 1, BLOCKED);
-        t1.release(kExclusive, 1);
+        t1.acquire(kExclusive, r1, ACQUIRED);
+        t2.acquire(kShared, r1, BLOCKED);
+        t3.acquire(kExclusive, r1, BLOCKED);
+        t1.release(kExclusive, r1);
         // t3 should wake first, even though t2 came first,
         // because it's a bigger blocker than t2
         t3.wakened();
-        t3.release(kExclusive, 1);
+        t3.release(kExclusive, r1);
         t2.wakened();
-        t2.release(kShared, 1);
+        t2.release(kShared, r1);
 
-        t3.release(kExclusive, 2);
+        t3.release(kExclusive, r2);
         t4.wakened();
-        t4.release(kExclusive, 2);
+        t4.release(kExclusive, r2);
 
         t1.quit();
         t2.quit();
@@ -831,60 +844,62 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     ClientTransaction t4(&lm, 4);
     ClientTransaction t5(&lm, 5);
     ClientTransaction tp(&lm, 6);
+    ResourceId r1(static_cast<int>(1));
+    ResourceId r2(static_cast<int>(2));
 
     // show kPolicyReadersOnly blocking writers, which
     // awake when policy reverts
-    t1.acquire(kShared, 1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
     tp.setPolicy(LockManager::kPolicyReadersOnly, ACQUIRED);
-    t3.acquire(kExclusive, 2, BLOCKED); // just policy conflict
-    t4.acquire(kExclusive, 1, BLOCKED); // both policy & t1
-    t5.acquire(kShared, 1, ACQUIRED);   // even tho t4
+    t3.acquire(kExclusive, r2, BLOCKED); // just policy conflict
+    t4.acquire(kExclusive, r1, BLOCKED); // both policy & t1
+    t5.acquire(kShared, r1, ACQUIRED);   // even tho t4
     tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
     t3.wakened();
-    t3.release(kExclusive, 2);
-    t1.release(kShared, 1);
-    t5.release(kShared, 1);
+    t3.release(kExclusive, r2);
+    t1.release(kShared, r1);
+    t5.release(kShared, r1);
     t4.wakened();
-    t4.release(kExclusive, 1);
+    t4.release(kExclusive, r1);
 
     // show WRITERS_ONLY blocking readers, which
     // awake when policy reverts
-    t1.acquire(kExclusive, 1, ACQUIRED);
+    t1.acquire(kExclusive, r1, ACQUIRED);
     tp.setPolicy(LockManager::kPolicyWritersOnly, ACQUIRED);
-    t3.acquire(kShared, 2, BLOCKED);       // just policy conflict
-    t4.acquire(kShared, 1, BLOCKED);       // both policy & t1
-    t1.release(kExclusive, 1);
-    t5.acquire(kExclusive, 2, ACQUIRED);   // even tho t3
-    t5.release(kExclusive, 2);
+    t3.acquire(kShared, r2, BLOCKED);       // just policy conflict
+    t4.acquire(kShared, r1, BLOCKED);       // both policy & t1
+    t1.release(kExclusive, r1);
+    t5.acquire(kExclusive, r2, ACQUIRED);   // even tho t3
+    t5.release(kExclusive, r2);
     tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
     t3.wakened();
-    t3.release(kShared, 2);
+    t3.release(kShared, r2);
     t4.wakened();
-    t4.release(kShared, 1);
+    t4.release(kShared, r1);
 
     // show READERS_ONLY blocked by existing writer
     // but still blocking new writers
-    t1.acquire(kExclusive, 1, ACQUIRED);
+    t1.acquire(kExclusive, r1, ACQUIRED);
     tp.setPolicy(LockManager::kPolicyReadersOnly, BLOCKED);  // blocked by t1
-    t2.acquire(kExclusive, 2, BLOCKED);   // just policy conflict
-    t3.acquire(kShared, 2, ACQUIRED);     // even tho t2
-    t3.release(kShared, 2);
-    t1.release(kExclusive, 1);
+    t2.acquire(kExclusive, r2, BLOCKED);   // just policy conflict
+    t3.acquire(kShared, r2, ACQUIRED);     // even tho t2
+    t3.release(kShared, r2);
+    t1.release(kExclusive, r1);
     tp.wakened();
     tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
     t2.wakened();
-    t2.release(kExclusive, 2);
+    t2.release(kExclusive, r2);
 
     // show WRITERS_ONLY blocked by existing reader
     // but still blocking new readers
-    t1.acquire(kShared, 1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
     tp.setPolicy(LockManager::kPolicyWritersOnly, BLOCKED);  // blocked by t1
-    t2.acquire(kShared, 2, BLOCKED);      // just policy conflict
-    t1.release(kShared, 1);
+    t2.acquire(kShared, r2, BLOCKED);      // just policy conflict
+    t1.release(kShared, r1);
     tp.wakened();
     tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
     t2.wakened();
-    t2.release(kShared, 2);
+    t2.release(kShared, r2);
 
     t1.quit();
     t2.quit();
@@ -898,21 +913,25 @@ TEST(LockManagerTest, TxShutdown) {
     LockManager lm;
     ClientTransaction t1(&lm, 1);
     ClientTransaction t2(&lm, 2);
+    ResourceId r1(static_cast<int>(1));
+    ResourceId r2(static_cast<int>(2));
+    ResourceId r3(static_cast<int>(3));
+    ResourceId r4(static_cast<int>(4));
 
-    t1.acquire(kShared, 1, ACQUIRED);
+    t1.acquire(kShared, r1, ACQUIRED);
     lm.shutdown(3000);
 
     // t1 can still do work while quiescing
-    t1.release(kShared, 1);
-    t1.acquire(kShared, 2, ACQUIRED);
+    t1.release(kShared, r1);
+    t1.acquire(kShared, r2, ACQUIRED);
 #ifdef TRANSACTION_REGISTRATION
     // t2 is new and should be refused
-    t2.acquire(kShared, 3, ABORTED);
+    t2.acquire(kShared, r3, ABORTED);
 #else
     t2.quit();
 #endif
     // after the quiescing period, t1's request should be refused
     sleepsecs(3);
-    t1.acquire(kShared, 4, ABORTED);
+    t1.acquire(kShared, r4, ABORTED);
 }
 }
