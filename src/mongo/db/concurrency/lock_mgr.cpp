@@ -1,4 +1,5 @@
-/**
+/*
+ *
  *    Copyright (C) 2014 MongoDB Inc.
  *
  *    This program is free software: you can redistribute it and/or  modify
@@ -279,6 +280,14 @@ namespace mongo {
         return result.str();
     }
 
+    void Transaction::wait(boost::unique_lock<boost::mutex>& guard) {
+        _condvar.wait(guard);
+    }
+
+    void Transaction::wake() {
+        _condvar.notify_one();
+    }
+
 
     /*---------- LockRequest functions ----------*/
 
@@ -441,7 +450,7 @@ namespace mongo {
 
                         // each transaction can only be blocked by one request at time
                         // this one must be due to policy that's now changed
-                        nextLock->lock.notify_one();
+                        nextLock->requestor->wake();
                     }
                 }
             }
@@ -877,7 +886,7 @@ namespace mongo {
         // wait for blocker to release
         while (lr->isBlocked()) {
             Timer timer;
-            lr->lock.wait(guard);
+            lr->requestor->wait(guard);
             _stats[lr->slice].incTimeBlocked(timer.millis());
         }
     }
@@ -1348,7 +1357,7 @@ namespace mongo {
 
             // wake up sleepy heads
             if (nextSleeper->shouldAwake()) {
-                nextSleeper->lock.notify_one();
+                nextSleeper->requestor->wake();
             }
         }
 

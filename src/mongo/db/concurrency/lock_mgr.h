@@ -179,9 +179,6 @@ namespace mongo {
         // lock requests are also chained by their requesting transaction
         LockRequest* nextOfTransaction;
         LockRequest* prevOfTransaction;
-
-        // used for waiting and waking
-        boost::condition_variable lock;
     };
 
     /**
@@ -229,6 +226,12 @@ namespace mongo {
         void removeAllWaiters();
 
         /**
+         * for sleeping and waking
+         */
+        void wait(boost::unique_lock<boost::mutex>& guard);
+        void wake();
+
+        /**
          * should be age of the transaction.  currently using txId as a proxy.
          */
         bool operator<(const Transaction& other) const;
@@ -270,6 +273,9 @@ namespace mongo {
 
         // For cleanup and abort processing, references all LockRequests made by a transaction
         LockRequest* _locks;
+
+        // used for waiting and waking
+        boost::condition_variable _condvar;
 
         // For deadlock detection: the set of transactions blocked by another transaction
         // NB: a transaction can only be directly waiting for a single resource/transaction
