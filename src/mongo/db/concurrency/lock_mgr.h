@@ -83,21 +83,21 @@ namespace mongo {
      * LockModes:
      *                                           Granted Mode
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     * Requested Mode                | IS  | IX  |  S  | SIX |  U  | SX  |  X  |
+     * Requested Mode                | IS  | IX  |  S  | SIX |  U  | BX  |  X  |
      * --------------                +-----+-----+-----+-----+-----+-----+-----+
      * kIntentShared(IS)             | ok  | ok  | ok  | ok  | ok  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kIntentExclusive(IX)          | ok  | ok  |  -  |  -  | ok  |  -  |  -  |
+     * kIntentExclusive(IX)          | ok  | ok  |  -  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * kShared(S)                    | ok  |  -  | ok  |  -  | ok  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * kSharedOrIntentExclusive(SIX) | ok  |  -  |  -  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kUpdate                       |  -  |  -  | ok  |  -  |  -  |  -  |  -  |
+     * kUpdate(U)                    | ok  |  -  | ok  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kSharedExclusive              |  -  |  -  |     |  -  |  -  | ok  |  -  |
+     * kBlockExclusive(BX)           |  -  |  -  |     |  -  |  -  | ok  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kExclusive                    |  -  |  -  |  -  |  -  |  -  |  -  |  -  |
+     * kExclusive(X)                 |  -  |  -  |  -  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
      *
      * Upgrades:
@@ -106,15 +106,15 @@ namespace mongo {
      *     IX  -> {SIX}
      *     SIX -> X
      *     U   -> X
-     *     SX  -> X
+     *     BX  -> X
      */
     enum LockMode {
         kIntentShared,
         kIntentExclusive,
         kShared,
-        kSIX,
+        kSharedIntentExclusive,
         kUpdate,
-        kSharedExclusive,
+        kBlockExclusive,
         kExclusive
     };
 
@@ -139,6 +139,7 @@ namespace mongo {
                      const ResourceId& resId) const;
 
         bool isBlocked() const;
+        bool isActive() const { return !isBlocked(); }
         bool shouldAwake();
 
         std::string toString() const;

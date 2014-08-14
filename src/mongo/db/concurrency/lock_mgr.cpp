@@ -65,46 +65,154 @@ namespace mongo {
 
     namespace {
 
-        bool isExclusive(const LockMode& mode) {
-            return kExclusive == mode;
+        bool conflictsWithReadersOnlyPolicy(const LockMode& mode) {
+            switch (mode) {
+            case kExclusive:
+            case kIntentExclusive:
+            case kUpdate:
+                return true;
+            default:
+                return false;
+            }
         }
 
-        bool isShared(const LockMode& mode) {
-            return kShared == mode;
+        bool conflictsWithWritersOnlyPolicy(const LockMode& mode) {
+            switch (mode) {
+            case kShared:
+            case kIntentShared:
+            case kSharedIntentExclusive:
+            case kUpdate:
+                return true;
+            default:
+                return false;
+            }
         }
 
+        /**
+         * return true if requested mode would be an upgrade of acquired mode:
+         *     IS < S  < SIX < X
+         *     IS < S  <  U  < X
+         *     IS < IX < SIX < X
+         *                SX < X
+         */
+        bool isUpgrade(const LockMode& acquired, const LockMode& requested) {
+            switch (acquired) {
+            case kIntentShared:
+                return kIntentShared != requested; // everything else is an upgrade
+            case kShared:
+                return
+                    (kSharedIntentExclusive == requested) ||
+                    (kUpdate == requested) ||
+                    (kExclusive == requested);
+            case kIntentExclusive:
+                return
+                    (kSharedIntentExclusive == requested) ||
+                    (kExclusive == requested);
+            case kSharedIntentExclusive:
+            case kUpdate:
+            case kBlockExclusive:
+                return kExclusive == requested;
+            case kExclusive:
+                return false; // X is the top of the ladder
+            }
+            return false;
+        }
+
+        bool isDowngrade(const LockMode& acquired, const LockMode& requested) {
+            switch (acquired) {
+            case kIntentShared:
+                return false; // nothing lower than kIS
+            case kShared:
+            case kIntentExclusive:
+                return kIntentShared == requested;
+            case kSharedIntentExclusive:
+                return
+                    (kIntentExclusive == requested) ||
+                    (kShared == requested) ||
+                    (kIntentShared == requested);
+            case kUpdate:
+                return
+                    (kShared == requested) ||
+                    (kIntentShared == requested);
+            case kBlockExclusive:
+                return false;
+            case kExclusive:
+                return kExclusive != requested; // everything else is lower
+            }
+            return false;
+        }
+
+        bool isMoreStrict(const LockMode& acquired, const LockMode& requested) {
+            switch (acquired) {
+            case kIntentShared:
+                return false; // nothing lower than kIS
+            case kShared:
+            case kIntentExclusive:
+                return kIntentShared == requested;
+            case kSharedIntentExclusive:
+                return
+                    (kIntentExclusive == requested) ||
+                    (kShared == requested) ||
+                    (kIntentShared == requested);
+            case kUpdate:
+                return
+                    (kShared == requested) ||
+                    (kIntentShared == requested);
+            case kBlockExclusive:
+                return false;
+            case kExclusive:
+                return kExclusive != requested; // everything else is lower
+            }
+            return false;
+        }
+
+        /**
+         * return false if requested conflicts with acquired, true otherwise
+         */
         bool isCompatible(const LockMode& acquired, const LockMode& requested) {
             switch (acquired) {
             case kIntentShared:
                 switch (requested) {
-                case kIntentShared: return true;
-                case kIntentExclusive: return true;
-                case kShared: return true;
-                case kSIX: return true;
-                case kUpdate: return false;
-                case kExclusive: return false;
-                default: return false;
+                case kIntentShared:
+                case kIntentExclusive:
+                case kShared:
+                case kSharedIntentExclusive:
+                    return true;
+                default:
+                    return false;
                 }
             case kIntentExclusive:
                 switch (requested) {
-                case kIntentShared: return true;
-                case kIntentExclusive: return true;
-                default: return false;
+                case kIntentShared:
+                case kIntentExclusive:
+                    return true;
+                default:
+                    return false;
                 }
             case kShared:
                 switch (requested) {
-                case kIntentShared: return true;
-                case kIntentExclusive: return false;
-                case kShared: return true;
-                case kSIX: return false;
-                case kUpdate: return true;
-                case kExclusive: return false;
-                default: return false;
+                case kIntentShared:
+                case kShared:
+                case kUpdate:
+                    return true;
+                default:
+                    return false;
                 }
-            case kSIX: return kIntentShared == requested;
-            case kUpdate: return false;
-            case kExclusive: return false;
-            default: return false;
+            case kSharedIntentExclusive:
+                return kIntentShared == requested;
+            case kUpdate:
+                switch (requested) {
+                case kIntentShared:
+                case kShared:
+                    return true;
+                default:
+                    return false;
+                }
+            case kBlockExclusive:
+                return kBlockExclusive == requested;
+            case kExclusive:
+            default:
+                return false;
             }
         }
 
@@ -934,13 +1042,8 @@ namespace mongo {
             position = NULL;
             return;
         case kPolicyReadersFirst:
-            if (isExclusive(lr->mode)) {
-                _push_back(lr);
-                position = NULL;
-                return;
-            }
             for (; position; position=position->nextOnResource) {
-                if (isExclusive(position->mode) && position->isBlocked()) {
+                if (isMoreStrict(position->mode, lr->mode) && position->isBlocked()) {
                     // insert shared lock before first sleeping exclusive lock
                     position->insert(lr);
                     return;
@@ -1009,7 +1112,7 @@ namespace mongo {
         case kPolicyFirstCome:
             return false;
         case kPolicyReadersFirst:
-            return isShared(mode);
+            return isMoreStrict(oldRequest->mode, mode);
         case kPolicyOldestTxFirst:
             return *requestor < *oldRequest->requestor;
         case kPolicyBlockersFirst: {
@@ -1027,8 +1130,8 @@ namespace mongo {
                                                              LockRequest*& nextLock) {
 
         // handle READERS/kPolicyWritersOnly policy conflicts
-        if ((kPolicyReadersOnly == _policy && isExclusive(mode)) ||
-            (kPolicyWritersOnly == _policy && isShared(mode))) {
+        if ((kPolicyReadersOnly == _policy && conflictsWithReadersOnlyPolicy(mode)) ||
+            (kPolicyWritersOnly == _policy && conflictsWithWritersOnlyPolicy(mode))) {
 
             if (NULL == nextLock) { return kResourcePolicyConflict; }
 
@@ -1050,92 +1153,79 @@ namespace mongo {
 
         // loop over the lock requests in the queue, looking for the 1st conflict
         // normally, we'll leave the nextLock positioned at the 1st conflict
-        // if there is one, or the position (often the end) where we know there is no conflict.
+        // if there is one, or the position (often the end) where we know that
+        // there is no conflict.
         //
-        // upgrades complicate this picture, because we want to position the iterator
-        // after all initial share locks.  but we may not know whether an exclusived request
-        // is an upgrade until we look at all the initial share locks.
+        // upgrades complicate this picture. we want to position the upgrade request
+        // after the last active incompatible lock, not at the 1st incompatible lock.
+        // but we dont know if we have an upgrade until we look at the initial locks.
         //
-        // so we record the position of the 1st conflict, but continue advancing the
-        // nextLock until we've seen all initial share locks.  If none have
-        // the same Transaction as the exclusive request, we restore the position to 1st conflict
-        //
+        // so we remember the position of the 1st conflict, but continue advancing
+        // until we've seen all active incompatible locks.  If none of those have
+        // the same Transaction as the request, we restore the position to 1st conflict
+
         LockRequest* firstConflict = NULL;
-        set<Transaction*> sharedOwners; // all initial share lock owners
+        set<Transaction*> activeOwners; // initial active owners. if has requestor, it's an upgrade
         bool alreadyHadLock = false;  // true if we see a lock with the same Txid
 
-        for (; nextLock; nextLock=nextLock->nextOnResource) {
-
-            if (nextLock->matches(requestor, mode, resId)) {
-                // if we're already on the queue, there's no conflict
-                return kResourceAcquired;
-            }
+        for (; nextLock && nextLock->isActive(); nextLock=nextLock->nextOnResource) {
 
             if (requestor == nextLock->requestor) {
-                // an upgrade or downgrade request, can't conflict with ourselves
-                if (isShared(mode)) {
-                    // downgrade
+
+                if (nextLock->matches(requestor, mode, resId)) {
+                    // we've already locked the resource in the requested mode
+                    return kResourceAcquired;
+                }
+
+                if (isDowngrade(nextLock->mode, mode)) {
                     _stats[slice].incDowngrades();
                     nextLock = nextLock->nextOnResource;
                     return kResourceAvailable;
                 }
 
-                // upgrade
-                alreadyHadLock = true;
-                _stats[slice].incUpgrades();
-                // position after initial readers
-                continue;
-            }
-
-            if (isShared(nextLock->mode)) {
-                invariant(!nextLock->isBlocked() || kPolicyWritersOnly == _policy);
-
-                sharedOwners.insert(nextLock->requestor);
-
-                if (isExclusive(mode) && firstConflict == NULL) {
-                    // if "lr" proves not to be an upgrade, restore this position later
-                    firstConflict = nextLock;
-                }
-                // either there's no conflict yet, or we're not done checking for an upgrade
-                continue;
-            }
-
-            // the next lock on the queue is an exclusive request
-            invariant(isExclusive(nextLock->mode));
-
-            if (alreadyHadLock) {
-                // bumped into something incompatible while up/down grading
-                if (isExclusive(mode)) {
-                    // upgrading: bumped into another exclusive lock
-                    if (sharedOwners.find(nextLock->requestor) != sharedOwners.end()) {
-                        // the exclusive lock is also an upgrade, and it must
-                        // be blocked, waiting for our original share lock to be released
-                        // if we wait for its shared lock, we would deadlock
-                        //
-                        invariant(nextLock->isBlocked());
-                        _abortInternal(requestor, slice);
-                    }
-
-                    if (sharedOwners.empty()) {
-                        // simple upgrade, queue in front of nextLockRequest, no conflict
-                        return kResourceAvailable;
-                    }
-                    else {
-                        // we have to wait for another shared lock before upgrading
-                        return kResourceUpgradeConflict;
+                if (isUpgrade(nextLock->mode, mode)) {
+                    if (!alreadyHadLock) {
+                        alreadyHadLock = true;
+                        _stats[slice].incUpgrades();
                     }
                 }
 
-                // downgrading, bumped into an exclusive lock, blocked on our original
-                invariant (isShared(mode));
-                invariant(nextLock->isBlocked());
-                // lr will be inserted before nextLockRequest
+                // there are new lock acquisitions that are neither downgrades, nor
+                // upgrades.  For example, holding kShared and requesting kIntentExclusive
+                // But we never conflict with ourselves.
+
+                continue;
+            }
+
+            // next lock owner != requestor
+
+            activeOwners.insert(nextLock->requestor);
+
+            if (NULL == firstConflict && !isCompatible(nextLock->mode, mode)) {
+                // if we're not an upgrade request, restore this position later
+                firstConflict = nextLock;
+            }
+        }
+
+        if (alreadyHadLock) {
+            // upgrading
+
+            if (nextLock && activeOwners.find(nextLock->requestor) != activeOwners.end()) {
+                // nextLock is also an upgrade
+                _abortInternal(requestor, slice);
+            }
+
+            if (NULL == firstConflict)
                 return kResourceAvailable;
-            }
-            else if (firstConflict) {
-                // restore first conflict position
-                nextLock = firstConflict;
-            }
+
+            return kResourceUpgradeConflict;
+        }
+        else if (firstConflict) {
+            // restore first conflict position
+            nextLock = firstConflict;
+        }
+
+        if (nextLock) {
 
             // no conflict if nextLock is blocked and we come before
             if (nextLock->isBlocked() &&
@@ -1154,29 +1244,6 @@ namespace mongo {
             return kResourceConflict;
         }
 
-        // positioned to the end of the queue
-        if (alreadyHadLock && isExclusive(mode) && !sharedOwners.empty()) {
-            // upgrading, queue consists of requestor's earlier share lock
-            // plus other share lock.  Must wait for the others to release
-            return kResourceUpgradeConflict;
-        }
-        else if (firstConflict) {
-            nextLock = firstConflict;
-
-            if (_comesBeforeUsingPolicy(requestor, mode, nextLock)) {
-                return kResourceAvailable;
-            }
-
-            // there's a conflict, check for deadlock
-            if (requestor->hasWaiter(nextLock->requestor)) {
-                // the transaction that would block requestor is already blocked by requestor
-                // if requestor waited for nextLockRequest, there would be a deadlock
-                //
-                _stats[slice].incDeadlocks();
-                _abortInternal(requestor, slice);
-            }
-            return kResourceConflict;
-        }
         return kResourceAvailable;
     }
 
@@ -1225,9 +1292,8 @@ namespace mongo {
                                    unsigned slice) const {
 
         // check for exceptional policies
-        if (kPolicyReadersOnly == _policy && isExclusive(mode))
-            return false;
-        else if (kPolicyWritersOnly == _policy && isShared(mode))
+        if ((kPolicyReadersOnly == _policy && conflictsWithReadersOnlyPolicy(mode)) ||
+            (kPolicyWritersOnly == _policy && conflictsWithWritersOnlyPolicy(mode)))
             return false;
 
         
@@ -1322,42 +1388,32 @@ namespace mongo {
             break;
         }
 
-        // find the sleepers waiting for lr.  They are lock requests that follow lr
-        // on the queue, which are incompatible with lr's mode.
-
         LockRequest* nextLock = lr->nextOnResource;
 
-        if (isShared(lr->mode)) {
-            // skip over any remaining shared requests. they can't be waiting for us.
-            for (; nextLock; nextLock=nextLock->nextOnResource) {
-                if (isExclusive(nextLock->mode)) {
-                    break;
-                }
-            }
-        }
-
-        // release the lock
+        // remove the lock from its queues
         _removeFromResourceQueue(lr);
         holder->removeLock(lr);
 
-        // everything left on the queue potentially conflicts with the lock just
-        // released, unless it's an up/down-grade of that lock.  So iterate, and
-        // when Transactions differ, decrement sleepCount, wake those with zero counts, and
+        // find the sleepers waiting for lr.  They:
+        //
+        //    * are blocked requests of other transactions, that
+        //    * follow lr on the queue, and
+        //    * are incompatible with lr's mode.
+        //
         // decrement their sleep counts, waking sleepers with zero counts, and
         // cleanup state used for deadlock detection
 
         for (; nextLock; nextLock=nextLock->nextOnResource) {
-            LockRequest* nextSleeper = nextLock;
-            if (nextSleeper->requestor == holder) continue;
+            if (nextLock->isActive()) continue;
 
-            invariant(nextSleeper->isBlocked());
+            if (nextLock->requestor == holder) continue;
 
             // remove nextSleeper and its dependents from holder's waiters
-            holder->removeWaiterAndItsWaiters(nextSleeper->requestor);
+            holder->removeWaiterAndItsWaiters(nextLock->requestor);
 
             // wake up sleepy heads
-            if (nextSleeper->shouldAwake()) {
-                nextSleeper->requestor->wake();
+            if (nextLock->shouldAwake()) {
+                nextLock->requestor->wake();
             }
         }
 
