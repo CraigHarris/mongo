@@ -85,17 +85,17 @@ namespace mongo {
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * Requested Mode                | IS  | IX  |  S  | SIX |  U  | BX  |  X  |
      * --------------                +-----+-----+-----+-----+-----+-----+-----+
-     * kIntentShared(IS)             | ok  | ok  | ok  | ok  | ok  |  -  |  -  |
+     * kIntentShared(IS)             | ok  | ok  | ok  | ok  | ok  | ok  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * kIntentExclusive(IX)          | ok  | ok  |  -  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kShared(S)                    | ok  |  -  | ok  |  -  | ok  |  -  |  -  |
+     * kShared(S)                    | ok  |  -  | ok  |  -  | ok  | ok  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * kSharedOrIntentExclusive(SIX) | ok  |  -  |  -  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * kUpdate(U)                    | ok  |  -  | ok  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kBlockExclusive(BX)           |  -  |  -  |     |  -  |  -  | ok  |  -  |
+     * kBlockExclusive(BX)           | ok  |  -  | ok  |  -  |  -  | ok  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * kExclusive(X)                 |  -  |  -  |  -  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
@@ -319,7 +319,6 @@ namespace mongo {
          */
         enum Policy {
             kPolicyFirstCome,     // wake the first blocked request in arrival order
-            kPolicyReadersFirst,  // wake the first blocked read request(s)
             kPolicyOldestTxFirst, // wake the blocked request with the lowest TxId
             kPolicyBlockersFirst, // wake the blocked request which is itself the most blocking
             kPolicyReadersOnly,   // block write requests (used during fsync)
@@ -461,12 +460,6 @@ namespace mongo {
         Policy getPolicy() const;
 
         /**
-         * Who set the current policy.  Of use when the Policy is ReadersOnly
-         * and we want to find out who is blocking a writer.
-         */
-        Transaction* getPolicySetter() const;
-
-        /**
          * Initiate a shutdown, specifying a period of time to quiesce.
          *
          * During this period, existing transactions can continue to acquire resources,
@@ -491,17 +484,6 @@ namespace mongo {
          * that have allocated their lock on the stack.  May throw AbortException.
          */
         void acquireLock(LockRequest* request, Notifier* notifier = NULL);
-
-        /**
-         * for bulk operations:
-         * acquire one of a vector of ResourceIds in a mode,
-         * hopefully without blocking, return index of
-         * acquired ResourceId, or -1 if vector was empty
-         */
-        int acquireOne(Transaction* requestor,
-                       const LockMode& mode,
-                       const std::vector<ResourceId>& records,
-                       Notifier* notifier = NULL);
 
         /**
          * release a ResourceId.
@@ -644,15 +626,6 @@ namespace mongo {
 					unsigned slice,
 					LockRequest* queue,
 					LockRequest*& conflictPosition);
-
-        /**
-         * returns true if acquire would return without waiting
-         * used by acquireOne
-         */
-        bool _isAvailable(const Transaction* requestor,
-                          const LockMode& mode,
-                          const ResourceId& resId,
-                          unsigned slice) const;
 
         /**
          * maintain the resourceLocks queue

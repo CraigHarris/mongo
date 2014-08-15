@@ -398,113 +398,400 @@ TEST(LockManagerTest, SingleTx) {
 
 TEST(LockManagerTest, TxConflict) {
     LockManager lm;
+
+    ResourceId resLockedForIS(static_cast<int>(1));
+    ResourceId resLockedForIX(static_cast<int>(2)); // locked with IX
+    ResourceId resLockedForS(static_cast<int>(3)); // locked with S
+    ResourceId resLockedForSIX(static_cast<int>(4)); // locked with SIX
+    ResourceId resLockedForU(static_cast<int>(5)); // locked with U
+    ResourceId resLockedForBX(static_cast<int>(6)); // locked with BX
+    ResourceId resLockedForX(static_cast<int>(7)); // locked with X
+
+    ClientTransaction asker(&lm, 1);
+    ClientTransaction owner(&lm, 8);
+
+    // owner acquires resources with every lock mode
+    owner.acquire(kIntentShared, resLockedForIS, ACQUIRED);
+    owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
+    owner.acquire(kShared, resLockedForS, ACQUIRED);
+    owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
+    owner.acquire(kUpdate, resLockedForU, ACQUIRED);
+    owner.acquire(kBlockExclusive, resLockedForBX, ACQUIRED);
+    owner.acquire(kExclusive, resLockedForX, ACQUIRED);
+
+    //
+    // test request for IntentShared lock
+    //
+    asker.acquire(kIntentShared, resLockedForIS, ACQUIRED); // IS compatible with IS
+    asker.release(kIntentShared, resLockedForIS);
+
+    asker.acquire(kIntentShared, resLockedForIX, ACQUIRED); // IS compatible with IX
+    asker.release(kIntentShared, resLockedForIX);
+
+    asker.acquire(kIntentShared, resLockedForS, ACQUIRED); // IS compatible with S
+    asker.release(kIntentShared, resLockedForS);
+
+    asker.acquire(kIntentShared, resLockedForSIX, ACQUIRED); // IS compatible with SIX
+    asker.release(kIntentShared, resLockedForSIX);
+
+    asker.acquire(kIntentShared, resLockedForU, ACQUIRED); // IS compatible with U
+    asker.release(kIntentShared, resLockedForU);
+
+    asker.acquire(kIntentShared, resLockedForBX, ACQUIRED); // IS compatible with BX
+    asker.release(kIntentShared, resLockedForBX);
+
+    asker.acquire(kIntentShared, resLockedForX, BLOCKED); // IS conflicts with X
+    owner.release(kExclusive, resLockedForX);
+    asker.wakened();
+    asker.release(kIntentShared, resLockedForX);
+    owner.acquire(kExclusive, resLockedForX, ACQUIRED);
+
+
+    //
+    // test request for IntentExclusive lock
+    //
+    asker.acquire(kIntentExclusive, resLockedForIS, ACQUIRED); // IX compatible with IS
+    asker.release(kIntentExclusive, resLockedForIS);
+
+    asker.acquire(kIntentExclusive, resLockedForIX, ACQUIRED); // IX compatible with IX
+    asker.release(kIntentExclusive, resLockedForIX);
+
+    asker.acquire(kIntentExclusive, resLockedForS, BLOCKED); // IX conflicts with S
+    owner.release(kShared, resLockedForS);
+    asker.wakened();
+    asker.release(kIntentExclusive, resLockedForS);
+    owner.acquire(kShared, resLockedForS, ACQUIRED);
+
+    asker.acquire(kIntentExclusive, resLockedForSIX, BLOCKED); // IX conflicts with SIX
+    owner.release(kSharedIntentExclusive, resLockedForSIX);
+    asker.wakened();
+    asker.release(kIntentExclusive, resLockedForSIX);
+    owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
+
+    asker.acquire(kIntentExclusive, resLockedForU, BLOCKED); // IX conflicts with U
+    owner.release(kUpdate, resLockedForU);
+    asker.wakened();
+    asker.release(kIntentExclusive, resLockedForU);
+    owner.acquire(kUpdate, resLockedForU, ACQUIRED);
+
+    asker.acquire(kIntentExclusive, resLockedForBX, BLOCKED); // IX conflicts with BX
+    owner.release(kBlockExclusive, resLockedForBX);
+    asker.wakened();
+    asker.release(kIntentExclusive, resLockedForBX);
+    owner.acquire(kBlockExclusive, resLockedForBX, ACQUIRED);
+
+    asker.acquire(kIntentExclusive, resLockedForX, BLOCKED); // IX conflicts with X
+    owner.release(kExclusive, resLockedForX);
+    asker.wakened();
+    asker.release(kIntentExclusive, resLockedForX);
+    owner.acquire(kExclusive, resLockedForX, ACQUIRED);
+
+
+    //
+    // test request for Shared lock
+    //
+    asker.acquire(kShared, resLockedForIS, ACQUIRED); // S compatible with IS
+    asker.release(kShared, resLockedForIS);
+
+    asker.acquire(kShared, resLockedForIX, BLOCKED); // S conflicts with IX
+    owner.release(kIntentExclusive, resLockedForIX);
+    asker.wakened();
+    asker.release(kShared, resLockedForIX);
+    owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
+
+    asker.acquire(kShared, resLockedForS, ACQUIRED); // S compatible with S
+    asker.release(kShared, resLockedForS);
+
+    asker.acquire(kShared, resLockedForSIX, BLOCKED); // S conflicts with SIX
+    owner.release(kSharedIntentExclusive, resLockedForSIX);
+    asker.wakened();
+    asker.release(kShared, resLockedForSIX);
+    owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
+
+    asker.acquire(kShared, resLockedForU, ACQUIRED); // S compatible with U
+    asker.release(kShared, resLockedForU);
+
+    asker.acquire(kShared, resLockedForBX, ACQUIRED); // S compatible with BX
+    asker.release(kShared, resLockedForBX);
+
+    asker.acquire(kShared, resLockedForX, BLOCKED); // S conflicts with X
+    owner.release(kExclusive, resLockedForX);
+    asker.wakened();
+    asker.release(kShared, resLockedForX);
+    owner.acquire(kExclusive, resLockedForX, ACQUIRED);
+
+
+    //
+    // test request for SharedIntentExclusive lock
+    //
+    asker.acquire(kSharedIntentExclusive, resLockedForIS, ACQUIRED); // SIX compatible with IS
+    asker.release(kSharedIntentExclusive, resLockedForIS);
+
+    asker.acquire(kSharedIntentExclusive, resLockedForIX, BLOCKED); // SIX conflicts with IX
+    owner.release(kIntentExclusive, resLockedForIX);
+    asker.wakened();
+    asker.release(kSharedIntentExclusive, resLockedForIX);
+    owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
+
+    asker.acquire(kSharedIntentExclusive, resLockedForS, BLOCKED); // SIX conflicts with S
+    owner.release(kShared, resLockedForS);
+    asker.wakened();
+    asker.release(kSharedIntentExclusive, resLockedForS);
+    owner.acquire(kShared, resLockedForS, ACQUIRED);
+
+    asker.acquire(kSharedIntentExclusive, resLockedForSIX, BLOCKED); // SIX conflicts with SIX
+    owner.release(kSharedIntentExclusive, resLockedForSIX);
+    asker.wakened();
+    asker.release(kSharedIntentExclusive, resLockedForSIX);
+    owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
+
+    asker.acquire(kSharedIntentExclusive, resLockedForU, BLOCKED); // SIX conflicts with U
+    owner.release(kUpdate, resLockedForU);
+    asker.wakened();
+    asker.release(kSharedIntentExclusive, resLockedForU);
+    owner.acquire(kUpdate, resLockedForU, ACQUIRED);
+
+    asker.acquire(kSharedIntentExclusive, resLockedForBX, BLOCKED); // SIX conflicts with BX
+    owner.release(kBlockExclusive, resLockedForBX);
+    asker.wakened();
+    asker.release(kSharedIntentExclusive, resLockedForBX);
+    owner.acquire(kBlockExclusive, resLockedForBX, ACQUIRED);
+
+    asker.acquire(kSharedIntentExclusive, resLockedForX, BLOCKED); // SIX conflicts with X
+    owner.release(kExclusive, resLockedForX);
+    asker.wakened();
+    asker.release(kSharedIntentExclusive, resLockedForX);
+    owner.acquire(kExclusive, resLockedForX, ACQUIRED);
+
+
+    //
+    // test request for Update lock
+    //
+    asker.acquire(kUpdate, resLockedForIS, ACQUIRED); // U compatible with IS
+    asker.release(kUpdate, resLockedForIS);
+
+    asker.acquire(kUpdate, resLockedForIX, BLOCKED); // U conflicts with IX
+    owner.release(kIntentExclusive, resLockedForIX);
+    asker.wakened();
+    asker.release(kUpdate, resLockedForIX);
+    owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
+
+    asker.acquire(kUpdate, resLockedForS, ACQUIRED); // U compatible with S
+    asker.release(kUpdate, resLockedForS);
+
+    asker.acquire(kUpdate, resLockedForSIX, BLOCKED); // U conflicts with SIX
+    owner.release(kSharedIntentExclusive, resLockedForSIX);
+    asker.wakened();
+    asker.release(kUpdate, resLockedForSIX);
+    owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
+
+    asker.acquire(kUpdate, resLockedForU, BLOCKED); // U conflicts with U
+    owner.release(kUpdate, resLockedForU);
+    asker.wakened();
+    asker.release(kUpdate, resLockedForU);
+    owner.acquire(kUpdate, resLockedForU, ACQUIRED);
+
+    asker.acquire(kUpdate, resLockedForBX, BLOCKED); // U conflicts with BX
+    owner.release(kBlockExclusive, resLockedForBX);
+    asker.wakened();
+    asker.release(kUpdate, resLockedForBX);
+    owner.acquire(kBlockExclusive, resLockedForBX, ACQUIRED);
+
+    asker.acquire(kUpdate, resLockedForX, BLOCKED); // U conflicts with X
+    owner.release(kExclusive, resLockedForX);
+    asker.wakened();
+    asker.release(kUpdate, resLockedForX);
+    owner.acquire(kExclusive, resLockedForX, ACQUIRED);
+
+
+    //
+    // test request for BlockExclusive lock
+    //
+    asker.acquire(kBlockExclusive, resLockedForIS, ACQUIRED); // BX compatible with IS
+    asker.release(kBlockExclusive, resLockedForIS);
+
+    asker.acquire(kBlockExclusive, resLockedForIX, BLOCKED); // BX conflicts with IX
+    owner.release(kIntentExclusive, resLockedForIX);
+    asker.wakened();
+    asker.release(kBlockExclusive, resLockedForIX);
+    owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
+
+    asker.acquire(kBlockExclusive, resLockedForS, ACQUIRED); // BX compatible with S
+    asker.release(kBlockExclusive, resLockedForS);
+
+    asker.acquire(kBlockExclusive, resLockedForSIX, BLOCKED); // BX conflicts with SIX
+    owner.release(kSharedIntentExclusive, resLockedForSIX);
+    asker.wakened();
+    asker.release(kBlockExclusive, resLockedForSIX);
+    owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
+
+    asker.acquire(kBlockExclusive, resLockedForU, BLOCKED); // BX conflicts with U
+    owner.release(kUpdate, resLockedForU);
+    asker.wakened();
+    asker.release(kBlockExclusive, resLockedForU);
+    owner.acquire(kUpdate, resLockedForU, ACQUIRED);
+
+    asker.acquire(kBlockExclusive, resLockedForBX, ACQUIRED); // BX compatible with BX
+    asker.release(kBlockExclusive, resLockedForBX);
+
+    asker.acquire(kBlockExclusive, resLockedForX, BLOCKED); // BX conflicts with X
+    owner.release(kExclusive, resLockedForX);
+    asker.wakened();
+    asker.release(kBlockExclusive, resLockedForX);
+    owner.acquire(kExclusive, resLockedForX, ACQUIRED);
+
+
+    //
+    // test request for Exclusive lock
+    //
+    asker.acquire(kExclusive, resLockedForIS, BLOCKED);
+    owner.release(kIntentShared, resLockedForIS);
+    asker.wakened();
+    asker.release(kExclusive, resLockedForIS);
+
+    asker.acquire(kExclusive, resLockedForIX, BLOCKED);
+    owner.release(kIntentExclusive, resLockedForIX);
+    asker.wakened();
+    asker.release(kExclusive, resLockedForIX);
+
+    asker.acquire(kExclusive, resLockedForS, BLOCKED);
+    owner.release(kShared, resLockedForS);
+    asker.wakened();
+    asker.release(kExclusive, resLockedForS);
+
+    asker.acquire(kExclusive, resLockedForSIX, BLOCKED);
+    owner.release(kSharedIntentExclusive, resLockedForSIX);
+    asker.wakened();
+    asker.release(kExclusive, resLockedForSIX);
+
+    asker.acquire(kExclusive, resLockedForU, BLOCKED);
+    owner.release(kUpdate, resLockedForU);
+    asker.wakened();
+    asker.release(kExclusive, resLockedForU);
+
+    asker.acquire(kExclusive, resLockedForBX, BLOCKED);
+    owner.release(kBlockExclusive, resLockedForBX);
+    asker.wakened();
+    asker.release(kExclusive, resLockedForBX);
+
+    asker.acquire(kExclusive, resLockedForX, BLOCKED);
+    owner.release(kExclusive, resLockedForX);
+    asker.wakened();
+    asker.release(kExclusive, resLockedForX);
+
+    asker.quit();
+    owner.quit();
+}
+
+TEST(LockManagerTest, TxSimpleDeadlocks) {
+    LockManager lm(LockManager::kPolicyFirstCome);
     ClientTransaction t1(&lm, 1);
-    ClientTransaction t2(&lm, 2);
+
+    ClientTransaction a1(&lm, 2);
+    ClientTransaction a2(&lm, 3);
+    ClientTransaction a3(&lm, 4);
+    ClientTransaction a4(&lm, 5);
+    ClientTransaction a5(&lm, 6);
+    ClientTransaction a6(&lm, 7);
+
     ResourceId r1(static_cast<int>(1));
     ResourceId r2(static_cast<int>(2));
 
-    // no conflicts with shared locks on same/different objects
+    // two transactions:
+    //     one reads resource 1 and writes resource 2
+    //     two reads resource 2 and writes resource 1
 
+    // simple deadlock test 1: both read first, then write, write deadlocks
+    a1.acquire(kShared, r2, ACQUIRED);
     t1.acquire(kShared, r1, ACQUIRED);
-    t2.acquire(kShared, r2, ACQUIRED);
-    t1.acquire(kShared, r2, ACQUIRED);
-    t2.acquire(kShared, r1, ACQUIRED);
-
+    t1.acquire(kExclusive, r2, BLOCKED);
+    a1.acquire(kExclusive, r1, ABORTED);
+    t1.wakened();
+    t1.release(kExclusive, r2);
     t1.release(kShared, r1);
+
+    // simple deadlock test 2: one reads first, other writes first, read deadlocks
+    a2.acquire(kShared, r2, ACQUIRED);
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t1.acquire(kShared, r2, BLOCKED);
+    a2.acquire(kShared, r2, ABORTED);
+    t1.wakened();
     t1.release(kShared, r2);
-    t2.release(kShared, r1);
-    t2.release(kShared, r2);
-
-
-    // no conflicts with exclusive locks on different objects
-    t1.acquire(kExclusive, r1, ACQUIRED);
-    t2.acquire(kExclusive, r2, ACQUIRED);
     t1.release(kExclusive, r1);
-    t2.release(kExclusive, r2);
 
+    // simple deadlock test 3: both write first, then read
+    a3.acquire(kExclusive, r2, ACQUIRED);
+    t1.acquire(kExclusive, r1, ACQUIRED);
+    t1.acquire(kShared, r2, BLOCKED);
+    a3.acquire(kShared, r1, ABORTED);
+    t1.wakened();
+    t1.release(kShared, r2);
+    t1.release(kExclusive, r1);
 
-    // shared then exclusive conflict
+    //
+    // two transactions: one reads and the other writes the same resources
+    //
+
+    // simple deadlock test 4: reader deadlocks
+    a4.acquire(kShared, r2, ACQUIRED);
+    t1.acquire(kExclusive, r1, BLOCKED);
+    t1.acquire(kExclusive, r2, BLOCKED);
+    a4.acquire(kShared, r1, ABORTED);
+    t1.wakened();
+    t1.release(kExclusive, r2);
+    t1.release(kExclusive, r1);
+
+    // simple deadlock test 5: writer deadlocks
+    a5.acquire(kExclusive, r2, ACQUIRED);
     t1.acquire(kShared, r1, ACQUIRED);
-    // t2's request is incompatible with t1's lock, so it should block
-    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.acquire(kShared, r2, BLOCKED);
+    a5.acquire(kExclusive, r1, ABORTED);
+    t1.wakened();
+    t1.release(kShared, r2);
     t1.release(kShared, r1);
-    t2.wakened(); // with t1's lock released, t2 should wake
-    t2.release(kExclusive, r1);
 
-    // exclusive then shared conflict
-    t1.acquire(kExclusive, r1, ACQUIRED);
-    t2.acquire(kShared, r1, BLOCKED);
-    t1.release(kExclusive, r1);
-    t2.wakened();
-    t2.release(kShared, r1);
+    //
+    // two transactions: both write the same resources
+    //
 
-    // exclusive then exclusive conflict
+    // simple deadlock test 6: reader deadlocks
+    a6.acquire(kExclusive, r2, ACQUIRED);
     t1.acquire(kExclusive, r1, ACQUIRED);
-    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.acquire(kExclusive, r2, BLOCKED);
+    a6.acquire(kExclusive, r1, ABORTED);
+    t1.wakened();
+    t1.release(kExclusive, r2);
     t1.release(kExclusive, r1);
-    t2.wakened();
-    t2.release(kExclusive, r1);
 
     t1.quit();
-    t2.quit();
 }
 
-TEST(LockManagerTest, TxDeadlock) {
-    LockManager lm(LockManager::kPolicyReadersFirst);
+TEST(LockManagerTest, TxComplexDeadlocks) {
+    LockManager lm(LockManager::kPolicyFirstCome);
     ClientTransaction t1(&lm, 1);
     ClientTransaction t2(&lm, 2);
 
-    ClientTransaction a1(&lm, 4);
-    ClientTransaction a2(&lm, 5);
-    ClientTransaction a3(&lm, 6);
-    ClientTransaction a4(&lm, 7);
-    ClientTransaction a5(&lm, 8);
+    ClientTransaction a1(&lm, 3);
+    ClientTransaction a2(&lm, 4);
 
     ResourceId r1(static_cast<int>(1));
     ResourceId r2(static_cast<int>(2));
     ResourceId r3(static_cast<int>(3));
-#if 1
-    // simple deadlock test 1
-    t1.acquire(kShared, r1, ACQUIRED);
-    a1.acquire(kShared, r2, ACQUIRED);
-    t1.acquire(kExclusive, r2, BLOCKED);
-    // a1's request would form a dependency cycle, so it should abort
-    a1.acquire(kExclusive, r1, ABORTED);
-    t1.wakened(); // with t2's locks released, t1 should wake
-    t1.release(kExclusive, r2);
-    t1.release(kShared, r1);
 
-    // simple deadlock test 2
-    a2.acquire(kShared, r1, ACQUIRED);
-    t2.acquire(kShared, r2, ACQUIRED);
-    t2.acquire(kExclusive, r1, BLOCKED);
-    // a2's request would form a dependency cycle, so it should abort
-    a2.acquire(kExclusive, r2, ABORTED);
-    t2.wakened(); // with a2's locks released, t2 should wake
-    t2.release(kExclusive, r1);
-    t2.release(kShared, r2);
-#else
-    a1.quit();
-    a2.quit();
-#endif
-#if 1
-    // three way deadlock
+    // three way deadlock: each read and write the same resources
     t1.acquire(kShared, r1, ACQUIRED);
     t2.acquire(kShared, r2, ACQUIRED);
-    a3.acquire(kShared, r3, ACQUIRED);
+    a1.acquire(kShared, r3, ACQUIRED);
     t1.acquire(kExclusive, r2, BLOCKED);
     t2.acquire(kExclusive, r3, BLOCKED);
-    // a3's request would form a dependency cycle, so it should abort
-    a3.acquire(kExclusive, r1, ABORTED);;
-    t2.wakened(); // with a3's lock release, t2 should wake
+    a1.acquire(kExclusive, r1, ABORTED);;
+    t2.wakened(); // with a1's lock release, t2 should wake
     t2.release(kShared, r2);
     t1.wakened(); // with t2's locks released, t1 should wake
     t2.release(kExclusive, r3);
     t1.release(kShared, r1);
     t1.release(kExclusive, r2);
-#else
-    a3.quit();
-#endif
+
     // test for phantom deadlocks
     t1.acquire(kShared, r1, ACQUIRED);
     t2.acquire(kExclusive, r1, BLOCKED);
@@ -516,38 +803,19 @@ TEST(LockManagerTest, TxDeadlock) {
     t2.release(kExclusive, r1);
     t1.wakened();
     t1.release(kShared, r1);
-#if 1
-    // test for missing deadlocks
-    t1.acquire(kShared, r1, ACQUIRED);
-    t2.acquire(kShared, r2, ACQUIRED); // setup for deadlock with a4
-    t2.acquire(kExclusive, r1, BLOCKED); // block on t1
-    // after this, because readers first policy, t2 should
-    // also be waiting on a4.
-    a4.acquire(kShared, r1, ACQUIRED);
-    // after this, t2 should be waiting ONLY on a4
-    t1.release(kShared, r1);
-    // So a4 should not be allowed to wait on t2's resource.
-    a4.acquire(kExclusive, r2, ABORTED);
-    t2.wakened();
-    t2.release(kShared, r2);
-    t2.release(kExclusive, r1);
 
     // test for missing deadlocks: due to downgrades
-    a5.acquire(kExclusive, r1, ACQUIRED);
-    a5.acquire(kShared, r1, ACQUIRED);
-    t2.acquire(kShared, r2, ACQUIRED); // setup for deadlock with a5
-    t2.acquire(kExclusive, r1, BLOCKED); // block on a5
-    a5.release(kExclusive, r1);
-    // at this point, t2 should still be blocked on a5's downgraded lock
-    // So a5 should not be allowed to wait on t2's resource.
-    a5.acquire(kExclusive, r2, ABORTED);
+    a2.acquire(kExclusive, r1, ACQUIRED);
+    a2.acquire(kShared, r1, ACQUIRED);
+    t2.acquire(kShared, r2, ACQUIRED); // setup for deadlock with a2
+    t2.acquire(kExclusive, r1, BLOCKED); // block on a2
+    a2.release(kExclusive, r1);
+    // at this point, t2 should still be blocked on a2's downgraded lock
+    // So a2 should not be allowed to wait on t2's resource.
+    a2.acquire(kExclusive, r2, ABORTED);
     t2.wakened();
     t2.release(kShared, r2);
     t2.release(kExclusive, r1);
-#else
-    a4.quit();
-    a5.quit();
-#endif
 
     t1.quit();
     t2.quit();
@@ -611,7 +879,7 @@ TEST(LockManagerTest, TxDowngrade) {
 }
 
 TEST(LockManagerTest, TxUpgrade) {
-    LockManager lm(LockManager::kPolicyReadersFirst);
+    LockManager lm(LockManager::kPolicyFirstCome);
     ClientTransaction t1(&lm, 1);
     ClientTransaction t2(&lm, 2);
     ClientTransaction t3(&lm, 3);
@@ -715,32 +983,6 @@ TEST(LockManagerTest, TxPolicy) {
         t3.release(kExclusive, r1);
         t2.wakened();
         t2.release(kShared, r1);
-
-        t1.quit();
-        t2.quit();
-        t3.quit();
-    }
-
-    {
-        // Test kPolicyReadersFirst
-        // shared request are considered read requests
-
-        LockManager lm_readers(LockManager::kPolicyReadersFirst);
-        ClientTransaction t1(&lm_readers, 1);
-        ClientTransaction t2(&lm_readers, 2);
-        ClientTransaction t3(&lm_readers, 3);
-
-        t1.acquire(kExclusive, r1, ACQUIRED);
-        t3.acquire(kExclusive, r1, BLOCKED);
-        t2.acquire(kShared, r1, BLOCKED);
-        t1.release(kExclusive, r1);
-
-        // t2 should wake first, even though t3 came first in time
-        // because t2 is a reader and t3 is a writer
-        t2.wakened();
-        t2.release(kShared, r1);
-        t3.wakened();
-        t3.release(kExclusive, r1);
 
         t1.quit();
         t2.quit();
@@ -854,7 +1096,7 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     t3.acquire(kExclusive, r2, BLOCKED); // just policy conflict
     t4.acquire(kExclusive, r1, BLOCKED); // both policy & t1
     t5.acquire(kShared, r1, ACQUIRED);   // even tho t4
-    tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
+    tp.setPolicy(LockManager::kPolicyFirstCome, ACQUIRED);
     t3.wakened();
     t3.release(kExclusive, r2);
     t1.release(kShared, r1);
@@ -871,7 +1113,7 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     t1.release(kExclusive, r1);
     t5.acquire(kExclusive, r2, ACQUIRED);   // even tho t3
     t5.release(kExclusive, r2);
-    tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
+    tp.setPolicy(LockManager::kPolicyFirstCome, ACQUIRED);
     t3.wakened();
     t3.release(kShared, r2);
     t4.wakened();
@@ -880,13 +1122,13 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     // show READERS_ONLY blocked by existing writer
     // but still blocking new writers
     t1.acquire(kExclusive, r1, ACQUIRED);
-    tp.setPolicy(LockManager::kPolicyReadersOnly, BLOCKED);  // blocked by t1
+    tp.setPolicy(LockManager::kPolicyFirstCome, BLOCKED);  // blocked by t1
     t2.acquire(kExclusive, r2, BLOCKED);   // just policy conflict
     t3.acquire(kShared, r2, ACQUIRED);     // even tho t2
     t3.release(kShared, r2);
     t1.release(kExclusive, r1);
     tp.wakened();
-    tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
+    tp.setPolicy(LockManager::kPolicyFirstCome, ACQUIRED);
     t2.wakened();
     t2.release(kExclusive, r2);
 
@@ -897,7 +1139,7 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     t2.acquire(kShared, r2, BLOCKED);      // just policy conflict
     t1.release(kShared, r1);
     tp.wakened();
-    tp.setPolicy(LockManager::kPolicyReadersFirst, ACQUIRED);
+    tp.setPolicy(LockManager::kPolicyFirstCome, ACQUIRED);
     t2.wakened();
     t2.release(kShared, r2);
 

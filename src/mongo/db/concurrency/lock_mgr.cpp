@@ -56,11 +56,6 @@ namespace mongo {
     // It should be removed once full document-level locking is checked-in.
     MONGO_EXPORT_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
 
-    // This parameter enables 2-phase locking, in which locks are held
-    // to the end of the acquiring transaction, rather than being released
-    // when their count goes to zero.
-    MONGO_EXPORT_SERVER_PARAMETER(use2PL, bool, false);
-
     /*---------- Utility functions ----------*/
 
     namespace {
@@ -119,30 +114,6 @@ namespace mongo {
         }
 
         bool isDowngrade(const LockMode& acquired, const LockMode& requested) {
-            switch (acquired) {
-            case kIntentShared:
-                return false; // nothing lower than kIS
-            case kShared:
-            case kIntentExclusive:
-                return kIntentShared == requested;
-            case kSharedIntentExclusive:
-                return
-                    (kIntentExclusive == requested) ||
-                    (kShared == requested) ||
-                    (kIntentShared == requested);
-            case kUpdate:
-                return
-                    (kShared == requested) ||
-                    (kIntentShared == requested);
-            case kBlockExclusive:
-                return false;
-            case kExclusive:
-                return kExclusive != requested; // everything else is lower
-            }
-            return false;
-        }
-
-        bool isMoreStrict(const LockMode& acquired, const LockMode& requested) {
             switch (acquired) {
             case kIntentShared:
                 return false; // nothing lower than kIS
@@ -265,9 +236,7 @@ namespace mongo {
 
     Transaction::~Transaction() {
         if (kCommitted == _state) {
-            if (use2PL) {
-                LockManager::getSingleton().releaseTxLocks(this, LockManager::kTxCommitting);
-            }
+            LockManager::getSingleton().releaseTxLocks(this, LockManager::kTxCommitting);
             invariant(NULL == _locks);
         }
         else if (NULL != _locks) {
@@ -524,12 +493,6 @@ namespace mongo {
         return _policy;
     }
 
-    Transaction* LockManager::getPolicySetter() const {
-        boost::unique_lock<boost::mutex> lk(_mutex);
-        _throwIfShuttingDown();
-        return _policySetter;
-    }
-
     void LockManager::setPolicy(Transaction* tx, const Policy& policy, Notifier* notifier) {
         boost::unique_lock<boost::mutex> lk(_mutex);
         _throwIfShuttingDown();
@@ -648,42 +611,6 @@ namespace mongo {
         _incStatsForMode(mode);
     }
 
-    int LockManager::acquireOne(Transaction* requestor,
-                                const LockMode& mode,
-                                const vector<ResourceId>& resources,
-                                Notifier* notifier) {
-        {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown(requestor);
-        }
-
-        // don't accept requests from aborted transactions
-        if (Transaction::kAborted == requestor->_state) {
-            throw AbortException();
-        }
-
-        if (resources.empty()) { return -1; }
-
-        // acquire the first available recordId
-        for (unsigned ix=0; ix < resources.size(); ix++) {
-            ResourceId resId = resources[ix];
-            unsigned slice = partitionResource(resId);
-            bool isAvailable = false;
-            {
-                boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
-                isAvailable = _isAvailable(requestor, mode, resId, slice);
-            }
-            if (isAvailable) {
-                acquire(requestor, mode, resId, notifier);
-                return ix;
-            }
-        }
-
-        // sigh. none of the records are currently available. wait on the first.
-        acquire(requestor, mode, resources[0], notifier);
-        return 0;
-    }
-
     LockManager::LockStatus LockManager::releaseLock(LockRequest* lr) {
         if (!useExperimentalDocLocking) return kLockNotFound;
         invariant(lr);
@@ -758,9 +685,6 @@ namespace mongo {
         case kPolicyFirstCome:
             result << "FirstCome";
             break;
-        case kPolicyReadersFirst:
-            result << "ReadersFirst";
-            break;
         case kPolicyOldestTxFirst:
             result << "OldestFirst";
             break;
@@ -826,8 +750,11 @@ namespace mongo {
             _throwIfShuttingDown(holder);
         }
 
-        LockRequest* unused=NULL;
-        return kLockFound == _findLock(holder, mode, resId, partitionResource(resId), unused);
+        LockRequest* theLock=NULL;
+        if (kLockFound == _findLock(holder, mode, resId, partitionResource(resId), theLock))
+            return theLock->count > 0;
+        else
+            return false;
     }
 
     unsigned LockManager::partitionResource(const ResourceId& resId) {
@@ -1041,15 +968,6 @@ namespace mongo {
             _push_back(lr);
             position = NULL;
             return;
-        case kPolicyReadersFirst:
-            for (; position; position=position->nextOnResource) {
-                if (isMoreStrict(position->mode, lr->mode) && position->isBlocked()) {
-                    // insert shared lock before first sleeping exclusive lock
-                    position->insert(lr);
-                    return;
-                }
-            }
-            break;
         case kPolicyOldestTxFirst:
             for (; position; position=position->nextOnResource) {
                 if (*lr->requestor < *position->requestor &&
@@ -1111,8 +1029,6 @@ namespace mongo {
         switch (_policy) {
         case kPolicyFirstCome:
             return false;
-        case kPolicyReadersFirst:
-            return isMoreStrict(oldRequest->mode, mode);
         case kPolicyOldestTxFirst:
             return *requestor < *oldRequest->requestor;
         case kPolicyBlockersFirst: {
@@ -1282,45 +1198,6 @@ namespace mongo {
         return it->second;
     }
 
-    /*
-     * Used by acquireOne
-     * XXX: there's overlap between this, _conflictExists and _findLock
-     */
-    bool LockManager::_isAvailable(const Transaction* requestor,
-                                   const LockMode& mode,
-                                   const ResourceId& resId,
-                                   unsigned slice) const {
-
-        // check for exceptional policies
-        if ((kPolicyReadersOnly == _policy && conflictsWithReadersOnlyPolicy(mode)) ||
-            (kPolicyWritersOnly == _policy && conflictsWithWritersOnlyPolicy(mode)))
-            return false;
-
-        
-        // walk over the queue of previous requests for this ResourceId
-        for (const LockRequest* nextLock = _resourceLocks[slice].at(resId);
-             nextLock; nextLock = nextLock->nextOnResource) {
-
-            if (nextLock->matches(requestor, mode, resId)) {
-                // we're already have this lock, if we're asking, we can't be asleep
-                invariant(! nextLock->isBlocked());
-                return true;
-            }
-
-            // no conflict if we're compatible
-            if (isCompatible(nextLock->mode, mode)) continue;
-
-            // no conflict if nextLock is blocked and we come before
-            if (nextLock->isBlocked() && _comesBeforeUsingPolicy(requestor, mode, nextLock))
-                return true;
-
-            return false; // we're incompatible and would block
-        }
-
-        // everything on the queue (if anything is on the queue) is compatible
-        return true;
-    }
-
     /**
      *  release locks acquired by a transaction, called (1) for deadlock avoidance
      *  from _abortInternal, and (2) when 2-phase-locking is enabled when a write
@@ -1376,13 +1253,11 @@ namespace mongo {
             if (--lr->count > 0) {
                 return kLockCountDecremented;
             }
-            else if (use2PL) {
-                // delay wakeing sleepers and cleanup until isTxEnding
-                return kLockFound;
-            }
-            break;
+
+            // delay wakeing sleepers and cleanup until isTxEnding
+            return kLockFound;
         case kTxCommitting:
-            invariant (use2PL && lr->count > 0);
+            invariant (lr->count > 0);
             break;
         case kTxAborting:
             break;
