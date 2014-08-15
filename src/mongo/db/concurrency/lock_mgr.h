@@ -161,6 +161,12 @@ namespace mongo {
         // used to mitigate cost of mutex locking
         unsigned slice;
 
+        // it's an error to exit top-level scope with locks
+        // remaining that were acquired in-scope. it's also
+        // an error to release a lock acquired out-of-scope
+        // inside a scope
+        bool acquiredInScope;
+
         // number of times a tx requested resource in this mode
         // lock request will be deleted when count goes to 0
         size_t count;
@@ -196,6 +202,14 @@ namespace mongo {
          */
         Transaction* setTxIdOnce(unsigned txId);
         unsigned getTxId() const { return _txId; }
+
+        /**
+         * scope corresponds to UnitOfWork nesting level, but may apply to
+         * read transactions of 3rd-party storage engines.
+         */
+        bool inScope() const { return _scopeLevel != 0; }
+        void enterScope() { _scopeLevel++; }
+        void exitScope();
 
         /**
          * override default LockManager's default Policy for a transaction.
@@ -254,6 +268,8 @@ namespace mongo {
             kAborted,
             kCommitted
         };
+
+        size_t _scopeLevel;
 
         // identify the transaction
         unsigned _txId;
@@ -429,12 +445,6 @@ namespace mongo {
 
     public:
 
-        enum ReleaseContext {
-            kTxActive,
-            kTxCommitting,
-            kTxAborting
-        };
-
         /**
          * Singleton factory - retrieves a common instance of LockManager
          */
@@ -502,7 +512,7 @@ namespace mongo {
          * release all resources acquired by a transaction
          * returns number of locks released
          */
-        size_t releaseTxLocks(Transaction* holder, ReleaseContext context);
+        size_t releaseTxLocks(Transaction* holder);
 
         /**
          * called internally for deadlock
@@ -639,7 +649,6 @@ namespace mongo {
          * calls _releaseInternal on each acquired lock
          */
         size_t _releaseTxLocksInternal(Transaction* holder,
-                                       const ReleaseContext& context,
                                        unsigned slice=kNumResourcePartitions);
 
 
@@ -647,8 +656,7 @@ namespace mongo {
          * called by public ::release and internally _releaseTxLocks
          * assumes caller as acquired a mutex.
          */
-        LockStatus _releaseInternal(LockRequest* lr,
-                                    const ReleaseContext& context=kTxActive);
+        LockStatus _releaseInternal(LockRequest* lr);
 
         /**
          * called at start of public APIs, throws exception
