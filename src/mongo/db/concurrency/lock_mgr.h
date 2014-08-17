@@ -272,20 +272,11 @@ namespace mongo {
     private:
         friend class LockManager;
 
-        /**
-         * it might be useful to reject lock manager requests from inactive TXs.
-         */
-        enum TxState {
-            kInvalid,
-            kActive,
-            kAborted,
-            kCommitted
-        };
-
-        size_t _scopeLevel;
-
         // identify the transaction
         unsigned _txId;
+
+        // 0 ==> outside unit of work.  Used to control relinquishing locks
+        size_t _scopeLevel;
 
         // transaction priorities:
         //     0 => neutral, use LockManager's default _policy
@@ -293,9 +284,6 @@ namespace mongo {
         //     - => low, queue back
         //
         int _priority;
-
-        // LockManager doesnt accept new requests from completed transactions
-        TxState _state;
 
         // synchronize access to transaction's _locks and _waiters
         // which are modified by the lock manager

@@ -293,16 +293,6 @@ TEST(LockManagerTest, TxError) {
     ASSERT(LockManager::kLockModeNotFound == status);
     status = lm.release(&tx, kShared, r1);
     ASSERT(LockManager::kLockReleased == status);
-
-    // attempt to acquire on a transaction that aborted
-    try {
-        tx.abort();
-    } catch (const Transaction::AbortException& err) { }
-    try {
-        lm.acquire(&tx, kShared, r1); // error
-        ASSERT(false);
-    } catch (const Transaction::AbortException& error) {
-    }
 }
 
 TEST(LockManagerTest, SingleTx) {

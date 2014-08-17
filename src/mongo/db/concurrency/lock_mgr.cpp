@@ -143,15 +143,7 @@ namespace mongo {
         bool isCompatible(const LockMode& acquired, const LockMode& requested) {
             switch (acquired) {
             case kIntentShared:
-                switch (requested) {
-                case kIntentShared:
-                case kIntentExclusive:
-                case kShared:
-                case kSharedIntentExclusive:
-                    return true;
-                default:
-                    return false;
-                }
+                return kExclusive != requested;
             case kIntentExclusive:
                 switch (requested) {
                 case kIntentShared:
@@ -165,6 +157,7 @@ namespace mongo {
                 case kIntentShared:
                 case kShared:
                 case kUpdate:
+                case kBlockExclusive:
                     return true;
                 default:
                     return false;
@@ -180,7 +173,14 @@ namespace mongo {
                     return false;
                 }
             case kBlockExclusive:
-                return kBlockExclusive == requested;
+                switch (requested) {
+                case kShared:
+                case kIntentShared:
+                case kBlockExclusive:
+                    return true;
+                default:
+                    return false;
+                }
             case kExclusive:
             default:
                 return false;
@@ -230,8 +230,8 @@ namespace mongo {
     /*---------- Transaction functions ----------*/
     Transaction::Transaction(unsigned txId, int priority)
         : _txId(txId)
+        , _scopeLevel(0)
         , _priority(priority)
-        , _state((0==txId) ? kInvalid : kActive)
         , _locks(NULL) { }
 
     Transaction::~Transaction() {
@@ -241,7 +241,6 @@ namespace mongo {
     Transaction* Transaction::setTxIdOnce(unsigned txId) {
         if (0 == _txId) {
             _txId = txId;
-            _state = kActive;
         }
 
         return this;
@@ -249,7 +248,6 @@ namespace mongo {
 
     void Transaction::enterScope() {
         ++_scopeLevel;
-        _state = kActive;
     }
 
     void Transaction::exitScope() {
@@ -260,11 +258,9 @@ namespace mongo {
         // complain about locks acquiredInScope that have not been released
 
         LockManager::getSingleton().relinquishScopedTxLocks(_locks);
-        _state = kInvalid;
     }
 
     void Transaction::abort() {
-        _state = Transaction::kAborted;
         removeAllWaiters();
         throw AbortException();
     }
@@ -348,8 +344,9 @@ namespace mongo {
     string Transaction::toString() const {
         stringstream result;
         result << "<xid:" << _txId
-               << ",priority:" << _priority
-               << ",state:" << ((kActive == _state) ? "active" : "completed");
+               << ",scopeLevel:" << _scopeLevel
+               << ",priority:" << _priority;
+
 
         result << ",locks: {";
         bool firstLock=true;
@@ -574,8 +571,6 @@ namespace mongo {
             _throwIfShuttingDown();
         }
 
-        invariant(Transaction::kAborted != lr->requestor->_state);
-
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
 
         LockRequest* queue = _findQueue(lr->slice, lr->resId);
@@ -603,8 +598,6 @@ namespace mongo {
             boost::unique_lock<boost::mutex> lk(_mutex);
             _throwIfShuttingDown();
         }
-
-        invariant (Transaction::kAborted != requestor->_state);
 
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
@@ -1202,24 +1195,23 @@ namespace mongo {
      */
     LockManager::LockStatus LockManager::_releaseInternal(LockRequest* lr) {
 
-        Transaction* holder = lr->requestor;
+        invariant(lr->count > 0);
+
+        if (--lr->count > 0) {
+            return kLockCountDecremented;
+        }
+
+        if (lr->requestor->inScope()) {
+            // delay waking sleepers and cleanup until requestor is not inScope
+            return kLockFound;
+        }
 
         if ((kPolicyWritersOnly == _policy && 0 == _numActiveReads()) ||
             (kPolicyReadersOnly == _policy && 0 == _numActiveWrites())) {
             _policyLock.notify_one();
         }
 
-        if (lr->requestor->inScope()) {
-            if (--lr->count > 0) {
-                return kLockCountDecremented;
-            }
-
-            invariant(lr->acquiredInScope);
-
-            // delay waking sleepers and cleanup until requestor is not inScope
-            return kLockFound;
-        }
-
+        Transaction* holder = lr->requestor;
         LockRequest* nextLock = lr->nextOnResource;
 
         // remove the lock from its queues
