@@ -54,7 +54,6 @@ namespace mongo {
     enum TxCmd {
         ACQUIRE,
         RELEASE,
-        RELINQUISH,
         ABORT,
         POLICY,
         QUIT,
@@ -64,7 +63,6 @@ namespace mongo {
     enum TxRsp {
         ACQUIRED,
         RELEASED,
-        RELINQUISHED,
         BLOCKED,
         AWAKENED,
         ABORTED,
@@ -186,13 +184,10 @@ public:
         ASSERT(rspCode == rsp->rspCode);
     }
 
-    void release(const LockMode& mode, const ResourceId resId, ) {
+    void release(const LockMode& mode, const ResourceId resId) {
         _cmd.post(RELEASE, _tx.getTxId(), mode, resId);
         TxResponse* rsp = _rsp.consume();
         ASSERT(RELEASED == rsp->rspCode);
-    }
-    void relinquishLocks() {
-        _cmd.post(RELINQUISH, _tx.getTxId());
     }
 
     void abort() {
@@ -226,7 +221,7 @@ public:
                 try {
                     _lm->acquire(&_tx, req->mode, req->resId, this);
                     _rsp.post(ACQUIRED);
-                } catch (const LockManager::AbortException& err) {
+                } catch (const Transaction::AbortException& err) {
                     _rsp.post(ABORTED);
 //          log() << "t" << _tx._txId << ": aborted, ending" << endl;
                     return;
@@ -236,13 +231,10 @@ public:
                 _lm->release(&_tx, req->mode, req->resId);
                 _rsp.post(RELEASED);
                 break;
-            case RELINQUISH:
-                _tx.relinquishLocks();
-                _rsp.post(RELINQUISHED);
             case ABORT:
                 try {
-                    _lm->abort(&_tx);
-                } catch (const LockManager::AbortException& err) {
+                    _tx.abort();
+                } catch (const Transaction::AbortException& err) {
                     _rsp.post(ABORTED);
                 }
                 break;
@@ -250,7 +242,7 @@ public:
                 try {
                     _lm->setPolicy(&_tx, req->policy, this);
                     _rsp.post(ACQUIRED);
-                } catch( const LockManager::AbortException& err) {
+                } catch( const Transaction::AbortException& err) {
                     _rsp.post(ABORTED);
                 }
                 break;
@@ -302,20 +294,14 @@ TEST(LockManagerTest, TxError) {
     status = lm.release(&tx, kShared, r1);
     ASSERT(LockManager::kLockReleased == status);
 
-    lm.acquire(&tx, kExclusive, r1);
-    status = lm.release(&tx, kShared, r1); // this is in error
-    ASSERT(LockManager::kLockModeNotFound == status);
-    status = lm.release(&tx, kExclusive, r1);
-    ASSERT(LockManager::kLockReleased == status);
-
     // attempt to acquire on a transaction that aborted
     try {
-        lm.abort(&tx);
-    } catch (const LockManager::AbortException& err) { }
+        tx.abort();
+    } catch (const Transaction::AbortException& err) { }
     try {
         lm.acquire(&tx, kShared, r1); // error
         ASSERT(false);
-    } catch (const LockManager::AbortException& error) {
+    } catch (const Transaction::AbortException& error) {
     }
 }
 
@@ -332,7 +318,6 @@ TEST(LockManagerTest, SingleTx) {
 
     // release a shared record lock
     lm.release(&t1, kShared, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kShared, r1));
 
     // acquire a shared record lock twice, on same ResourceId
@@ -348,7 +333,6 @@ TEST(LockManagerTest, SingleTx) {
     // after 2nd release, it's not locked
     status = lm.release(&t1, kShared, r1);
     ASSERT(LockManager::kLockReleased == status);
-    t1.relinquishLocks();
     ASSERT(!lm.isLocked(&t1, kShared, r1));
 
 
@@ -367,18 +351,15 @@ TEST(LockManagerTest, SingleTx) {
     ASSERT(! lm.isLocked(&t1, kShared, r1));
     ASSERT(lm.isLocked(&t1, kExclusive, r1));
     lm.release(&t1, kExclusive, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kExclusive, r1));
 
     // release exclusive first, then shared
     lm.acquire(&t1, kExclusive, r1);
     lm.acquire(&t1, kShared, r1);
     lm.release(&t1, kExclusive, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kExclusive, r1));
     ASSERT(lm.isLocked(&t1, kShared, r1));
     lm.release(&t1, kShared, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kShared, r1));
 
 
@@ -394,22 +375,18 @@ TEST(LockManagerTest, SingleTx) {
 
     // release exclusive first, then shared
     lm.release(&t1, kExclusive, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kExclusive, r1));
     ASSERT(lm.isLocked(&t1, kShared, r1));
     lm.release(&t1, kShared, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kShared, r1));
 
     // release shared first, then exclusive
     lm.acquire(&t1, kShared, r1);
     lm.acquire(&t1, kExclusive, r1);
     lm.release(&t1, kShared, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kShared, r1));
     ASSERT(lm.isLocked(&t1, kExclusive, r1));
     lm.release(&t1, kExclusive, r1);
-    t1.relinquishLocks();
     ASSERT(! lm.isLocked(&t1, kExclusive, r1));
 }
 
@@ -459,12 +436,10 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kIntentShared, resLockedForX, BLOCKED); // IS conflicts with X
     owner.release(kExclusive, resLockedForX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kIntentShared, resLockedForX);
     owner.acquire(kExclusive, resLockedForX, ACQUIRED);
 
-    asker.relinquishLocks( );
 
 
     //
@@ -478,40 +453,34 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kIntentExclusive, resLockedForS, BLOCKED); // IX conflicts with S
     owner.release(kShared, resLockedForS);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kIntentExclusive, resLockedForS);
     owner.acquire(kShared, resLockedForS, ACQUIRED);
 
     asker.acquire(kIntentExclusive, resLockedForSIX, BLOCKED); // IX conflicts with SIX
     owner.release(kSharedIntentExclusive, resLockedForSIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kIntentExclusive, resLockedForSIX);
     owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
 
     asker.acquire(kIntentExclusive, resLockedForU, BLOCKED); // IX conflicts with U
     owner.release(kUpdate, resLockedForU);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kIntentExclusive, resLockedForU);
     owner.acquire(kUpdate, resLockedForU, ACQUIRED);
 
     asker.acquire(kIntentExclusive, resLockedForBX, BLOCKED); // IX conflicts with BX
     owner.release(kBlockExclusive, resLockedForBX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kIntentExclusive, resLockedForBX);
     owner.acquire(kBlockExclusive, resLockedForBX, ACQUIRED);
 
     asker.acquire(kIntentExclusive, resLockedForX, BLOCKED); // IX conflicts with X
     owner.release(kExclusive, resLockedForX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kIntentExclusive, resLockedForX);
     owner.acquire(kExclusive, resLockedForX, ACQUIRED);
 
-    asker.relinquishLocks( );
 
 
     //
@@ -522,7 +491,6 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kShared, resLockedForIX, BLOCKED); // S conflicts with IX
     owner.release(kIntentExclusive, resLockedForIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kShared, resLockedForIX);
     owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
@@ -532,7 +500,6 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kShared, resLockedForSIX, BLOCKED); // S conflicts with SIX
     owner.release(kSharedIntentExclusive, resLockedForSIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kShared, resLockedForSIX);
     owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
@@ -545,12 +512,10 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kShared, resLockedForX, BLOCKED); // S conflicts with X
     owner.release(kExclusive, resLockedForX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kShared, resLockedForX);
     owner.acquire(kExclusive, resLockedForX, ACQUIRED);
 
-    asker.relinquishLocks( );
 
 
     //
@@ -561,47 +526,40 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kSharedIntentExclusive, resLockedForIX, BLOCKED); // SIX conflicts with IX
     owner.release(kIntentExclusive, resLockedForIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kSharedIntentExclusive, resLockedForIX);
     owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
 
     asker.acquire(kSharedIntentExclusive, resLockedForS, BLOCKED); // SIX conflicts with S
     owner.release(kShared, resLockedForS);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kSharedIntentExclusive, resLockedForS);
     owner.acquire(kShared, resLockedForS, ACQUIRED);
 
     asker.acquire(kSharedIntentExclusive, resLockedForSIX, BLOCKED); // SIX conflicts with SIX
     owner.release(kSharedIntentExclusive, resLockedForSIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kSharedIntentExclusive, resLockedForSIX);
     owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
 
     asker.acquire(kSharedIntentExclusive, resLockedForU, BLOCKED); // SIX conflicts with U
     owner.release(kUpdate, resLockedForU);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kSharedIntentExclusive, resLockedForU);
     owner.acquire(kUpdate, resLockedForU, ACQUIRED);
 
     asker.acquire(kSharedIntentExclusive, resLockedForBX, BLOCKED); // SIX conflicts with BX
     owner.release(kBlockExclusive, resLockedForBX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kSharedIntentExclusive, resLockedForBX);
     owner.acquire(kBlockExclusive, resLockedForBX, ACQUIRED);
 
     asker.acquire(kSharedIntentExclusive, resLockedForX, BLOCKED); // SIX conflicts with X
     owner.release(kExclusive, resLockedForX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kSharedIntentExclusive, resLockedForX);
     owner.acquire(kExclusive, resLockedForX, ACQUIRED);
 
-    asker.relinquishLocks( );
 
 
     //
@@ -612,7 +570,6 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kUpdate, resLockedForIX, BLOCKED); // U conflicts with IX
     owner.release(kIntentExclusive, resLockedForIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kUpdate, resLockedForIX);
     owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
@@ -622,33 +579,28 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kUpdate, resLockedForSIX, BLOCKED); // U conflicts with SIX
     owner.release(kSharedIntentExclusive, resLockedForSIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kUpdate, resLockedForSIX);
     owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
 
     asker.acquire(kUpdate, resLockedForU, BLOCKED); // U conflicts with U
     owner.release(kUpdate, resLockedForU);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kUpdate, resLockedForU);
     owner.acquire(kUpdate, resLockedForU, ACQUIRED);
 
     asker.acquire(kUpdate, resLockedForBX, BLOCKED); // U conflicts with BX
     owner.release(kBlockExclusive, resLockedForBX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kUpdate, resLockedForBX);
     owner.acquire(kBlockExclusive, resLockedForBX, ACQUIRED);
 
     asker.acquire(kUpdate, resLockedForX, BLOCKED); // U conflicts with X
     owner.release(kExclusive, resLockedForX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kUpdate, resLockedForX);
     owner.acquire(kExclusive, resLockedForX, ACQUIRED);
 
-    asker.relinquishLocks( );
 
 
     //
@@ -659,7 +611,6 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kBlockExclusive, resLockedForIX, BLOCKED); // BX conflicts with IX
     owner.release(kIntentExclusive, resLockedForIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kBlockExclusive, resLockedForIX);
     owner.acquire(kIntentExclusive, resLockedForIX, ACQUIRED);
@@ -669,14 +620,12 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kBlockExclusive, resLockedForSIX, BLOCKED); // BX conflicts with SIX
     owner.release(kSharedIntentExclusive, resLockedForSIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kBlockExclusive, resLockedForSIX);
     owner.acquire(kSharedIntentExclusive, resLockedForSIX, ACQUIRED);
 
     asker.acquire(kBlockExclusive, resLockedForU, BLOCKED); // BX conflicts with U
     owner.release(kUpdate, resLockedForU);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kBlockExclusive, resLockedForU);
     owner.acquire(kUpdate, resLockedForU, ACQUIRED);
@@ -686,12 +635,10 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.acquire(kBlockExclusive, resLockedForX, BLOCKED); // BX conflicts with X
     owner.release(kExclusive, resLockedForX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kBlockExclusive, resLockedForX);
     owner.acquire(kExclusive, resLockedForX, ACQUIRED);
 
-    asker.relinquishLocks( );
 
 
     //
@@ -699,43 +646,36 @@ TEST(LockManagerTest, TxConflict) {
     //
     asker.acquire(kExclusive, resLockedForIS, BLOCKED);
     owner.release(kIntentShared, resLockedForIS);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kExclusive, resLockedForIS);
 
     asker.acquire(kExclusive, resLockedForIX, BLOCKED);
     owner.release(kIntentExclusive, resLockedForIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kExclusive, resLockedForIX);
 
     asker.acquire(kExclusive, resLockedForS, BLOCKED);
     owner.release(kShared, resLockedForS);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kExclusive, resLockedForS);
 
     asker.acquire(kExclusive, resLockedForSIX, BLOCKED);
     owner.release(kSharedIntentExclusive, resLockedForSIX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kExclusive, resLockedForSIX);
 
     asker.acquire(kExclusive, resLockedForU, BLOCKED);
     owner.release(kUpdate, resLockedForU);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kExclusive, resLockedForU);
 
     asker.acquire(kExclusive, resLockedForBX, BLOCKED);
     owner.release(kBlockExclusive, resLockedForBX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kExclusive, resLockedForBX);
 
     asker.acquire(kExclusive, resLockedForX, BLOCKED);
     owner.release(kExclusive, resLockedForX);
-    owner.relinquishLocks();
     asker.wakened();
     asker.release(kExclusive, resLockedForX);
 
@@ -769,7 +709,6 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     t1.wakened();
     t1.release(kExclusive, r2);
     t1.release(kShared, r1);
-    t1.relinquishLocks();
 
     // simple deadlock test 2: one reads first, other writes first, read deadlocks
     a2.acquire(kShared, r2, ACQUIRED);
@@ -779,7 +718,6 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     t1.wakened();
     t1.release(kShared, r2);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
 
     // simple deadlock test 3: both write first, then read
     a3.acquire(kExclusive, r2, ACQUIRED);
@@ -789,7 +727,6 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     t1.wakened();
     t1.release(kShared, r2);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
 
     //
     // two transactions: one reads and the other writes the same resources
@@ -803,7 +740,6 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     t1.wakened();
     t1.release(kExclusive, r2);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
 
     // simple deadlock test 5: writer deadlocks
     a5.acquire(kExclusive, r2, ACQUIRED);
@@ -813,7 +749,6 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     t1.wakened();
     t1.release(kShared, r2);
     t1.release(kShared, r1);
-    t1.relinquishLocks();
 
     //
     // two transactions: both write the same resources
@@ -827,7 +762,6 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     t1.wakened();
     t1.release(kExclusive, r2);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
 
     t1.quit();
 }
@@ -853,29 +787,22 @@ TEST(LockManagerTest, TxComplexDeadlocks) {
     a1.acquire(kExclusive, r1, ABORTED);;
     t2.wakened(); // with a1's lock release, t2 should wake
     t2.release(kShared, r2);
-    t2.relinquishLocks();
     t1.wakened(); // with t2's locks released, t1 should wake
     t2.release(kExclusive, r3);
     t1.release(kShared, r1);
     t1.release(kExclusive, r2);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     // test for phantom deadlocks
     t1.acquire(kShared, r1, ACQUIRED);
     t2.acquire(kExclusive, r1, BLOCKED);
     t1.release(kShared, r1);
-    t1.relinquishLocks()
     t2.wakened();
     // at this point, t2 should no longer be waiting for t1
     // so it should be OK for t1 to wait for t2
     t1.acquire(kShared, r1, BLOCKED);
     t2.release(kExclusive, r1);
-    t2.relinquishLocks();
     t1.wakened();
     t1.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     // test for missing deadlocks: due to downgrades
     a2.acquire(kExclusive, r1, ACQUIRED);
@@ -889,7 +816,6 @@ TEST(LockManagerTest, TxComplexDeadlocks) {
     t2.wakened();
     t2.release(kShared, r2);
     t2.release(kExclusive, r1);
-    t2.relinquishLocks();
 
     t1.quit();
     t2.quit();
@@ -906,12 +832,9 @@ TEST(LockManagerTest, TxDowngrade) {
     // t1 still has exclusive on resource 1, so t2 must wait
     t2.acquire(kShared, r1, BLOCKED);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
     t2.wakened(); // with the exclusive lock released, t2 wakes
     t1.release(kShared, r1);
     t2.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     t1.acquire(kExclusive, r1, ACQUIRED);
     t1.acquire(kShared, r1, ACQUIRED); // downgrade
@@ -920,11 +843,8 @@ TEST(LockManagerTest, TxDowngrade) {
     t1.release(kShared, r1);
     // with t1 still holding exclusive on resource 1, t2 still blocked
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
     t2.wakened(); // with the exclusive lock released, t2 wakes
     t2.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     t1.acquire(kExclusive, r1, ACQUIRED);
     // t1 has exclusive on resource 1, so t2 must wait
@@ -933,12 +853,9 @@ TEST(LockManagerTest, TxDowngrade) {
     // because it already owns exclusive lock and can't block on itself
     t1.acquire(kShared, r1, ACQUIRED);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
     t2.wakened(); // with the exclusive lock released, t2 wakes
     t1.release(kShared, r1);
     t2.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     // t2 acquires exclusive during t1's downgrade
     t1.acquire(kExclusive, r1, ACQUIRED);
@@ -946,22 +863,16 @@ TEST(LockManagerTest, TxDowngrade) {
     t2.acquire(kExclusive, r1, BLOCKED);
     t1.release(kExclusive, r1);
     t1.release(kShared, r1);
-    t1.relinquishLocks();
     t2.wakened();
     t2.release(kExclusive, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     t1.acquire(kExclusive, r1, ACQUIRED);
     t2.acquire(kExclusive, r1, BLOCKED);
     t1.acquire(kShared, r1, ACQUIRED);
     t1.release(kExclusive, r1);
     t1.release(kShared, r1);
-    t1.relinquishLocks();
     t2.wakened();
     t2.release(kExclusive, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     t1.quit();
     t2.quit();
@@ -983,12 +894,9 @@ TEST(LockManagerTest, TxUpgrade) {
     t1.acquire(kExclusive, r1, ACQUIRED); // upgrade
     t2.acquire(kShared, r1, BLOCKED);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
     t2.wakened();
     t1.release(kShared, r1);
     t2.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     // test upgrade blocks, then wakes
     t1.acquire(kShared, r1, ACQUIRED);
@@ -996,12 +904,9 @@ TEST(LockManagerTest, TxUpgrade) {
     // t1 can't use resource 1 exclusively yet, because t2 is using it
     t1.acquire(kExclusive, r1, BLOCKED);
     t2.release(kShared, r1);
-    t2.relinquishLocks();
     t1.wakened(); // with t2's shared lock released, t1 wakes
     t1.release(kExclusive, r1);
     t1.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     // test upgrade blocks on several, then wakes
     t1.acquire(kShared, r1, ACQUIRED);
@@ -1011,13 +916,9 @@ TEST(LockManagerTest, TxUpgrade) {
     t3.acquire(kShared, r1, ACQUIRED); // additional blocker
     t2.release(kShared, r1); // t1 still blocked
     t3.release(kShared, r1);
-    t3.relinquishLocks();
     t1.wakened(); // with t3's shared lock released, t1 wakes
     t1.release(kExclusive, r1);
     t1.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
-    t3.relinquishLocks();
 
     // failure to upgrade
     t1.acquire(kShared, r1, ACQUIRED);
@@ -1028,8 +929,6 @@ TEST(LockManagerTest, TxUpgrade) {
     t1.wakened();
     t1.release(kShared, r1);
     t1.release(kExclusive, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     // failure to upgrade
     t1.acquire(kShared, r1, ACQUIRED);
@@ -1037,13 +936,10 @@ TEST(LockManagerTest, TxUpgrade) {
     t1.acquire(kExclusive, r1, BLOCKED);
     a3.acquire(kShared, r1, ACQUIRED);
     t2.release(kShared, r1); // t1 still blocked on a3
-    t2.relinquishLocks();
     a3.acquire(kExclusive, r1, ABORTED);
     t1.wakened();
     t1.release(kExclusive, r1);
     t1.release(kShared, r1);
-    t1.relinquishLocks();
-    t2.relinquishLocks();
 
     t1.quit();
     t2.quit();
@@ -1066,29 +962,21 @@ TEST(LockManagerTest, TxPolicy) {
         t3.acquire(kExclusive, r1, BLOCKED);
         t1.release(kExclusive, r1);
         // t2 should wake first, because its request came before t3's
-        t1.relinquishLocks();
         t2.wakened();
         t2.release(kShared, r1);
-        t2.relinquishLocks();
         t3.wakened();
         t3.release(kExclusive, r1);
-        t1.relinquishLocks();
-        t2.relinquishLocks();
-        t3.relinquishLocks();
 
         // test2
         t1.acquire(kExclusive, r1, ACQUIRED);
         t3.acquire(kExclusive, r1, BLOCKED);
         t2.acquire(kShared, r1, BLOCKED);
         t1.release(kExclusive, r1);
-        t1.relinquishLocks();
         // t3 should wake first, because its request came before t2's
         t3.wakened();
         t3.release(kExclusive, r1);
         t2.wakened();
         t2.release(kShared, r1);
-        t2.relinquishLocks();
-        t3.relinquishLocks();
 
         t1.quit();
         t2.quit();

@@ -194,6 +194,17 @@ namespace mongo {
      */
     class Transaction {
     public:
+
+        /**
+         * thrown when Transaction::abort is called, often to avoid deadlock.
+         */
+        class AbortException : public std::exception {
+        public:
+            const char* what() const throw ();
+        };
+
+    public:
+
         Transaction(unsigned txId=0, int priority=0);
         ~Transaction();
 
@@ -208,8 +219,10 @@ namespace mongo {
          * read transactions of 3rd-party storage engines.
          */
         bool inScope() const { return _scopeLevel != 0; }
-        void enterScope() { _scopeLevel++; }
+        void enterScope();
         void exitScope();
+
+        MONGO_COMPILER_NORETURN void abort();
 
         /**
          * override default LockManager's default Policy for a transaction.
@@ -320,15 +333,6 @@ namespace mongo {
      */
     class LockManager {
     public:
-
-        /**
-         * thrown primarily when deadlocks are detected, or when LockManager::abort is called.
-         * also thrown when LockManager requests are made during shutdown.
-         */
-        class AbortException : public std::exception {
-        public:
-            const char* what() const throw ();
-        };
 
         /**
          * Used to decide which blocked requests to honor first when resource becomes available
@@ -509,17 +513,10 @@ namespace mongo {
         LockStatus releaseLock(LockRequest* request);
 
         /**
-         * release all resources acquired by a transaction
-         * returns number of locks released
+         * relinquish locks acquired by a transactions within a scope
+         * whose count is zero.
          */
-        size_t releaseTxLocks(Transaction* holder);
-
-        /**
-         * called internally for deadlock
-         * possibly called publicly to stop a long transaction
-         * also used for testing
-         */
-        MONGO_COMPILER_NORETURN void abort(Transaction* goner);
+        void relinquishScopedTxLocks(LockRequest* locks);
 
         /**
          * returns a copy of the stats that exist at the time of the call
@@ -549,15 +546,6 @@ namespace mongo {
                       const ResourceId& resId) const;
 
     private: // alphabetical
-
-        /**
-         * called by public ::abort and internally upon deadlock
-         * releases all locks acquired by goner, notify's any
-         * transactions that were waiting, then throws AbortException
-         */
-        MONGO_COMPILER_NORETURN void _abortInternal(Transaction* goner,
-                                                    unsigned slice=kNumResourcePartitions);
-
 
         /**
          * main workhorse for acquiring locks on resources, blocking
@@ -642,14 +630,6 @@ namespace mongo {
          */
         void _push_back(LockRequest* lr);
         void _removeFromResourceQueue(LockRequest* lr);
-
-        /**
-         * called when a transaction ends (commit or abort)
-         * to release all locks acquired by the transaction
-         * calls _releaseInternal on each acquired lock
-         */
-        size_t _releaseTxLocksInternal(Transaction* holder,
-                                       unsigned slice=kNumResourcePartitions);
 
 
         /**

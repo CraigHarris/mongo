@@ -196,7 +196,7 @@ namespace mongo {
 
     /*---------- AbortException functions ----------*/
 
-    const char* LockManager::AbortException::what() const throw() { return "AbortException"; }
+    const char* Transaction::AbortException::what() const throw() { return "AbortException"; }
 
     /*---------- LockStats functions ----------*/
     string LockManager::LockStats::toString() const {
@@ -235,13 +235,7 @@ namespace mongo {
         , _locks(NULL) { }
 
     Transaction::~Transaction() {
-        if (kCommitted == _state) {
-            LockManager::getSingleton().releaseTxLocks(this, LockManager::kTxCommitting);
-            invariant(NULL == _locks);
-        }
-        else if (NULL != _locks) {
-            LockManager::getSingleton().releaseTxLocks(this, LockManager::kTxAborting);
-        }
+        invariant(NULL == _locks);
     }
 
     Transaction* Transaction::setTxIdOnce(unsigned txId) {
@@ -253,36 +247,26 @@ namespace mongo {
         return this;
     }
 
-    void exitScope() {
+    void Transaction::enterScope() {
+        ++_scopeLevel;
+        _state = kActive;
+    }
+
+    void Transaction::exitScope() {
         invariant(_scopeLevel);
         if (--_scopeLevel > 0) return;
 
         // relinquish locks acquiredInScope that have been released; and
         // complain about locks acquiredInScope that have not been released
 
-        LockRequest* nextLock = _locks;
-        while (nextLock) {
-            if (!nextLock->acquiredInScope) {
-                nextLock= nextLock->nextOfTransaction;
-                continue;
-            }
+        LockManager::getSingleton().relinquishScopedTxLocks(_locks);
+        _state = kInvalid;
+    }
 
-            // _releaseInternal may free nextLock
-            LockRequest* newNextLock = nextLock->nextOfTransaction;
-            LockManager::LockStatus status;
-            if (slice != nextLock->slice) {
-                boost::unique_lock<boost::mutex> lk(_resourceMutexes[nextLock->slice]);
-                status = _releaseInternal(nextLock);
-            }
-            else {
-                // we already have a lock on this slice
-                status = _releaseInternal(nextLock);
-            }
-            if (kLockReleased == status) {
-                numLocksReleased++;
-            }
-            nextLock = newNextLock;
-        }
+    void Transaction::abort() {
+        _state = Transaction::kAborted;
+        removeAllWaiters();
+        throw AbortException();
     }
 
     bool Transaction::operator<(const Transaction& other) const {
@@ -590,10 +574,8 @@ namespace mongo {
             _throwIfShuttingDown();
         }
 
-        // don't accept requests from aborted transactions
-        if (Transaction::kAborted == lr->requestor->_state) {
-            throw AbortException();
-        }
+        invariant(Transaction::kAborted != lr->requestor->_state);
+
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
 
         LockRequest* queue = _findQueue(lr->slice, lr->resId);
@@ -622,10 +604,8 @@ namespace mongo {
             _throwIfShuttingDown();
         }
 
-        // don't accept requests from aborted transactions
-        if (Transaction::kAborted == requestor->_state) {
-            throw AbortException();
-        }
+        invariant (Transaction::kAborted != requestor->_state);
+
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
@@ -682,20 +662,29 @@ namespace mongo {
     /*
      * release all resource acquired by a transaction, returning the count
      */
-    size_t LockManager::releaseTxLocks(Transaction* holder) {
-        {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown(holder);
-        }
-        return _releaseTxLocksInternal(holder);
-    }
+    void LockManager::relinquishScopedTxLocks(LockRequest* locks) {
+        if (NULL == locks) return;
 
-    void LockManager::abort(Transaction* goner) {
         {
             boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown(goner);
+            _throwIfShuttingDown(locks->requestor);
         }
-        _abortInternal(goner);
+
+        LockRequest* nextLock = locks;
+        while (nextLock) {
+            if (!nextLock->acquiredInScope) {
+                nextLock = nextLock->nextOfTransaction;
+                continue;
+            }
+
+            invariant(0 == nextLock->count);
+
+            // _releaseInternal may free nextLock
+            LockRequest* newNextLock = nextLock->nextOfTransaction;
+            boost::unique_lock<boost::mutex> lk(_resourceMutexes[nextLock->slice]);
+            _releaseInternal(nextLock);
+            nextLock = newNextLock;
+        }
     }
 
     LockManager::LockStats LockManager::getStats() const {
@@ -784,10 +773,7 @@ namespace mongo {
         }
 
         LockRequest* theLock=NULL;
-        if (kLockFound == _findLock(holder, mode, resId, partitionResource(resId), theLock))
-            return theLock->count > 0;
-        else
-            return false;
+        return kLockFound == _findLock(holder, mode, resId, partitionResource(resId), theLock);
     }
 
     unsigned LockManager::partitionResource(const ResourceId& resId) {
@@ -839,26 +825,6 @@ namespace mongo {
     }
 
     /*---------- LockManager private functions (alphabetical) ----------*/
-
-    /*
-     * release resources acquired by a transaction about to abort, notifying
-     * any waiters that they can retry their resource acquisition.  cleanup
-     * and throw an AbortException.
-     */
-    void LockManager::_abortInternal(Transaction* goner, unsigned slice) {
-
-        goner->_state = Transaction::kAborted;
-
-        // release all resources acquired by this transaction
-        // notifying any waiters that they can continue
-        //
-        _releaseTxLocksInternal(goner, slice);
-
-        // erase aborted transaction's waiters
-        goner->removeAllWaiters();
-
-        throw AbortException();
-    }
 
     LockManager::ResourceStatus LockManager::_getConflictInfo(Transaction* requestor,
                                                               const LockMode& mode,
@@ -1161,7 +1127,7 @@ namespace mongo {
 
             if (nextLock && activeOwners.find(nextLock->requestor) != activeOwners.end()) {
                 // nextLock is also an upgrade
-                _abortInternal(requestor, slice);
+                requestor->abort();
             }
 
             if (NULL == firstConflict)
@@ -1188,7 +1154,7 @@ namespace mongo {
                 // if requestor waited for nextLockRequest, there would be a deadlock
                 //
                 _stats[slice].incDeadlocks();
-                _abortInternal(requestor, slice);
+                requestor->abort();
             }
             return kResourceConflict;
         }
@@ -1229,42 +1195,6 @@ namespace mongo {
         map<ResourceId,LockRequest*>::const_iterator it = _resourceLocks[slice].find(resId);
         if (it == _resourceLocks[slice].end()) { return NULL; }
         return it->second;
-    }
-
-    /**
-     *  release locks acquired by a transaction, called (1) for deadlock avoidance
-     *  from _abortInternal, and (2) when 2-phase-locking is enabled when a write
-     *  unit of work commits.  The two cases are distinguished by context parameter.
-     *
-     *  in case (1), the default is to release all locks, even if their count > 1
-     *  in case (2), only locks whose count is zero are released.
-     */
-    size_t LockManager::_releaseTxLocksInternal(Transaction* holder, unsigned slice) {
-        // release all resources acquired by this transaction
-        // notifying any waiters that they can continue
-        //
-        boost::recursive_mutex::scoped_lock lk(holder->_txMutex);
-        size_t numLocksReleased = 0;
-        LockRequest* nextLock = holder->_locks;
-        while (nextLock) {
-            // _releaseInternal may free nextLock
-            LockRequest* newNextLock = nextLock->nextOfTransaction;
-            LockManager::LockStatus status;
-            if (slice != nextLock->slice) {
-                boost::unique_lock<boost::mutex> lk(_resourceMutexes[nextLock->slice]);
-                status = _releaseInternal(nextLock);
-            }
-            else {
-                // we already have a lock on this slice
-                status = _releaseInternal(nextLock);
-            }
-            if (kLockReleased == status) {
-                numLocksReleased++;
-            }
-            nextLock = newNextLock;
-        }
-
-        return numLocksReleased;
     }
 
     /**
@@ -1325,7 +1255,7 @@ namespace mongo {
     void LockManager::_throwIfShuttingDown(const Transaction* tx) const {
 
         if (_shuttingDown && (_timer.millis() >= _millisToQuiesce)) {
-            throw AbortException(); // XXX should this be something else? ShutdownException?
+            throw Transaction::AbortException(); // XXX should this be something else? ShutdownException?
         }
     }
 
