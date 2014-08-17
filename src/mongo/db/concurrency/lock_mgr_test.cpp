@@ -222,8 +222,8 @@ public:
                     _lm->acquire(&_tx, req->mode, req->resId, this);
                     _rsp.post(ACQUIRED);
                 } catch (const Transaction::AbortException& err) {
+                    _tx.releaseLocks(_lm);
                     _rsp.post(ABORTED);
-//          log() << "t" << _tx._txId << ": aborted, ending" << endl;
                     return;
                 }
                 break;
@@ -235,6 +235,7 @@ public:
                 try {
                     _tx.abort();
                 } catch (const Transaction::AbortException& err) {
+                    _tx.releaseLocks(_lm);
                     _rsp.post(ABORTED);
                 }
                 break;
@@ -700,23 +701,28 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     t1.release(kExclusive, r2);
     t1.release(kShared, r1);
 
-    // simple deadlock test 2: one reads first, other writes first, read deadlocks
-    a2.acquire(kShared, r2, ACQUIRED);
+    // simple deadlock test 2: both write first, then read, read deadlocks
+    a2.acquire(kExclusive, r2, ACQUIRED);
     t1.acquire(kExclusive, r1, ACQUIRED);
     t1.acquire(kShared, r2, BLOCKED);
-    a2.acquire(kShared, r2, ABORTED);
+    a2.acquire(kShared, r1, ABORTED);
     t1.wakened();
     t1.release(kShared, r2);
     t1.release(kExclusive, r1);
 
-    // simple deadlock test 3: both write first, then read
+
+    //
+    // two transactions, one writes two resource, the other reads/writes
+    //
+
+    // simple deadlock test 3: one reads first, other writes first, read deadlocks
     a3.acquire(kExclusive, r2, ACQUIRED);
-    t1.acquire(kExclusive, r1, ACQUIRED);
-    t1.acquire(kShared, r2, BLOCKED);
-    a3.acquire(kShared, r1, ABORTED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t1.acquire(kExclusive, r2, BLOCKED);
+    a3.acquire(kExclusive, r1, ABORTED);
     t1.wakened();
-    t1.release(kShared, r2);
-    t1.release(kExclusive, r1);
+    t1.release(kExclusive, r2);
+    t1.release(kShared, r1);
 
     //
     // two transactions: one reads and the other writes the same resources
@@ -724,7 +730,7 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
 
     // simple deadlock test 4: reader deadlocks
     a4.acquire(kShared, r2, ACQUIRED);
-    t1.acquire(kExclusive, r1, BLOCKED);
+    t1.acquire(kExclusive, r1, ACQUIRED);
     t1.acquire(kExclusive, r2, BLOCKED);
     a4.acquire(kShared, r1, ABORTED);
     t1.wakened();
@@ -869,13 +875,13 @@ TEST(LockManagerTest, TxDowngrade) {
 }
 
 TEST(LockManagerTest, TxUpgrade) {
-    LockManager lm(LockManager::kPolicyFirstCome);
-    ClientTransaction t1(&lm, 1);
-    ClientTransaction t2(&lm, 2);
-    ClientTransaction t3(&lm, 3);
+    LockManager lm(LockManager::kPolicyOldestTxFirst);
+    ClientTransaction t1(&lm, 3);
+    ClientTransaction t2(&lm, 4);
+    ClientTransaction t3(&lm, 5);
 
-    ClientTransaction a2(&lm, 4);
-    ClientTransaction a3(&lm, 5);
+    ClientTransaction a2(&lm, 1);
+    ClientTransaction a3(&lm, 2);
 
     ResourceId r1(static_cast<int>(1));
 
@@ -899,16 +905,16 @@ TEST(LockManagerTest, TxUpgrade) {
     t1.release(kShared, r1);
 
     // test upgrade blocks on several, then wakes
-    t1.acquire(kShared, r1, ACQUIRED);
     t2.acquire(kShared, r1, ACQUIRED);
-    // t1 can't use resource 1 exclusively yet, because t2 is using it
-    t1.acquire(kExclusive, r1, BLOCKED);
-    t3.acquire(kShared, r1, ACQUIRED); // additional blocker
-    t2.release(kShared, r1); // t1 still blocked
-    t3.release(kShared, r1);
-    t1.wakened(); // with t3's shared lock released, t1 wakes
-    t1.release(kExclusive, r1);
+    t3.acquire(kShared, r1, ACQUIRED);
+    // t2 can't use resource 1 exclusively yet, because t3 is using it
+    t2.acquire(kExclusive, r1, BLOCKED);
+    t1.acquire(kShared, r1, ACQUIRED); // additional blocker
+    t3.release(kShared, r1); // t2 still blocked
     t1.release(kShared, r1);
+    t2.wakened(); // with t1's shared lock released, t2 wakes
+    t2.release(kExclusive, r1);
+    t2.release(kShared, r1);
 
     // failure to upgrade
     t1.acquire(kShared, r1, ACQUIRED);

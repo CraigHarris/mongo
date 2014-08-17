@@ -120,6 +120,7 @@ namespace mongo {
 
 
     class Transaction;
+    class LockManager;
 
     /**
      * Data structure used to record a resource acquisition request
@@ -222,7 +223,9 @@ namespace mongo {
         void enterScope();
         void exitScope();
 
+        void releaseLocks(LockManager* lm);
         MONGO_COMPILER_NORETURN void abort();
+        
 
         /**
          * override default LockManager's default Policy for a transaction.

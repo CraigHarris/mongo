@@ -260,6 +260,18 @@ namespace mongo {
         LockManager::getSingleton().relinquishScopedTxLocks(_locks);
     }
 
+    void Transaction::releaseLocks(LockManager* lm) {
+        for (LockRequest* nextLock = _locks; nextLock;) {
+            LockRequest* newNextLock = nextLock->nextOfTransaction;
+            LockManager::LockStatus status;
+            do {
+                status = lm->releaseLock(nextLock);
+            } while (LockManager::kLockCountDecremented == status);
+            nextLock = newNextLock;
+        }
+        removeAllWaiters();
+    }
+
     void Transaction::abort() {
         removeAllWaiters();
         throw AbortException();
