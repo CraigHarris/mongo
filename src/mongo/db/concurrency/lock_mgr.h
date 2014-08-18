@@ -221,7 +221,7 @@ namespace mongo {
          */
         bool inScope() const { return _scopeLevel != 0; }
         void enterScope();
-        void exitScope();
+        void exitScope(LockManager* lm=NULL);
 
         void releaseLocks(LockManager* lm);
         MONGO_COMPILER_NORETURN void abort();

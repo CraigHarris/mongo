@@ -250,14 +250,17 @@ namespace mongo {
         ++_scopeLevel;
     }
 
-    void Transaction::exitScope() {
+    void Transaction::exitScope(LockManager* lm) {
         invariant(_scopeLevel);
         if (--_scopeLevel > 0) return;
 
         // relinquish locks acquiredInScope that have been released; and
         // complain about locks acquiredInScope that have not been released
 
-        LockManager::getSingleton().relinquishScopedTxLocks(_locks);
+        if (NULL == lm) {
+            lm = &LockManager::getSingleton();
+        }
+        lm->relinquishScopedTxLocks(_locks);
     }
 
     void Transaction::releaseLocks(LockManager* lm) {
@@ -1193,10 +1196,13 @@ namespace mongo {
      */
     LockManager::LockStatus LockManager::_releaseInternal(LockRequest* lr) {
 
-        invariant(lr->count > 0);
-
-        if (--lr->count > 0) {
-            return kLockCountDecremented;
+        if (lr->count > 0) {
+            if (--lr->count > 0) {
+                return kLockCountDecremented;
+            }
+        }
+        else {
+            invariant(lr->acquiredInScope && !lr->requestor->inScope());
         }
 
         if (lr->requestor->inScope()) {

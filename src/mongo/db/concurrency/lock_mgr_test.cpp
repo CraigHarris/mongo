@@ -52,11 +52,13 @@
 namespace mongo {
 
     enum TxCmd {
-        ACQUIRE,
-        RELEASE,
         ABORT,
+        ACQUIRE,
+        BEGIN,
+        END,
         POLICY,
         QUIT,
+        RELEASE,
         INVALID
     };
 
@@ -184,6 +186,14 @@ public:
         ASSERT(rspCode == rsp->rspCode);
     }
 
+    void begin() {
+        _cmd.post(BEGIN, _tx.getTxId());
+    }
+
+    void end() {
+        _cmd.post(END, _tx.getTxId());
+    }
+
     void release(const LockMode& mode, const ResourceId resId) {
         _cmd.post(RELEASE, _tx.getTxId(), mode, resId);
         TxResponse* rsp = _rsp.consume();
@@ -217,6 +227,14 @@ public:
         while (more) {
             TxRequest* req = _cmd.consume();
             switch (req->cmd) {
+            case ABORT:
+                try {
+                    _tx.abort();
+                } catch (const Transaction::AbortException& err) {
+                    _tx.releaseLocks(_lm);
+                    _rsp.post(ABORTED);
+                }
+                break;
             case ACQUIRE:
                 try {
                     _lm->acquire(&_tx, req->mode, req->resId, this);
@@ -227,17 +245,11 @@ public:
                     return;
                 }
                 break;
-            case RELEASE:
-                _lm->release(&_tx, req->mode, req->resId);
-                _rsp.post(RELEASED);
+            case BEGIN:
+                _tx.enterScope();
                 break;
-            case ABORT:
-                try {
-                    _tx.abort();
-                } catch (const Transaction::AbortException& err) {
-                    _tx.releaseLocks(_lm);
-                    _rsp.post(ABORTED);
-                }
+            case END:
+                _tx.exitScope(_lm);
                 break;
             case POLICY:
                 try {
@@ -246,6 +258,10 @@ public:
                 } catch( const Transaction::AbortException& err) {
                     _rsp.post(ABORTED);
                 }
+                break;
+            case RELEASE:
+                _lm->release(&_tx, req->mode, req->resId);
+                _rsp.post(RELEASED);
                 break;
             case QUIT:
             default:
@@ -672,6 +688,56 @@ TEST(LockManagerTest, TxConflict) {
 
     asker.quit();
     owner.quit();
+}
+
+TEST(LockManagerTest, Tx2PhaseLocking) {
+    LockManager lm(LockManager::kPolicyFirstCome);
+    ClientTransaction t1(&lm, 1);
+    ClientTransaction t2(&lm, 2);
+    ClientTransaction t3(&lm, 3);
+    ClientTransaction t4(&lm, 4);
+    ClientTransaction t5(&lm, 5);
+
+    ResourceId r1(static_cast<int>(1));
+    ResourceId r2(static_cast<int>(2));
+    ResourceId r3(static_cast<int>(3));
+    ResourceId r4(static_cast<int>(4));
+    ResourceId r5(static_cast<int>(5));
+
+    t1.acquire(kShared, r1, ACQUIRED); // r1 acquired outside of any scope, should not block after release
+    t1.begin();
+    t1.acquire(kShared, r2, ACQUIRED); // r2 acquired inScope, released upon return from nested scope
+    t1.acquire(kShared, r3, ACQUIRED); // r3 acquired and released before entering nested scope
+    t1.release(kShared, r3);
+    t1.acquire(kShared, r4, ACQUIRED); // r4 acquire here, released in nested scope
+    t2.acquire(kExclusive, r3, BLOCKED);
+    t1.begin();
+    t1.acquire(kShared, r5, ACQUIRED); // r5 acquired in nestedScope, released in outer scope
+    t1.release(kShared, r4);
+    t3.acquire(kExclusive, r4, BLOCKED);
+    t1.end();
+    t1.release(kShared, r5);
+    t4.acquire(kExclusive, r5, BLOCKED);
+    t1.release(kShared, r2);
+    t5.acquire(kExclusive, r2, BLOCKED);
+    t1.end(); // should relinquish locks on r2..r5
+    t2.wakened();
+    t2.release(kExclusive, r3);
+    t3.wakened();
+    t3.release(kExclusive, r4);
+    t4.wakened();
+    t4.release(kExclusive, r5);
+    t5.wakened();
+    t5.release(kExclusive, r2);
+    t1.release(kShared, r1);
+    t2.acquire(kExclusive, r1, ACQUIRED);
+    t2.release(kExclusive, r1);
+
+    t1.quit();
+    t2.quit();
+    t3.quit();
+    t4.quit();
+    t5.quit();
 }
 
 TEST(LockManagerTest, TxSimpleDeadlocks) {
