@@ -1112,7 +1112,7 @@ TEST(LockManagerTest, TxOnlyPolicies) {
     // show READERS_ONLY blocked by existing writer
     // but still blocking new writers
     t1.acquire(kExclusive, r1, ACQUIRED);
-    tp.setPolicy(LockManager::kPolicyFirstCome, BLOCKED);  // blocked by t1
+    tp.setPolicy(LockManager::kPolicyReadersOnly, BLOCKED);  // blocked by t1
     t2.acquire(kExclusive, r2, BLOCKED);   // just policy conflict
     t3.acquire(kShared, r2, ACQUIRED);     // even tho t2
     t3.release(kShared, r2);

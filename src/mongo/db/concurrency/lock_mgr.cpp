@@ -632,10 +632,6 @@ namespace mongo {
     LockManager::LockStatus LockManager::releaseLock(LockRequest* lr) {
         if (!useExperimentalDocLocking) return kLockNotFound;
         invariant(lr);
-        {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown(lr->requestor);
-        }
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
         _decStatsForMode(lr->mode);
         return _releaseInternal(lr);
@@ -646,11 +642,6 @@ namespace mongo {
                                                  const ResourceId& resId) {
         if (kReservedResourceId == resId || !useExperimentalDocLocking) {
             return kLockNotFound;
-        }
-
-        {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown(holder);
         }
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
@@ -669,11 +660,6 @@ namespace mongo {
      */
     void LockManager::relinquishScopedTxLocks(LockRequest* locks) {
         if (NULL == locks) return;
-
-        {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown(locks->requestor);
-        }
 
         LockRequest* nextLock = locks;
         while (nextLock) {
