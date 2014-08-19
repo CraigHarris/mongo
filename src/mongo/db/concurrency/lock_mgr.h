@@ -66,9 +66,25 @@ namespace mongo {
 
     class ResourceId {
     public:
-        ResourceId() : _rid(0) { }
-        explicit ResourceId(uint64_t rid) : _rid(rid) { }
-        ResourceId(const void* loc) : _rid(reinterpret_cast<uint64_t>(loc)) { }
+        ResourceId() : _rid(0 /* should be kReservedResourceId */) { }
+
+        /**
+         * Construct resource identifiers without regard to their scope.  Used for
+         * top-level resources (global locks), or when collisions (same resource id
+         * allocated by multiple RecordStores) are unlikely.
+         */
+        ResourceId(uint64_t rid) : _rid(rid) { }
+        explicit ResourceId(const void* loc) : _rid(reinterpret_cast<uint64_t>(loc)) { }
+
+        /**
+         * Construct resource identifiers taking into account their scope.
+         * The native mongo record store allocates the same recordId for the first document
+         * in every collection. These constructors avoid locking skew in such cases.
+         */
+        ResourceId(uint64_t resourceId, const char* namespace);
+        ResourceId(uint64_t resourceId, const std::string& namespace);
+        ResourceId(uint64_t resourceId, const void* resourceIdAllocator);
+
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
         bool operator==(const ResourceId& other) const { return _rid == other._rid; }
         operator uint64_t() const { return _rid; }
@@ -78,9 +94,42 @@ namespace mongo {
     };
     static const ResourceId kReservedResourceId;
 
+    /**
+     * LockModes are used to control access to resources
+     *
+     *    kIntentShared: acquired on containers to indicate intention to acquire
+     *                   shared lock on contents.  Prevents container from being
+     *                   modified while working with contents. should be acquired
+     *                   on databases and collections before accessing documents
+     *
+     *    kIntentExclusive: similar to above, prevents container from being locked
+     *                      in a way that would block exclusive locks on contents
+     *                      should be acquired on databases and collections before
+     *                      modifying their content.
+     *
+     *    kShared: acquired on either containers or leaf resources before viewing
+     *             their state.  prevents concurrent modifications to their state
+     *
+     *    kSIX: not sure we have a use case for this
+     *
+     *    kUpdate: an optimization that reduces deadlock frequency compared to
+     *             acquiring kShared and then upgrading to kExclusive.  Acts as
+     *             a kShared lock, and must be upgraded to kExclusive before
+     *             modifying the locked resource.
+     *
+     *    kBlockExclusive: acquired on a container to block exclusive access to
+     *                     its contents.  If multiple kBlockExclusive locks are
+     *                     acquired, exclusive access is blocked from the time
+     *                     the first lock is acquired until the last lock is
+     *                     released.  Also blocks kUpdate locks
+     *
+     *    kExclusive: acquired before modifying a resource, blocks all other
+     *                concurrent access to the resource.
+     *                   
+     */
 
     /**
-     * LockModes:
+     * LockMode Compatibility Matrix:
      *                                           Granted Mode
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * Requested Mode                | IS  | IX  |  S  | SIX |  U  | BX  |  X  |
@@ -99,7 +148,9 @@ namespace mongo {
      *                               +-----+-----+-----+-----+-----+-----+-----+
      * kExclusive(X)                 |  -  |  -  |  -  |  -  |  -  |  -  |  -  |
      *                               +-----+-----+-----+-----+-----+-----+-----+
-     *
+     */
+
+    /**
      * Upgrades:
      *     IS  -> {S, IX}
      *     S   -> {SIX, U}
@@ -108,6 +159,7 @@ namespace mongo {
      *     U   -> X
      *     BX  -> X
      */
+
     enum LockMode {
         kIntentShared,
         kIntentExclusive,
@@ -477,18 +529,44 @@ namespace mongo {
 
         /**
          * acquire a resource in a mode.
-         * can throw AbortException
+         * can throw AbortException to avoid deadlock.
+         * if acquisition would block, the notifier is called before sleeping.
          */
         void acquire(Transaction* requestor,
                      const LockMode& mode,
-                     const ResourceId& resId,
+                     const ResourceId& childId,
                      Notifier* notifier = NULL);
 
         /**
-         * acquire a designated lock.  usually called from RAII objects
-         * that have allocated their lock on the stack.  May throw AbortException.
+         * acquire a designated lock on a childe resource subsumed by a parent resource
+         * checks that the parent resource is also locked.  if the locking modes
+         * match, the parent's lock obviates the need for locking the child resource.
+         * usually called from RAII lock objects.  May throw AbortException to avoid deadlock.
+         * if acquisition would block, the notifier is called before sleeping.
+         */
+        void acquireUnderParent(Transaction* requestor,
+                                const LockMode& mode,
+                                const ResourceId& childId,
+                                const ResourceId& parentId,
+                                Notifier* notifier = NULL);
+
+        /**
+         * acquire a designated lock.
+         * usually called from RAII lock objects.  May throw AbortException to avoid deadlock.
+         * if acquisition would block, the notifier is called before sleeping.
          */
         void acquireLock(LockRequest* request, Notifier* notifier = NULL);
+
+        /**
+         * acquire a designated lock on a childe resource subsumed by a parent resource
+         * checks that the parent resource is also locked.  if the locking modes
+         * match, the parent's lock obviates the need for locking the child resource.
+         * usually called from RAII lock objects.  May throw AbortException to avoid deadlock.
+         * if acquisition would block, the notifier is called before sleeping.
+         */
+        void acquireLockUnderParent(LockRequest* childLock,
+                                    const ResourceId& parentId,
+                                    Notifier* notifier = NULL);
 
         /**
          * release a ResourceId.
@@ -714,10 +792,25 @@ namespace mongo {
      */
     class ResourceLock {
     public:
+        /**
+         * acquire & release lock in given mode on requested resource
+         */
         ResourceLock(LockManager& lm,
                      Transaction* requestor,
                      const LockMode& mode,
                      const ResourceId& resId,
+                     LockManager::Notifier* notifier = NULL);
+
+        /**
+         * acquire & release lock in given mode on child resource
+         * check that parent resource is locked, and if in matching mode,
+         * skip the lock acquisition on the child
+         */
+        ResourceLock(LockManager& lm,
+                     Transaction* requestor,
+                     const LockMode& mode,
+                     const ResourceId& childResId,
+                     const ResourceId& parentResId,
                      LockManager::Notifier* notifier = NULL);
 
         ~ResourceLock();
@@ -726,31 +819,237 @@ namespace mongo {
         LockRequest _lr;
     };
 
+    class IntentSharedResourceLock : public ResourceLock {
+    public:
+        /**
+         * acquire & release lock in given mode on requested resource
+         */
+        IntentSharedResourceLock(Transaction* requestor,
+                                 const ResourceId& resId,
+                                 LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kIntentShared,
+                           resId,
+                           notifier) { }
+
+        /**
+         * acquire & release lock in given mode on child resource
+         * check that parent resource is locked, and if in matching mode,
+         * skip the lock acquisition on the child
+         */
+        IntentSharedResourceLock(Transaction* requestor,
+                                 const ResourceId& childResId,
+                                 const ResourceId& parentResId,
+            LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kIntentShared,
+                           childResId,
+                           parentResId,
+                           notifier) { }
+
+        ~IntentSharedResourceLock();
+    };
+
+    class IntentExclusiveResourceLock : public ResourceLock {
+    public:
+        /**
+         * acquire & release lock in given mode on requested resource
+         */
+        IntentExclusiveResourceLock(Transaction* requestor,
+                                    const ResourceId& resId,
+                                    LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kIntentExclusive,
+                           resId,
+                           notifier) { }
+
+        /**
+         * acquire & release lock in given mode on child resource
+         * check that parent resource is locked, and if in matching mode,
+         * skip the lock acquisition on the child
+         */
+        IntentExclusiveResourceLock(Transaction* requestor,
+                                    const ResourceId& childResId,
+                                    const ResourceId& parentResId,
+                                    LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kIntentExclusive,
+                           childResId,
+                           parentResId,
+                           notifier) { }
+
+        ~IntentExclusiveResourceLock() { }
+    };
+
     class SharedResourceLock : public ResourceLock {
     public:
-        SharedResourceLock(Transaction* requestor, void* resource)
+        /**
+         * acquire & release shared lock on requested resource
+         */
+        SharedResourceLock(Transaction* requestor,
+                           const ResourceId& resId,
+                           LockManager::Notifier* notifier = NULL)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           resource) { }
-        SharedResourceLock(Transaction* requestor, uint64_t resource)
+                           resId,
+                           notifier) { }
+
+        /**
+         * acquire & release lock shared on child resource
+         * check that parent resource is locked, and if also shared
+         * skip the lock acquisition on the child
+         */
+        SharedResourceLock(Transaction* requestor,
+                           const ResourceId& childResId,
+                           const ResourceId& parentResId,
+                           LockManager::Notifier* notifier = NULL)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kShared,
-                           ResourceId(resource)) { }
+                           childResId,
+                           parentResId,
+                           notifier) { }
+
+        ~SharedResourceLock() { }
+    };
+
+    class UpdateResourceLock : public ResourceLock {
+    public:
+        /**
+         * acquire & release lock update on requested resource
+         */
+        UpdateResourceLock(Transaction* requestor,
+                           const ResourceId& resId,
+                           LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kUpdate,
+                           resId,
+                           notifier) { }
+
+        /**
+         * acquire & release lock update on child resource
+         * check that parent resource is locked, and if also update
+         * skip the lock acquisition on the child
+         */
+        UpdateResourceLock(Transaction* requestor,
+                           const ResourceId& childResId,
+                           const ResourceId& parentResId,
+                           LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kUpdate,
+                           childResId,
+                           parentResId,
+                           notifier) { }
+
+        ~UpdateResourceLock() { }
+    };
+
+    class SharedIntentExclusiveResourceLock : public ResourceLock {
+    public:
+        /**
+         * acquire & release exlusive lock on requested resource
+         */
+        SharedIntentExclusiveResourceLock(Transaction* requestor,
+                              const ResourceId& resId,
+                              LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kSharedIntentExclusive,
+                           resId,
+                           notifier) { }
+                
+
+        /**
+         * acquire & release exclusive lock on child resource
+         * check that parent resource is locked, and if also exclusive
+         * skip the lock acquisition on the child
+         */
+        SharedIntentExclusiveResourceLock(Transaction* requestor,
+                              const ResourceId& childResId,
+                              const ResourceId& parentResId,
+                              LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kSharedIntentExclusive,
+                           childResId,
+                           parentResId,
+                           notifier) { }
+
+        ~SharedIntentExclusiveResourceLock() { }
+    };
+
+    class BlockExclusiveResourceLock : public ResourceLock {
+    public:
+        /**
+         * acquire & release exlusive lock on requested resource
+         */
+        BlockExclusiveResourceLock(Transaction* requestor,
+                              const ResourceId& resId,
+                              LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kBlockExclusive,
+                           resId,
+                           notifier) { }
+                
+
+        /**
+         * acquire & release exclusive lock on child resource
+         * check that parent resource is locked, and if also exclusive
+         * skip the lock acquisition on the child
+         */
+        BlockExclusiveResourceLock(Transaction* requestor,
+                              const ResourceId& childResId,
+                              const ResourceId& parentResId,
+                              LockManager::Notifier* notifier = NULL)
+            : ResourceLock(LockManager::getSingleton(),
+                           requestor,
+                           kBlockExclusive,
+                           childResId,
+                           parentResId,
+                           notifier) { }
+
+        ~BlockExclusiveResourceLock() { }
     };
 
     class ExclusiveResourceLock : public ResourceLock {
     public:
-        ExclusiveResourceLock(Transaction* requestor, void* resource)
+        /**
+         * acquire & release exlusive lock on requested resource
+         */
+        ExclusiveResourceLock(Transaction* requestor,
+                              const ResourceId& resId,
+                              LockManager::Notifier* notifier = NULL)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
-                           resource) { }
-        ExclusiveResourceLock(Transaction* requestor, uint64_t resource)
+                           resId,
+                           notifier) { }
+                
+
+        /**
+         * acquire & release exclusive lock on child resource
+         * check that parent resource is locked, and if also exclusive
+         * skip the lock acquisition on the child
+         */
+        ExclusiveResourceLock(Transaction* requestor,
+                              const ResourceId& childResId,
+                              const ResourceId& parentResId,
+                              LockManager::Notifier* notifier = NULL)
             : ResourceLock(LockManager::getSingleton(),
                            requestor,
                            kExclusive,
-                           ResourceId(resource)) { }
+                           childResId,
+                           parentResId,
+                           notifier) { }
+
+        ~ExclusiveResourceLock() { }
     };
 } // namespace mongo

@@ -295,7 +295,6 @@ namespace mongo {
     }
 
     void Transaction::addLock(LockRequest* lr) {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
         lr->nextOfTransaction = _locks;
 
         if (_locks) {
@@ -305,7 +304,6 @@ namespace mongo {
     }
 
     void Transaction::removeLock(LockRequest* lr) {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
         if (lr->nextOfTransaction) {
             lr->nextOfTransaction->prevOfTransaction = lr->prevOfTransaction;
         }
@@ -501,7 +499,7 @@ namespace mongo {
     }
 
     void LockManager::shutdown(const unsigned& millisToQuiesce) {
-        boost::unique_lock<boost::mutex> lk(_mutex);
+        if (!useExperimentalDocLocking) return;
 
 #ifdef DONT_ALLOW_CHANGE_TO_QUIESCE_PERIOD
         // XXX not sure whether we want to allow multiple shutdowns
@@ -523,8 +521,11 @@ namespace mongo {
     }
 
     void LockManager::setPolicy(Transaction* tx, const Policy& policy, Notifier* notifier) {
-        boost::unique_lock<boost::mutex> lk(_mutex);
+        if (!useExperimentalDocLocking) return;
+
         _throwIfShuttingDown();
+
+        boost::unique_lock<boost::mutex> lk(_mutex);
         
         if (policy == _policy) return;
 
@@ -543,7 +544,6 @@ namespace mongo {
                  nextWaiter != _systemTransaction->_waiters.end(); ++nextWaiter) {
 
                 // iterate over the locks acquired by the blocked transactions
-                boost::recursive_mutex::scoped_lock lk((*nextWaiter)->_txMutex);
                 for (LockRequest* nextLock = (*nextWaiter)->_locks; nextLock;
                      nextLock = nextLock->nextOfTransaction) {
                     if (nextLock->isBlocked() && nextLock->shouldAwake()) {
@@ -575,16 +575,47 @@ namespace mongo {
     }
 
     void LockManager::acquireLock(LockRequest* lr, Notifier* notifier) {
-        if (!useExperimentalDocLocking)  {
-            return;
-        }
+        if (!useExperimentalDocLocking) return;
+
+        _throwIfShuttingDown();
+
+        invariant(lr);
+
+        boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
+
+        LockRequest* queue = _findQueue(lr->slice, lr->resId);
+        LockRequest* conflictPosition = queue;
+        ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId, lr->slice,
+                                                 queue, conflictPosition);
+        if (kResourceAcquired == status) { return; }
+
+        // add lock request to requesting transaction's list
+        lr->requestor->addLock(lr);
+
+        _acquireInternal(lr, queue, conflictPosition, status, notifier, lk);
+        _incStatsForMode(lr->mode);
+    }
+
+    void LockManager::acquireLockUnderParent(LockRequest* lr,
+                                             const ResourceId& parentId,
+                                             Notifier* notifier) {
+        if (!useExperimentalDocLocking) return;
+
+        _throwIfShuttingDown();
 
         invariant(lr);
 
         {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown();
+            // check that parentId is locked, and return if in same mode as child
+            unsigned parentSlice = partitionResource(parentId);
+            boost::unique_lock<boost::mutex> lk(_resourceMutexes[parentSlice]);
+            LockRequest* parentLock;
+            LockStatus status = _findLock(lr->requestor, lr->mode, parentId, parentSlice, parentLock);
+            if (kLockFound == status) return;
+            invariant(kLockModeNodeFound == status); // parent must be locked in different mode
         }
+
+        LockRequest* queue = _findQueue(slice, resId);
 
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
 
@@ -605,13 +636,45 @@ namespace mongo {
                               const LockMode& mode,
                               const ResourceId& resId,
                               Notifier* notifier) {
-        if (kReservedResourceId == resId || !useExperimentalDocLocking) {
-            return;
-        }
+        if (kReservedResourceId == resId || !useExperimentalDocLocking) return;
+
+        _throwIfShuttingDown();
+
+        unsigned slice = partitionResource(resId);
+        boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
+
+        LockRequest* queue = _findQueue(slice, resId);
+        LockRequest* conflictPosition = queue;
+        ResourceStatus status = _getConflictInfo(requestor, mode, resId, slice,
+                                                 queue, conflictPosition);
+        if (kResourceAcquired == status) { return; }
+
+        LockRequest* lr = new LockRequest(resId, mode, requestor, true);
+
+        // add lock request to requesting transaction's list
+        lr->requestor->addLock(lr);
+
+        _acquireInternal(lr, queue, conflictPosition, status, notifier, lk);
+        _incStatsForMode(mode);
+    }
+
+    void LockManager::acquireUnderParent(Transaction* requestor,
+                                         const LockMode& mode,
+                                         const ResourceId& childResId,
+                                         const ResourceId& parentResId,
+                                         Notifier* notifier) {
+        if (kReservedResourceId == resId || !useExperimentalDocLocking) return;
+
+        _throwIfShuttingDown();
 
         {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown();
+            // check that parentId is locked, and return if in same mode as child
+            unsigned parentSlice = partitionResource(parentId);
+            boost::unique_lock<boost::mutex> lk(_resourceMutexes[parentSlice]);
+            LockRequest* parentLock;
+            LockStatus status = _findLock(requestor, mode, parentId, parentSlice, parentLock);
+            if (kLockFound == status) return;
+            invariant(kLockModeNodeFound == status); // parent must be locked in different mode
         }
 
         unsigned slice = partitionResource(resId);
@@ -643,9 +706,8 @@ namespace mongo {
     LockManager::LockStatus LockManager::release(const Transaction* holder,
                                                  const LockMode& mode,
                                                  const ResourceId& resId) {
-        if (kReservedResourceId == resId || !useExperimentalDocLocking) {
-            return kLockNotFound;
-        }
+        if (kReservedResourceId == resId || !useExperimentalDocLocking) return kLockNotFound;
+
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
@@ -662,6 +724,8 @@ namespace mongo {
      * release all resource acquired by a transaction, returning the count
      */
     void LockManager::relinquishScopedTxLocks(LockRequest* locks) {
+        if (!useExperimentalDocLocking) return;
+
         if (NULL == locks) return;
 
         LockRequest* nextLock = locks;
@@ -758,13 +822,9 @@ namespace mongo {
     bool LockManager::isLocked(const Transaction* holder,
                                const LockMode& mode,
                                const ResourceId& resId) const {
-        if (!useExperimentalDocLocking) {
-            return false;
-        }
-        {
-            boost::unique_lock<boost::mutex> lk(_mutex);
-            _throwIfShuttingDown(holder);
-        }
+        if (!useExperimentalDocLocking) return false;
+
+        _throwIfShuttingDown(holder);
 
         LockRequest* theLock=NULL;
         return kLockFound == _findLock(holder, mode, resId, partitionResource(resId), theLock);
