@@ -194,6 +194,20 @@ namespace mongo {
         }
     } // namespace
 
+    /*---------- ResourceId constructors ----------*/
+    ResourceId::ResourceId(uint64_t resourceId, const StringData& scope) {
+        StringData::Hasher hasher;
+        size_t scopeHash = hasher(scope);
+        _rid = resourceId ^ scopeHash;
+    }
+
+    ResourceId::ResourceId(uint64_t resourceId, const void* resourceIdAllocator) {
+        uint64_t allocatorId = reinterpret_cast<uint64_t>(resourceIdAllocator);
+
+        // cantor's pairing function
+        _rid = (resourceId+allocatorId)*(resourceId+allocatorId+1)/2 + allocatorId;
+    }
+
     /*---------- AbortException functions ----------*/
 
     const char* Transaction::AbortException::what() const throw() { return "AbortException"; }
@@ -612,10 +626,8 @@ namespace mongo {
             LockRequest* parentLock;
             LockStatus status = _findLock(lr->requestor, lr->mode, parentId, parentSlice, parentLock);
             if (kLockFound == status) return;
-            invariant(kLockModeNodeFound == status); // parent must be locked in different mode
+            invariant(kLockModeNotFound == status); // parent must be locked in different mode
         }
-
-        LockRequest* queue = _findQueue(slice, resId);
 
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
 
@@ -660,8 +672,8 @@ namespace mongo {
 
     void LockManager::acquireUnderParent(Transaction* requestor,
                                          const LockMode& mode,
-                                         const ResourceId& childResId,
-                                         const ResourceId& parentResId,
+                                         const ResourceId& resId,
+                                         const ResourceId& parentId,
                                          Notifier* notifier) {
         if (kReservedResourceId == resId || !useExperimentalDocLocking) return;
 
@@ -674,7 +686,7 @@ namespace mongo {
             LockRequest* parentLock;
             LockStatus status = _findLock(requestor, mode, parentId, parentSlice, parentLock);
             if (kLockFound == status) return;
-            invariant(kLockModeNodeFound == status); // parent must be locked in different mode
+            invariant(kLockModeNotFound == status); // parent must be locked in different mode
         }
 
         unsigned slice = partitionResource(resId);

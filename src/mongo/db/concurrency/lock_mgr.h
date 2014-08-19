@@ -39,6 +39,7 @@
 
 #include "mongo/platform/compiler.h"
 #include "mongo/platform/cstdint.h"
+#include "mongo/base/string_data.h"
 #include "mongo/util/timer.h"
 #include "mongo/bson/util/atomic_int.h"
 
@@ -81,8 +82,7 @@ namespace mongo {
          * The native mongo record store allocates the same recordId for the first document
          * in every collection. These constructors avoid locking skew in such cases.
          */
-        ResourceId(uint64_t resourceId, const char* namespace);
-        ResourceId(uint64_t resourceId, const std::string& namespace);
+        ResourceId(uint64_t resourceId, const StringData& scope);
         ResourceId(uint64_t resourceId, const void* resourceIdAllocator);
 
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
