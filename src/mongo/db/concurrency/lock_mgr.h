@@ -39,9 +39,9 @@
 
 #include "mongo/platform/compiler.h"
 #include "mongo/platform/cstdint.h"
+#include "mongo/platform/atomic_word.h"
 #include "mongo/base/string_data.h"
 #include "mongo/util/timer.h"
-#include "mongo/bson/util/atomic_int.h"
 
 /*
  * LockManager controls access to resources through two functions: acquire and release
@@ -87,7 +87,6 @@ namespace mongo {
 
         bool operator<(const ResourceId& other) const { return _rid < other._rid; }
         bool operator==(const ResourceId& other) const { return _rid == other._rid; }
-        operator uint64_t() const { return _rid; }
 
     private:
         uint64_t _rid;
@@ -162,12 +161,25 @@ namespace mongo {
 
     enum LockMode {
         kIntentShared,
+        kIS = kIntentShared,
+
         kIntentExclusive,
+        kIX = kIntentExclusive,
+
         kShared,
+        kS = kShared,
+
         kSharedIntentExclusive,
+        kSIX = kSharedIntentExclusive,
+
         kUpdate,
+        kU = kUpdate,
+
         kBlockExclusive,
-        kExclusive
+        kBX = kBlockExclusive,
+
+        kExclusive,
+        kX = kExclusive
     };
 
 
@@ -718,14 +730,20 @@ namespace mongo {
         // support functions for changing policy to/from read/write only
 
         void _incStatsForMode(const LockMode& mode) {
-            kShared==mode ? _numCurrentActiveReadRequests++ : _numCurrentActiveWriteRequests++;
+            if (kShared==mode)
+                _numCurrentActiveReadRequests.fetchAndAdd(1);
+            else if (kExclusive==mode)
+                _numCurrentActiveWriteRequests.fetchAndAdd(1);
         }
         void _decStatsForMode(const LockMode& mode) {
-            kShared==mode ? _numCurrentActiveReadRequests-- : _numCurrentActiveWriteRequests--;
+            if (kShared==mode)
+                _numCurrentActiveReadRequests.fetchAndSubtract(1);
+            else if (kExclusive==mode)
+                _numCurrentActiveWriteRequests.fetchAndSubtract(1);
         }
 
-        unsigned _numActiveReads() const { return _numCurrentActiveReadRequests; }
-        unsigned _numActiveWrites() const { return _numCurrentActiveWriteRequests; }
+        unsigned _numActiveReads() const { return _numCurrentActiveReadRequests.load(); }
+        unsigned _numActiveWrites() const { return _numCurrentActiveWriteRequests.load(); }
 
 
     private:
@@ -783,8 +801,8 @@ namespace mongo {
         LockStats _stats[kNumResourcePartitions];
 
         // used when changing policy to/from Readers/Writers Only
-        AtomicUInt _numCurrentActiveReadRequests;
-        AtomicUInt _numCurrentActiveWriteRequests;
+        AtomicWord<uint32_t> _numCurrentActiveReadRequests;
+        AtomicWord<uint32_t> _numCurrentActiveWriteRequests;
     };
 
     /**
