@@ -44,6 +44,7 @@
 #include "mongo/db/clientcursor.h"
 #include "mongo/db/commands/fsync.h"
 #include "mongo/db/concurrency/d_concurrency.h"
+#include "mongo/db/concurrency/lock_mgr.h"
 #include "mongo/db/db.h"
 #include "mongo/db/dbhelpers.h"
 #include "mongo/db/dbmessage.h"

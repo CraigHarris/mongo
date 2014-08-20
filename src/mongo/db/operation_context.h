@@ -34,7 +34,7 @@
 #include "mongo/base/status.h"
 #include "mongo/base/string_data.h"
 #include "mongo/db/storage/recovery_unit.h"
-#include "mongo/db/concurrency/lock_mgr.h"
+#include "mongo/db/concurrency/transaction.h"
 #include "mongo/db/concurrency/lock_state.h"
 
 
@@ -132,12 +132,20 @@ namespace mongo {
     public:
         WriteUnitOfWork(OperationContext* txn)
                  : _txn(txn) {
+            _txn->getTransaction()->enterScope();
             _txn->recoveryUnit()->beginUnitOfWork();
         }
 
-        ~WriteUnitOfWork(){ _txn->recoveryUnit()->endUnitOfWork(); }
+        ~WriteUnitOfWork() {
+            _txn->recoveryUnit()->endUnitOfWork();
+            _txn->getTransaction()->exitScope();
+        }
 
-        void commit() { _txn->recoveryUnit()->commitUnitOfWork(); }
+        void commit() {
+            _txn->recoveryUnit()->commitUnitOfWork();
+            _txn->getTransaction()->exitScope();
+            _txn->getTransaction()->enterScope();
+        }
 
         OperationContext* const _txn;
     };
