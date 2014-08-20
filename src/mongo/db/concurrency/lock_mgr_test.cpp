@@ -45,9 +45,16 @@
 #include <boost/scoped_ptr.hpp>
 #include <boost/thread/thread.hpp>
 #include "mongo/unittest/unittest.h"
+#include "mongo/db/concurrency/lock.h"
 #include "mongo/db/concurrency/lock_mgr.h"
+#include "mongo/db/concurrency/lock_mode.h"
+#include "mongo/db/concurrency/lock_request.h"
+#include "mongo/db/concurrency/resource_id.h"
+#include "mongo/db/concurrency/transaction.h"
 #include "mongo/util/log.h"
 #include "mongo/util/time_support.h"
+
+using namespace mongo::Locking;
 
 namespace mongo {
 

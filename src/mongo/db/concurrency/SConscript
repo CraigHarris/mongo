@@ -6,6 +6,11 @@ env.Library(
     target='lock_mgr',
     source=[
         'lock_mgr.cpp',
+        'lock_mode.cpp',
+        'lock_stats.cpp',
+        'lock_request.cpp',
+        'resource_id.cpp',
+        'transaction.cpp',
     ],
     LIBDEPS=[
         '$BUILD_DIR/mongo/base/base',

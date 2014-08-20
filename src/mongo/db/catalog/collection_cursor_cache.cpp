@@ -36,6 +36,7 @@
 #include "mongo/db/catalog/database.h"
 #include "mongo/db/catalog/database_holder.h"
 #include "mongo/db/client.h"
+#include "mongo/db/concurrency/lock_mgr.h"
 #include "mongo/db/operation_context_impl.h"
 #include "mongo/db/query/runner.h"
 #include "mongo/platform/random.h"

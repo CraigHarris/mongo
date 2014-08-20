@@ -30,18 +30,19 @@
 
 #include <boost/thread/condition_variable.hpp>
 #include <boost/thread/mutex.hpp>
-#include <boost/thread/recursive_mutex.hpp>
 #include <iterator>
 #include <map>
 #include <set>
 #include <string>
-#include <vector>
 
 #include "mongo/platform/compiler.h"
 #include "mongo/platform/cstdint.h"
 #include "mongo/platform/atomic_word.h"
 #include "mongo/base/string_data.h"
 #include "mongo/util/timer.h"
+
+#include "mongo/db/concurrency/lock_mode.h"
+#include "mongo/db/concurrency/resource_id.h"
 
 /*
  * LockManager controls access to resources through two functions: acquire and release
@@ -65,327 +66,9 @@ namespace mongo {
     // Defined in lock_mgr.cpp
     extern bool useExperimentalDocLocking;
 
-    class ResourceId {
-    public:
-        ResourceId() : _rid(0 /* should be kReservedResourceId */) { }
-
-        /**
-         * Construct resource identifiers without regard to their scope.  Used for
-         * top-level resources (global locks), or when collisions (same resource id
-         * allocated by multiple RecordStores) are unlikely.
-         */
-        ResourceId(uint64_t rid) : _rid(rid) { }
-        explicit ResourceId(const void* loc) : _rid(reinterpret_cast<uint64_t>(loc)) { }
-
-        /**
-         * Construct resource identifiers taking into account their scope.
-         * The native mongo record store allocates the same recordId for the first document
-         * in every collection. These constructors avoid locking skew in such cases.
-         */
-        ResourceId(uint64_t resourceId, const StringData& scope);
-        ResourceId(uint64_t resourceId, const void* resourceIdAllocator);
-
-        bool operator<(const ResourceId& other) const { return _rid < other._rid; }
-        bool operator==(const ResourceId& other) const { return _rid == other._rid; }
-
-    private:
-        uint64_t _rid;
-    };
-    static const ResourceId kReservedResourceId;
-
-    /**
-     * LockModes are used to control access to resources
-     *
-     *    kIntentShared: acquired on containers to indicate intention to acquire
-     *                   shared lock on contents.  Prevents container from being
-     *                   modified while working with contents. should be acquired
-     *                   on databases and collections before accessing documents
-     *
-     *    kIntentExclusive: similar to above, prevents container from being locked
-     *                      in a way that would block exclusive locks on contents
-     *                      should be acquired on databases and collections before
-     *                      modifying their content.
-     *
-     *    kShared: acquired on either containers or leaf resources before viewing
-     *             their state.  prevents concurrent modifications to their state
-     *
-     *    kSIX: not sure we have a use case for this
-     *
-     *    kUpdate: an optimization that reduces deadlock frequency compared to
-     *             acquiring kShared and then upgrading to kExclusive.  Acts as
-     *             a kShared lock, and must be upgraded to kExclusive before
-     *             modifying the locked resource.
-     *
-     *    kBlockExclusive: acquired on a container to block exclusive access to
-     *                     its contents.  If multiple kBlockExclusive locks are
-     *                     acquired, exclusive access is blocked from the time
-     *                     the first lock is acquired until the last lock is
-     *                     released.  Also blocks kUpdate locks
-     *
-     *    kExclusive: acquired before modifying a resource, blocks all other
-     *                concurrent access to the resource.
-     *                   
-     */
-
-    /**
-     * LockMode Compatibility Matrix:
-     *                                           Granted Mode
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     * Requested Mode                | IS  | IX  |  S  | SIX |  U  | BX  |  X  |
-     * --------------                +-----+-----+-----+-----+-----+-----+-----+
-     * kIntentShared(IS)             | ok  | ok  | ok  | ok  | ok  | ok  |  -  |
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kIntentExclusive(IX)          | ok  | ok  |  -  |  -  |  -  |  -  |  -  |
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kShared(S)                    | ok  |  -  | ok  |  -  | ok  | ok  |  -  |
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kSharedOrIntentExclusive(SIX) | ok  |  -  |  -  |  -  |  -  |  -  |  -  |
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kUpdate(U)                    | ok  |  -  | ok  |  -  |  -  |  -  |  -  |
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kBlockExclusive(BX)           | ok  |  -  | ok  |  -  |  -  | ok  |  -  |
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     * kExclusive(X)                 |  -  |  -  |  -  |  -  |  -  |  -  |  -  |
-     *                               +-----+-----+-----+-----+-----+-----+-----+
-     */
-
-    /**
-     * Upgrades:
-     *     IS  -> {S, IX}
-     *     S   -> {SIX, U}
-     *     IX  -> {SIX}
-     *     SIX -> X
-     *     U   -> X
-     *     BX  -> X
-     */
-
-    enum LockMode {
-        kIntentShared,
-        kIS = kIntentShared,
-
-        kIntentExclusive,
-        kIX = kIntentExclusive,
-
-        kShared,
-        kS = kShared,
-
-        kSharedIntentExclusive,
-        kSIX = kSharedIntentExclusive,
-
-        kUpdate,
-        kU = kUpdate,
-
-        kBlockExclusive,
-        kBX = kBlockExclusive,
-
-        kExclusive,
-        kX = kExclusive
-    };
-
-
+    class LockRequest;
     class Transaction;
-    class LockManager;
 
-    /**
-     * Data structure used to record a resource acquisition request
-     */
-    class LockRequest {
-    public:
-        LockRequest(const ResourceId& resId,
-                    const LockMode& mode,
-                    Transaction* requestor,
-                    bool heapAllocated = false);
-
-
-        ~LockRequest();
-
-        bool matches(const Transaction* tx,
-                     const LockMode& mode,
-                     const ResourceId& resId) const;
-
-        bool isBlocked() const;
-        bool isActive() const { return !isBlocked(); }
-        bool shouldAwake();
-
-        std::string toString() const;
-
-        // insert/append in resource chain
-        void insert(LockRequest* lr);
-        void append(LockRequest* lr);
-
-        // transaction that made this request (not owned)
-        Transaction* requestor;
-
-        // shared or exclusive use
-        const LockMode mode;
-
-        // resource requested
-        const ResourceId resId;
-
-        // a hash of resId modulo kNumResourcePartitions
-        // used to mitigate cost of mutex locking
-        unsigned slice;
-
-        // it's an error to exit top-level scope with locks
-        // remaining that were acquired in-scope. it's also
-        // an error to release a lock acquired out-of-scope
-        // inside a scope
-        bool acquiredInScope;
-
-        // number of times a tx requested resource in this mode
-        // lock request will be deleted when count goes to 0
-        size_t count;
-
-        // number of existing things blocking this request
-        // usually preceding requests on the queue, but also policy
-        size_t sleepCount;
-
-        // ResourceLock classes (see below) using the RAII pattern
-        // allocate LockRequests on the stack.
-        bool heapAllocated;
-
-        // lock requests are chained by their resource
-        LockRequest* nextOnResource;
-        LockRequest* prevOnResource;
-
-        // lock requests are also chained by their requesting transaction
-        LockRequest* nextOfTransaction;
-        LockRequest* prevOfTransaction;
-    };
-
-    /**
-     * Data structure used to describe resource requestors,
-     * used for conflict resolution, deadlock detection, and abort
-     */
-    class Transaction {
-    public:
-
-        /**
-         * thrown when Transaction::abort is called, often to avoid deadlock.
-         */
-        class AbortException : public std::exception {
-        public:
-            const char* what() const throw ();
-        };
-
-    public:
-
-        Transaction(unsigned txId=0, int priority=0);
-        ~Transaction();
-
-        /**
-         * transactions are identified by an id
-         */
-        Transaction* setTxIdOnce(unsigned txId);
-        unsigned getTxId() const { return _txId; }
-
-        /**
-         * scope corresponds to UnitOfWork nesting level, but may apply to
-         * read transactions of 3rd-party storage engines.
-         */
-        bool inScope() const { return _scopeLevel != 0; }
-        void enterScope();
-        void exitScope(LockManager* lm=NULL);
-
-        void releaseLocks(LockManager* lm);
-        MONGO_COMPILER_NORETURN void abort();
-        
-
-        /**
-         * override default LockManager's default Policy for a transaction.
-         *
-         * positive priority moves transaction's resource requests toward the front
-         * of the queue, behind only those requests with higher priority.
-         *
-         * negative priority moves transaction's resource requests toward the back
-         * of the queue, ahead of only those requests with lower priority.
-         *
-         * zero priority uses the LockManager's default Policy
-         */
-        void setPriority(int newPriority);
-        int getPriority() const;
-
-        /**
-         * maintain the queue of lock requests made by the transaction
-         */
-        void removeLock(LockRequest* lr);
-	void addLock(LockRequest* lr);
-
-        /**
-         * waiter functions
-         */
-        void addWaiter(Transaction* waiter);
-        size_t numWaiters() const;
-        bool hasWaiter(const Transaction* other) const;
-        void removeWaiterAndItsWaiters(const Transaction* other);
-        void removeAllWaiters();
-
-        /**
-         * for sleeping and waking
-         */
-        void wait(boost::unique_lock<boost::mutex>& guard);
-        void wake();
-
-        /**
-         * should be age of the transaction.  currently using txId as a proxy.
-         */
-        bool operator<(const Transaction& other) const;
-
-        /**
-         * for debug
-         */
-        std::string toString() const;
-
-    private:
-        friend class LockManager;
-
-        // identify the transaction
-        unsigned _txId;
-
-        // 0 ==> outside unit of work.  Used to control relinquishing locks
-        size_t _scopeLevel;
-
-        // transaction priorities:
-        //     0 => neutral, use LockManager's default _policy
-        //     + => high, queue forward
-        //     - => low, queue back
-        //
-        int _priority;
-
-        // synchronize access to transaction's _locks and _waiters
-        // which are modified by the lock manager
-        mutable boost::recursive_mutex _txMutex;
-
-        // For cleanup and abort processing, references all LockRequests made by a transaction
-        LockRequest* _locks;
-
-        // used for waiting and waking
-        boost::condition_variable _condvar;
-
-        // For deadlock detection: the set of transactions blocked by another transaction
-        // NB: a transaction can only be directly waiting for a single resource/transaction
-        // but to facilitate deadlock detection, if T1 is waiting for T2 and T2 is waiting
-        // for T3, then both T1 and T2 are listed as T3's waiters.
-        //
-        // This is a multiset to handle some obscure situations.  If T1 has upgraded or downgraded
-        // its lock on a resource, it has two lock requests.  If T2 then requests exclusive
-        // access to the same resource, it must wait for BOTH T1's locks to be relased.
-        //
-        // the max size of the set is ~2*number-concurrent-transactions.  the set is only
-        // consulted/updated when there's a lock conflict.  When there are many more documents
-        // than transactions, the set will usually be empty.
-        //
-        std::multiset<const Transaction*> _waiters;
-    };
-
-    /**
-     *  LockManager is used to control access to resources. Usually a singleton. For deadlock detection
-     *  all resources used by a set of transactions that could deadlock, should use one LockManager.
-     *
-     *  Primary functions are:
-     *     acquire    - acquire a resource for shared or exclusive use; may throw Abort.
-     *     release    - release a resource previously acquired for shared/exclusive use
-     */
     class LockManager {
     public:
 
@@ -545,7 +228,7 @@ namespace mongo {
          * if acquisition would block, the notifier is called before sleeping.
          */
         void acquire(Transaction* requestor,
-                     const LockMode& mode,
+                     const Locking::LockMode& mode,
                      const ResourceId& childId,
                      Notifier* notifier = NULL);
 
@@ -557,7 +240,7 @@ namespace mongo {
          * if acquisition would block, the notifier is called before sleeping.
          */
         void acquireUnderParent(Transaction* requestor,
-                                const LockMode& mode,
+                                const Locking::LockMode& mode,
                                 const ResourceId& childId,
                                 const ResourceId& parentId,
                                 Notifier* notifier = NULL);
@@ -585,7 +268,7 @@ namespace mongo {
          * The mode here is just the mode that applies to the resId
          */
         LockStatus release(const Transaction* holder,
-                           const LockMode& mode,
+                           const Locking::LockMode& mode,
                            const ResourceId& resId);
 
         /**
@@ -623,7 +306,7 @@ namespace mongo {
          * most callers should use acquireOne instead
          */
         bool isLocked(const Transaction* holder,
-                      const LockMode& mode,
+                      const Locking::LockMode& mode,
                       const ResourceId& resId) const;
 
     private: // alphabetical
@@ -647,7 +330,7 @@ namespace mongo {
          */
         void _addLockToQueueUsingPolicy(LockRequest* lr,
                                         LockRequest* queue,
-                                        LockRequest*& position);
+                                        LockRequest*& position /* in/out */);
 
         /**
          * when inserting a new lock request into the middle of a queue,
@@ -664,7 +347,7 @@ namespace mongo {
          * conflicts with a previous upgrade-to-exclusive request that is blocked.
          */
         bool _comesBeforeUsingPolicy(const Transaction* newReqTx,
-                                     const LockMode& newReqMode,
+                                     const Locking::LockMode& newReqMode,
                                      const LockRequest* oldReq) const;
 
         /**
@@ -673,7 +356,7 @@ namespace mongo {
          * the position of the first conflict, or the end of the queue, or to an existing lock
          */
         ResourceStatus _conflictExists(Transaction* requestor,
-                                       const LockMode& mode,
+                                       const Locking::LockMode& mode,
                                        const ResourceId& resId,
                                        unsigned slice,
                                        LockRequest*& position /* in/out */);
@@ -684,10 +367,10 @@ namespace mongo {
          * sets outLock to the LockRequest that matches and returns kLockFound
          */
         LockStatus _findLock(const Transaction* requestor,
-                             const LockMode& mode,
+                             const Locking::LockMode& mode,
                              const ResourceId& resId,
                              unsigned slice,
-                             LockRequest*& outLock) const;
+                             LockRequest*& outLock /* output */) const;
 
         /**
          * find the first lock on resId or NULL if no locks
@@ -700,11 +383,11 @@ namespace mongo {
 	 * update several status variables
 	 */
 	ResourceStatus _getConflictInfo(Transaction* requestor,
-					const LockMode& mode,
+					const Locking::LockMode& mode,
 					const ResourceId& resId,
 					unsigned slice,
 					LockRequest* queue,
-					LockRequest*& conflictPosition);
+					LockRequest*& conflictPosition /*in/out*/);
 
         /**
          * maintain the resourceLocks queue
@@ -729,16 +412,16 @@ namespace mongo {
     private:
         // support functions for changing policy to/from read/write only
 
-        void _incStatsForMode(const LockMode& mode) {
-            if (kShared==mode)
+        void _incStatsForMode(const Locking::LockMode& mode) {
+            if (Locking::kShared==mode)
                 _numCurrentActiveReadRequests.fetchAndAdd(1);
-            else if (kExclusive==mode)
+            else if (Locking::kExclusive==mode)
                 _numCurrentActiveWriteRequests.fetchAndAdd(1);
         }
-        void _decStatsForMode(const LockMode& mode) {
-            if (kShared==mode)
+        void _decStatsForMode(const Locking::LockMode& mode) {
+            if (Locking::kShared==mode)
                 _numCurrentActiveReadRequests.fetchAndSubtract(1);
-            else if (kExclusive==mode)
+            else if (Locking::kExclusive==mode)
                 _numCurrentActiveWriteRequests.fetchAndSubtract(1);
         }
 
@@ -766,10 +449,7 @@ namespace mongo {
         static const unsigned kNumResourcePartitions = 16;
         mutable boost::mutex _resourceMutexes[kNumResourcePartitions];
 
-#ifdef REGISTER_TRANSACTIONS
-        static const unsigned kNumTransactionPartitions = 16;
-        mutable boost::mutex _transactionMutexes[kNumTransactionPartitions];
-#endif
+        // for controlling access to stats & policy
         mutable boost::mutex _mutex;
 
         // for blocking when setting kPolicyReadersOnly or kPolicyWritersOnly policy
@@ -803,271 +483,5 @@ namespace mongo {
         // used when changing policy to/from Readers/Writers Only
         AtomicWord<uint32_t> _numCurrentActiveReadRequests;
         AtomicWord<uint32_t> _numCurrentActiveWriteRequests;
-    };
-
-    /**
-     * RAII wrapper around LockManager, for scoped locking
-     */
-    class ResourceLock {
-    public:
-        /**
-         * acquire & release lock in given mode on requested resource
-         */
-        ResourceLock(LockManager& lm,
-                     Transaction* requestor,
-                     const LockMode& mode,
-                     const ResourceId& resId,
-                     LockManager::Notifier* notifier = NULL);
-
-        /**
-         * acquire & release lock in given mode on child resource
-         * check that parent resource is locked, and if in matching mode,
-         * skip the lock acquisition on the child
-         */
-        ResourceLock(LockManager& lm,
-                     Transaction* requestor,
-                     const LockMode& mode,
-                     const ResourceId& childResId,
-                     const ResourceId& parentResId,
-                     LockManager::Notifier* notifier = NULL);
-
-        ~ResourceLock();
-    private:
-        LockManager& _lm;
-        LockRequest _lr;
-    };
-
-    class IntentSharedResourceLock : public ResourceLock {
-    public:
-        /**
-         * acquire & release lock in given mode on requested resource
-         */
-        IntentSharedResourceLock(Transaction* requestor,
-                                 const ResourceId& resId,
-                                 LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kIntentShared,
-                           resId,
-                           notifier) { }
-
-        /**
-         * acquire & release lock in given mode on child resource
-         * check that parent resource is locked, and if in matching mode,
-         * skip the lock acquisition on the child
-         */
-        IntentSharedResourceLock(Transaction* requestor,
-                                 const ResourceId& childResId,
-                                 const ResourceId& parentResId,
-            LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kIntentShared,
-                           childResId,
-                           parentResId,
-                           notifier) { }
-
-        ~IntentSharedResourceLock();
-    };
-
-    class IntentExclusiveResourceLock : public ResourceLock {
-    public:
-        /**
-         * acquire & release lock in given mode on requested resource
-         */
-        IntentExclusiveResourceLock(Transaction* requestor,
-                                    const ResourceId& resId,
-                                    LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kIntentExclusive,
-                           resId,
-                           notifier) { }
-
-        /**
-         * acquire & release lock in given mode on child resource
-         * check that parent resource is locked, and if in matching mode,
-         * skip the lock acquisition on the child
-         */
-        IntentExclusiveResourceLock(Transaction* requestor,
-                                    const ResourceId& childResId,
-                                    const ResourceId& parentResId,
-                                    LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kIntentExclusive,
-                           childResId,
-                           parentResId,
-                           notifier) { }
-
-        ~IntentExclusiveResourceLock() { }
-    };
-
-    class SharedResourceLock : public ResourceLock {
-    public:
-        /**
-         * acquire & release shared lock on requested resource
-         */
-        SharedResourceLock(Transaction* requestor,
-                           const ResourceId& resId,
-                           LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kShared,
-                           resId,
-                           notifier) { }
-
-        /**
-         * acquire & release lock shared on child resource
-         * check that parent resource is locked, and if also shared
-         * skip the lock acquisition on the child
-         */
-        SharedResourceLock(Transaction* requestor,
-                           const ResourceId& childResId,
-                           const ResourceId& parentResId,
-                           LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kShared,
-                           childResId,
-                           parentResId,
-                           notifier) { }
-
-        ~SharedResourceLock() { }
-    };
-
-    class UpdateResourceLock : public ResourceLock {
-    public:
-        /**
-         * acquire & release lock update on requested resource
-         */
-        UpdateResourceLock(Transaction* requestor,
-                           const ResourceId& resId,
-                           LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kUpdate,
-                           resId,
-                           notifier) { }
-
-        /**
-         * acquire & release lock update on child resource
-         * check that parent resource is locked, and if also update
-         * skip the lock acquisition on the child
-         */
-        UpdateResourceLock(Transaction* requestor,
-                           const ResourceId& childResId,
-                           const ResourceId& parentResId,
-                           LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kUpdate,
-                           childResId,
-                           parentResId,
-                           notifier) { }
-
-        ~UpdateResourceLock() { }
-    };
-
-    class SharedIntentExclusiveResourceLock : public ResourceLock {
-    public:
-        /**
-         * acquire & release exlusive lock on requested resource
-         */
-        SharedIntentExclusiveResourceLock(Transaction* requestor,
-                              const ResourceId& resId,
-                              LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kSharedIntentExclusive,
-                           resId,
-                           notifier) { }
-                
-
-        /**
-         * acquire & release exclusive lock on child resource
-         * check that parent resource is locked, and if also exclusive
-         * skip the lock acquisition on the child
-         */
-        SharedIntentExclusiveResourceLock(Transaction* requestor,
-                              const ResourceId& childResId,
-                              const ResourceId& parentResId,
-                              LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kSharedIntentExclusive,
-                           childResId,
-                           parentResId,
-                           notifier) { }
-
-        ~SharedIntentExclusiveResourceLock() { }
-    };
-
-    class BlockExclusiveResourceLock : public ResourceLock {
-    public:
-        /**
-         * acquire & release exlusive lock on requested resource
-         */
-        BlockExclusiveResourceLock(Transaction* requestor,
-                              const ResourceId& resId,
-                              LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kBlockExclusive,
-                           resId,
-                           notifier) { }
-                
-
-        /**
-         * acquire & release exclusive lock on child resource
-         * check that parent resource is locked, and if also exclusive
-         * skip the lock acquisition on the child
-         */
-        BlockExclusiveResourceLock(Transaction* requestor,
-                              const ResourceId& childResId,
-                              const ResourceId& parentResId,
-                              LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kBlockExclusive,
-                           childResId,
-                           parentResId,
-                           notifier) { }
-
-        ~BlockExclusiveResourceLock() { }
-    };
-
-    class ExclusiveResourceLock : public ResourceLock {
-    public:
-        /**
-         * acquire & release exlusive lock on requested resource
-         */
-        ExclusiveResourceLock(Transaction* requestor,
-                              const ResourceId& resId,
-                              LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kExclusive,
-                           resId,
-                           notifier) { }
-                
-
-        /**
-         * acquire & release exclusive lock on child resource
-         * check that parent resource is locked, and if also exclusive
-         * skip the lock acquisition on the child
-         */
-        ExclusiveResourceLock(Transaction* requestor,
-                              const ResourceId& childResId,
-                              const ResourceId& parentResId,
-                              LockManager::Notifier* notifier = NULL)
-            : ResourceLock(LockManager::getSingleton(),
-                           requestor,
-                           kExclusive,
-                           childResId,
-                           parentResId,
-                           notifier) { }
-
-        ~ExclusiveResourceLock() { }
     };
 } // namespace mongo

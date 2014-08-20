@@ -39,6 +39,7 @@
 #include "mongo/client/dbclientinterface.h"
 #include "mongo/db/catalog/database_holder.h"
 #include "mongo/db/clientcursor.h"
+#include "mongo/db/concurrency/lock_mgr.h"
 #include "mongo/db/index_set.h"
 #include "mongo/db/ops/update_driver.h"
 #include "mongo/db/ops/update_executor.h"
