@@ -31,31 +31,44 @@
 
 #include "mongo/db/concurrency/lock_mode.h"
 
+#include "mongo/util/assert_util.h"
+
 namespace mongo {
 
     namespace Locking {
 
         bool conflictsWithReadersOnlyPolicy(const LockMode& mode) {
             switch (mode) {
-            case kExclusive:
             case kIntentExclusive:
-            case kUpdate:
+            case kExclusive:
                 return true;
-            default:
+
+            case kIntentShared:
+            case kShared:
+            case kSharedIntentExclusive:
+            case kUpdate:
+            case kBlockExclusive:
                 return false;
             }
+
+            invariant(false); // unreachable
         }
 
         bool conflictsWithWritersOnlyPolicy(const LockMode& mode) {
             switch (mode) {
-            case kShared:
             case kIntentShared:
+            case kShared:
             case kSharedIntentExclusive:
             case kUpdate:
+            case kBlockExclusive:
                 return true;
-            default:
+
+            case kIntentExclusive:
+            case kExclusive:
                 return false;
             }
+
+            invariant(false); // unreachable
         }
 
         /**
@@ -85,7 +98,8 @@ namespace mongo {
             case kExclusive:
                 return false; // X is the top of the ladder
             }
-            return false;
+
+            invariant(false); // unreachable
         }
 
         bool isDowngrade(const LockMode& acquired, const LockMode& requested) {
@@ -109,7 +123,8 @@ namespace mongo {
             case kExclusive:
                 return kExclusive != requested; // everything else is lower
             }
-            return false;
+
+            invariant(false); // unreachable
         }
 
         /**
@@ -160,6 +175,8 @@ namespace mongo {
             default:
                 return false;
             }
+
+            invariant(false); // unreachable
         }
 
     } // namespace Locking

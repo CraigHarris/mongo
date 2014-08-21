@@ -182,7 +182,7 @@ namespace mongo {
     class SharedIntentExclusiveResourceLock : public ResourceLock {
     public:
         /**
-         * acquire & release exlusive lock on requested resource
+         * acquire and release exlusive lock on requested resource
          */
         SharedIntentExclusiveResourceLock(OperationContext* requestor,
                                           const ResourceId& resId,
@@ -190,7 +190,7 @@ namespace mongo {
             : ResourceLock(requestor, Locking::kSharedIntentExclusive, resId, notifier) { }
 
         /**
-         * acquire & release exclusive lock on child resource
+         * acquire and release exclusive lock on child resource
          * check that parent resource is locked, and if also exclusive
          * skip the lock acquisition on the child
          */

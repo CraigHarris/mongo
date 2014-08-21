@@ -61,8 +61,8 @@ namespace mongo {
     enum TxCmd {
         ABORT,
         ACQUIRE,
-        BEGIN,
-        END,
+        ENTER_SCOPE,
+        EXIT_SCOPE,
         POLICY,
         QUIT,
         RELEASE,
@@ -193,12 +193,12 @@ public:
         ASSERT(rspCode == rsp->rspCode);
     }
 
-    void begin() {
-        _cmd.post(BEGIN, _tx.getTxId());
+    void enterScope() {
+        _cmd.post(ENTER_SCOPE, _tx.getTxId());
     }
 
-    void end() {
-        _cmd.post(END, _tx.getTxId());
+    void exitScope() {
+        _cmd.post(EXIT_SCOPE, _tx.getTxId());
     }
 
     void release(const LockMode& mode, const ResourceId resId) {
@@ -252,10 +252,10 @@ public:
                     return;
                 }
                 break;
-            case BEGIN:
+            case ENTER_SCOPE:
                 _tx.enterScope();
                 break;
-            case END:
+            case EXIT_SCOPE:
                 _tx.exitScope(_lm);
                 break;
             case POLICY:
@@ -712,22 +712,22 @@ TEST(LockManagerTest, Tx2PhaseLocking) {
     ResourceId r5(static_cast<int>(5));
 
     t1.acquire(kShared, r1, ACQUIRED); // r1 acquired outside of any scope, should not block after release
-    t1.begin();
+    t1.enterScope();
     t1.acquire(kShared, r2, ACQUIRED); // r2 acquired inScope, released upon return from nested scope
     t1.acquire(kShared, r3, ACQUIRED); // r3 acquired and released before entering nested scope
     t1.release(kShared, r3);
     t1.acquire(kShared, r4, ACQUIRED); // r4 acquire here, released in nested scope
     t2.acquire(kExclusive, r3, BLOCKED);
-    t1.begin();
+    t1.enterScope();
     t1.acquire(kShared, r5, ACQUIRED); // r5 acquired in nestedScope, released in outer scope
     t1.release(kShared, r4);
     t3.acquire(kExclusive, r4, BLOCKED);
-    t1.end();
+    t1.exitScope();
     t1.release(kShared, r5);
     t4.acquire(kExclusive, r5, BLOCKED);
     t1.release(kShared, r2);
     t5.acquire(kExclusive, r2, BLOCKED);
-    t1.end(); // should relinquish locks on r2..r5
+    t1.exitScope(); // should relinquish locks on r2..r5
     t2.wakened();
     t2.release(kExclusive, r3);
     t3.wakened();

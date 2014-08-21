@@ -28,12 +28,7 @@
  */
 
 #include "mongo/platform/basic.h"
-
-#include "mongo/db/concurrency/lock_mgr.h"
-#include "mongo/db/concurrency/lock_mode.h"
-#include "mongo/db/concurrency/lock_request.h"
 #include "mongo/db/concurrency/resource_id.h"
-#include "mongo/db/concurrency/transaction.h"
 
 #include <boost/thread/locks.hpp>
 #include <sstream>
@@ -43,15 +38,11 @@
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
+#include "mongo/util/mongoutils/str.h"
 
 using std::endl;
-using std::exception;
-using std::map;
-using std::multiset;
-using std::set;
 using std::string;
 using std::stringstream;
-using std::vector;
 
 namespace mongo {
 
@@ -81,9 +72,7 @@ namespace mongo {
     }
 
     string ResourceId::toString() const {
-        stringstream result;
-        result << _rid;
-        return result.str();
+        return str::stream() << _rid;
     }
 
 } // namespace mongo

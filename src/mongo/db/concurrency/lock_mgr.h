@@ -233,7 +233,7 @@ namespace mongo {
                      Notifier* notifier = NULL);
 
         /**
-         * acquire a designated lock on a childe resource subsumed by a parent resource
+         * acquire a designated lock on a child resource subsumed by a parent resource
          * checks that the parent resource is also locked.  if the locking modes
          * match, the parent's lock obviates the need for locking the child resource.
          * usually called from RAII lock objects.  May throw AbortException to avoid deadlock.

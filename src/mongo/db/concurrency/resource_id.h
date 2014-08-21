@@ -50,7 +50,7 @@ namespace mongo {
         /**
          * Construct resource identifiers taking into account their scope.
          * The native mongo record store allocates the same recordId for the first document
-         * in every collection. These constructors avoid locking skew in such cases.
+         * in every database. These constructors avoid locking skew in such cases.
          */
         ResourceId(uint64_t resourceId, const StringData& scope);
         ResourceId(uint64_t resourceId, const void* resourceIdAllocator);
