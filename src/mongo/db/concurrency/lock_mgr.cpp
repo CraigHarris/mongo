@@ -222,7 +222,7 @@ namespace mongo {
                               const LockMode& mode,
                               const ResourceId& resId,
                               Notifier* notifier) {
-        if (kReservedResourceId == resId || !useExperimentalDocLocking) return;
+        if (!useExperimentalDocLocking) return;
 
         _throwIfShuttingDown();
 
@@ -249,7 +249,7 @@ namespace mongo {
                                          const ResourceId& resId,
                                          const ResourceId& parentId,
                                          Notifier* notifier) {
-        if (kReservedResourceId == resId || !useExperimentalDocLocking) return;
+        if (!useExperimentalDocLocking) return;
 
         _throwIfShuttingDown();
 
@@ -292,7 +292,7 @@ namespace mongo {
     LockManager::LockStatus LockManager::release(const Transaction* holder,
                                                  const LockMode& mode,
                                                  const ResourceId& resId) {
-        if (kReservedResourceId == resId || !useExperimentalDocLocking) return kLockNotFound;
+        if (!useExperimentalDocLocking) return kLockNotFound;
 
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
@@ -760,6 +760,7 @@ namespace mongo {
 
             if (nextLock && activeOwners.find(nextLock->requestor) != activeOwners.end()) {
                 // nextLock is also an upgrade
+                _stats[slice].incDeadlocks();
                 requestor->abort();
             }
 

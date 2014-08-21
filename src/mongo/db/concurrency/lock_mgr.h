@@ -264,8 +264,12 @@ namespace mongo {
                                     Notifier* notifier = NULL);
 
         /**
-         * release a ResourceId.
-         * The mode here is just the mode that applies to the resId
+         * release a ResourceId in a mode.
+         * returns kLockResourceNotFound if the resource isn't locked
+         * returns kLockModeNotFound if resource was locked in a different mode
+         * returns kLockCountDecremented if resource remains locked in the mode
+         * returns kLockFound if resource lock is being held to the end of a scope
+         * returns kLockReleased when the lock is finally released
          */
         LockStatus release(const Transaction* holder,
                            const Locking::LockMode& mode,
@@ -383,11 +387,11 @@ namespace mongo {
 	 * update several status variables
 	 */
 	ResourceStatus _getConflictInfo(Transaction* requestor,
-					const Locking::LockMode& mode,
-					const ResourceId& resId,
+                                        const Locking::LockMode& mode,
+                                        const ResourceId& resId,
 					unsigned slice,
 					LockRequest* queue,
-					LockRequest*& conflictPosition /*in/out*/);
+                                        LockRequest*& conflictPosition /*in/out*/);
 
         /**
          * maintain the resourceLocks queue
@@ -482,7 +486,7 @@ namespace mongo {
         LockStats _stats[kNumResourcePartitions];
 
         // used when changing policy to/from Readers/Writers Only
-        AtomicWord<uint32_t> _numCurrentActiveReadRequests;
-        AtomicWord<uint32_t> _numCurrentActiveWriteRequests;
+        AtomicUInt32 _numCurrentActiveReadRequests;
+        AtomicUInt32 _numCurrentActiveWriteRequests;
     };
 } // namespace mongo

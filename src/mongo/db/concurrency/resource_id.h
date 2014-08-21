@@ -37,7 +37,7 @@ namespace mongo {
 
     class ResourceId {
     public:
-        ResourceId() : _rid(0 /* should be kReservedResourceId */) { }
+        ResourceId() : _rid(0) { }
 
         /**
          * Construct resource identifiers without regard to their scope.  Used for
@@ -64,5 +64,4 @@ namespace mongo {
     private:
         uint64_t _rid;
     };
-    static const ResourceId kReservedResourceId;
 } // namespace mongo

@@ -125,7 +125,8 @@ namespace mongo {
                                     const ResourceId& childResId,
                                     const ResourceId& parentResId,
                                     LockManager::Notifier* notifier = NULL)
-            : ResourceLock(requestor, Locking::kIntentExclusive, childResId, parentResId, notifier) { }
+            : ResourceLock(requestor, Locking::kIntentExclusive, childResId, parentResId, notifier)
+        { }
 
         ~IntentExclusiveResourceLock() { }
     };
@@ -197,7 +198,8 @@ namespace mongo {
                                           const ResourceId& childResId,
                                           const ResourceId& parentResId,
                                           LockManager::Notifier* notifier = NULL)
-            : ResourceLock(requestor, Locking::kSharedIntentExclusive, childResId, parentResId, notifier) { }
+            : ResourceLock(requestor, Locking::kSharedIntentExclusive,
+                           childResId, parentResId, notifier) { }
 
         ~SharedIntentExclusiveResourceLock() { }
     };
@@ -210,7 +212,8 @@ namespace mongo {
         BlockExclusiveResourceLock(OperationContext* requestor,
                               const ResourceId& resId,
                               LockManager::Notifier* notifier = NULL)
-            : ResourceLock(requestor, Locking::kBlockExclusive, resId, notifier) { }
+            : ResourceLock(requestor, Locking::kBlockExclusive,
+                           resId, notifier) { }
                 
 
         /**
