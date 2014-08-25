@@ -78,7 +78,7 @@ namespace mongo {
 
         // a hash of resId modulo kNumResourcePartitions
         // used to mitigate cost of mutex locking
-        unsigned slice;
+        const unsigned slice;
 
         // it's an error to exit top-level scope with locks
         // remaining that were acquired in-scope. it's also

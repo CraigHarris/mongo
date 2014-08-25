@@ -29,7 +29,7 @@
 #pragma once
 
 #include <boost/thread/condition_variable.hpp>
-#include <boost/thread/recursive_mutex.hpp>
+#include <boost/thread/mutex.hpp>
 #include <set>
 
 #include "mongo/platform/compiler.h"
@@ -37,10 +37,11 @@
 #include "mongo/base/string_data.h"
 #include "mongo/util/timer.h"
 
+#include "mongo/db/concurrency/lock_mgr.h"
+
 namespace mongo {
 
     class LockRequest;
-    class LockManager;
 
     /**
      * Data structure used to describe resource requestors,
@@ -49,23 +50,12 @@ namespace mongo {
     class Transaction {
     public:
 
-        /**
-         * thrown when Transaction::abort is called, often to avoid deadlock.
-         */
-        class AbortException : public std::exception {
-        public:
-            const char* what() const throw ();
-        };
-
-    public:
-
-        Transaction(unsigned txId=0, int priority=0);
+        Transaction(LockManager& lm, unsigned txId, int priority=0);
         ~Transaction();
 
         /**
          * transactions are identified by an id
          */
-        Transaction* setTxIdOnce(unsigned txId);
         unsigned getTxId() const { return _txId; }
 
         /**
@@ -74,11 +64,9 @@ namespace mongo {
          */
         bool inScope() const { return _scopeLevel != 0; }
         void enterScope();
-        void exitScope(LockManager* lm=NULL);
+        void exitScope();
 
-        void releaseLocks(LockManager* lm);
-        MONGO_COMPILER_NORETURN void abort();
-        
+        void releaseLocks();
 
         /**
          * override default LockManager's default Policy for a transaction.
@@ -128,6 +116,9 @@ namespace mongo {
     private:
         friend class LockManager;
 
+        // identify the lock manager
+        LockManager& _lm;
+
         // identify the transaction
         unsigned _txId;
 
@@ -139,11 +130,11 @@ namespace mongo {
         //     + => high, queue forward
         //     - => low, queue back
         //
-        int _priority;
+        AtomicInt32 _priority;
 
         // synchronize access to transaction's _locks and _waiters
         // which are modified by the lock manager
-        mutable boost::recursive_mutex _txMutex;
+        mutable boost::mutex _txMutex;
 
         // For cleanup and abort processing, references all LockRequests made by a transaction
         LockRequest* _locks;

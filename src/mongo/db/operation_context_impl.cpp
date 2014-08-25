@@ -40,7 +40,7 @@
 
 namespace mongo {
 
-    OperationContextImpl::OperationContextImpl() {
+    OperationContextImpl::OperationContextImpl() : _tx(LockManager::getSingleton(), getCurOp()->opNum()) {
         StorageEngine* storageEngine = getGlobalEnvironment()->getGlobalStorageEngine();
         invariant(storageEngine);
         _recovery.reset(storageEngine->newRecoveryUnit(this));
@@ -190,7 +190,7 @@ namespace mongo {
     }
 
     Transaction* OperationContextImpl::getTransaction() {
-        return _tx.setTxIdOnce((unsigned)getCurOp()->opNum());
+        return &_tx;
     }
 
 }  // namespace mongo

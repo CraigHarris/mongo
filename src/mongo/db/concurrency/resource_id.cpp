@@ -30,14 +30,11 @@
 #include "mongo/platform/basic.h"
 #include "mongo/db/concurrency/resource_id.h"
 
-#include <boost/thread/locks.hpp>
+#include <boost/functional/hash.hpp>
 #include <sstream>
 
 #include "mongo/base/init.h"
-#include "mongo/db/server_parameters.h"
 #include "mongo/util/assert_util.h"
-#include "mongo/util/log.h"
-#include "mongo/util/timer.h"
 #include "mongo/util/mongoutils/str.h"
 
 using std::endl;
@@ -48,15 +45,18 @@ namespace mongo {
 
     ResourceId::ResourceId(uint64_t resourceId, const StringData& scope) {
         StringData::Hasher hasher;
-        size_t scopeHash = hasher(scope);
-        _rid = resourceId ^ scopeHash;
+        size_t result = 0;
+        boost::hash_combine(result, hasher(scope));
+        boost::hash_combine(result, resourceId);
+        _rid=result;
     }
 
     ResourceId::ResourceId(uint64_t resourceId, const void* resourceIdAllocator) {
-        uint64_t allocatorId = reinterpret_cast<uint64_t>(resourceIdAllocator);
-
-        // cantor's pairing function
-        _rid = (resourceId+allocatorId)*(resourceId+allocatorId+1)/2 + allocatorId;
+        size_t result = 0;
+//        uint64_t allocatorId = reinterpret_cast<uint64_t>(resourceIdAllocator);
+        boost::hash_combine(result, resourceIdAllocator);
+        boost::hash_combine(result, resourceId);
+        _rid = result;
     }
 
     uint64_t ResourceId::hash() const {

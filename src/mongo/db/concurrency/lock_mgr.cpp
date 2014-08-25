@@ -57,6 +57,8 @@ namespace mongo {
 
     using namespace Locking;
 
+    const char* LockManager::AbortException::what() const throw() { return "AbortException"; }
+
     // This parameter enables experimental document-level locking features
     // It should be removed once full document-level locking is checked-in.
     MONGO_EXPORT_SERVER_PARAMETER(useExperimentalDocLocking, bool, false);
@@ -77,7 +79,7 @@ namespace mongo {
         , _mutex()
         , _shuttingDown(false)
         , _millisToQuiesce(-1)
-        , _systemTransaction(new Transaction(0))
+        , _systemTransaction(new Transaction(*this, 0))
         , _numCurrentActiveReadRequests(0)
         , _numCurrentActiveWriteRequests(0)
     { }
@@ -172,9 +174,9 @@ namespace mongo {
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
 
         LockRequest* queue = _findQueue(lr->slice, lr->resId);
-        LockRequest* conflictPosition = queue;
+        LockRequest* conflictPosition;
         ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId, lr->slice,
-                                                 queue, conflictPosition);
+                                                 queue, &conflictPosition);
         if (kResourceAcquired == status) { return; }
 
         // add lock request to requesting transaction's list
@@ -197,18 +199,18 @@ namespace mongo {
             // check that parentId is locked, and return if in same mode as child
             unsigned parentSlice = partitionResource(parentId);
             boost::unique_lock<boost::mutex> lk(_resourceMutexes[parentSlice]);
-            LockRequest* parentLock;
-            LockStatus status = _findLock(lr->requestor, lr->mode, parentId, parentSlice, parentLock);
-            if (kLockFound == status) return;
-            invariant(kLockModeNotFound == status); // parent must be locked in different mode
+            LockRequest* parentLock =  _findCompatibleParentLock(lr->requestor, lr->mode,
+                                                                 parentId, parentSlice);
+            invariant (parentLock);
+            if (parentLock->mode == lr->mode) return;
         }
 
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
 
         LockRequest* queue = _findQueue(lr->slice, lr->resId);
-        LockRequest* conflictPosition = queue;
+        LockRequest* conflictPosition;
         ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId, lr->slice,
-                                                 queue, conflictPosition);
+                                                 queue, &conflictPosition);
         if (kResourceAcquired == status) { return; }
 
         // add lock request to requesting transaction's list
@@ -230,9 +232,9 @@ namespace mongo {
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
         LockRequest* queue = _findQueue(slice, resId);
-        LockRequest* conflictPosition = queue;
+        LockRequest* conflictPosition;
         ResourceStatus status = _getConflictInfo(requestor, mode, resId, slice,
-                                                 queue, conflictPosition);
+                                                 queue, &conflictPosition);
         if (kResourceAcquired == status) { return; }
 
         LockRequest* lr = new LockRequest(resId, mode, requestor, true);
@@ -257,19 +259,19 @@ namespace mongo {
             // check that parentId is locked, and return if in same mode as child
             unsigned parentSlice = partitionResource(parentId);
             boost::unique_lock<boost::mutex> lk(_resourceMutexes[parentSlice]);
-            LockRequest* parentLock;
-            LockStatus status = _findLock(requestor, mode, parentId, parentSlice, parentLock);
-            if (kLockFound == status) return;
-            invariant(kLockModeNotFound == status); // parent must be locked in different mode
+            LockRequest* parentLock = _findCompatibleParentLock(requestor, mode,
+                                                                parentId, parentSlice);
+            invariant(parentLock);
+            if (parentLock->mode == mode) return;
         }
 
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
         LockRequest* queue = _findQueue(slice, resId);
-        LockRequest* conflictPosition = queue;
+        LockRequest* conflictPosition;
         ResourceStatus status = _getConflictInfo(requestor, mode, resId, slice,
-                                                 queue, conflictPosition);
+                                                 queue, &conflictPosition);
         if (kResourceAcquired == status) { return; }
 
         LockRequest* lr = new LockRequest(resId, mode, requestor, true);
@@ -298,7 +300,7 @@ namespace mongo {
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
         LockRequest* lr;
-        LockStatus status = _findLock(holder, mode, resId, slice, lr);
+        LockStatus status = _findLock(holder, mode, resId, slice, &lr);
         if (kLockFound != status) {
             return status; // error, resource wasn't acquired in this mode by holder
         }
@@ -413,11 +415,19 @@ namespace mongo {
         _throwIfShuttingDown(holder);
 
         LockRequest* theLock=NULL;
-        return kLockFound == _findLock(holder, mode, resId, partitionResource(resId), theLock);
+        return kLockFound == _findLock(holder, mode, resId, partitionResource(resId), &theLock);
     }
 
     unsigned LockManager::partitionResource(const ResourceId& resId) {
         return resId.hash() % kNumResourcePartitions;
+    }
+
+    void LockManager::registerTransaction(const Transaction* tx) {
+        _activeTransactions.insert(tx);
+    }
+
+    void LockManager::unregisterTransaction(const Transaction* tx) {
+        _activeTransactions.erase(tx);
     }
 
 #ifdef REGISTER_TRANSACTIONS
@@ -463,20 +473,136 @@ namespace mongo {
                                                               const LockMode& mode,
                                                               const ResourceId& resId,
                                                               unsigned slice,
-                                                              LockRequest* queue,
-                                                              LockRequest*& conflictPosition) {
+                                                              LockRequest* nextLock,
+                                                              LockRequest** conflictPosition) {
         _stats[slice].incRequests();
 
-        if (queue) { _stats[slice].incPreexisting(); }
+        if (nextLock) { _stats[slice].incPreexisting(); }
 
-        ResourceStatus resourceStatus = _conflictExists(requestor, mode, resId,
-                                                        slice, conflictPosition);
+        // handle READERS/kPolicyWritersOnly policy conflicts
+        if ((kPolicyReadersOnly == _policy && conflictsWithReadersOnlyPolicy(mode)) ||
+            (kPolicyWritersOnly == _policy && conflictsWithWritersOnlyPolicy(mode))) {
 
-        if (kResourceAcquired == resourceStatus) {
-            _stats[slice].incSame();
-            ++conflictPosition->count;
+            // position past the last active lock request on the queue
+            LockRequest* lastActivePosition = NULL;
+            for (; nextLock; nextLock = nextLock->nextOnResource) {
+                if (requestor == nextLock->requestor && mode == nextLock->mode) {
+                    ++nextLock->count;
+                    _stats[slice].incSame();
+                    *conflictPosition = nextLock;
+                    return kResourceAcquired; // already have the lock
+                }
+                if (! nextLock->isBlocked()) {
+                    lastActivePosition = nextLock;
+                }
+            }
+            if (lastActivePosition) {
+                nextLock = lastActivePosition;
+            }
+            *conflictPosition = nextLock;
+            return kResourcePolicyConflict;
         }
-        return resourceStatus;
+
+        // loop over the lock requests in the queue, looking for the 1st conflict
+        // normally, we'll leave the nextLock positioned at the 1st conflict
+        // if there is one, or the position (often the end) where we know that
+        // there is no conflict.
+        //
+        // upgrades complicate this picture. we want to position the upgrade request
+        // after the last active incompatible lock, not at the 1st incompatible lock.
+        // but we dont know if we have an upgrade until we look at the initial locks.
+        //
+        // so we remember the position of the 1st conflict, but continue advancing
+        // until we've seen all active incompatible locks.  If none of those have
+        // the same Transaction as the request, we restore the position to 1st conflict
+
+        LockRequest* firstConflict = NULL;
+        set<Transaction*> activeOwners; // initial active owners. if has requestor, it's an upgrade
+        bool alreadyHadLock = false;  // true if we see a lock with the same Txid
+
+        for (; nextLock && nextLock->isActive(); nextLock=nextLock->nextOnResource) {
+
+            if (requestor == nextLock->requestor) {
+
+                if (nextLock->matches(requestor, mode, resId)) {
+                    // we've already locked the resource in the requested mode
+                    ++nextLock->count;
+                    _stats[slice].incSame();
+                    *conflictPosition = nextLock;
+                    return kResourceAcquired;
+                }
+
+                if (isDowngrade(nextLock->mode, mode)) {
+                    _stats[slice].incDowngrades();
+                    *conflictPosition = nextLock->nextOnResource;;
+                    return kResourceAvailable;
+                }
+
+                if (isUpgrade(nextLock->mode, mode)) {
+                    if (!alreadyHadLock) {
+                        alreadyHadLock = true;
+                        _stats[slice].incUpgrades();
+                    }
+                }
+
+                // there are new lock acquisitions that are neither downgrades, nor
+                // upgrades.  For example, holding kShared and requesting kIntentExclusive
+                // But we never conflict with ourselves.
+
+                continue;
+            }
+
+            // next lock owner != requestor
+
+            activeOwners.insert(nextLock->requestor);
+
+            if (NULL == firstConflict && !isCompatible(nextLock->mode, mode)) {
+                // if we're not an upgrade request, restore this position later
+                firstConflict = nextLock;
+            }
+        }
+
+        if (alreadyHadLock) {
+            // upgrading
+
+            if (nextLock && activeOwners.find(nextLock->requestor) != activeOwners.end()) {
+                // nextLock is also an upgrade
+                _stats[slice].incDeadlocks();
+                throw AbortException();
+            }
+            *conflictPosition = nextLock;
+
+            if (NULL == firstConflict)
+                return kResourceAvailable;
+
+            return kResourceUpgradeConflict;
+        }
+        else if (firstConflict) {
+            // restore first conflict position
+            nextLock = firstConflict;
+        }
+
+        if (nextLock) {
+            *conflictPosition = nextLock;
+
+            // no conflict if nextLock is blocked and we come before
+            if (nextLock->isBlocked() &&
+                _comesBeforeUsingPolicy(requestor, mode, nextLock)) {
+                return kResourceAvailable;
+            }
+
+            // there's a conflict, check for deadlock
+            if (requestor->hasWaiter(nextLock->requestor)) {
+                // the transaction that would block requestor is already blocked by requestor
+                // if requestor waited for nextLockRequest, there would be a deadlock
+                //
+                _stats[slice].incDeadlocks();
+                throw AbortException();
+            }
+            return kResourceConflict;
+        }
+        *conflictPosition = nextLock;
+        return kResourceAvailable;
     }
 
     void LockManager::_acquireInternal(LockRequest* lr,
@@ -561,12 +687,10 @@ namespace mongo {
     /*
      * called only when there are conflicting LockRequests
      * positions a lock request (lr) in a queue at or after position
-     * also adds remaining requests in queue as lr's waiters
-     * for subsequent deadlock detection
      */
     void LockManager::_addLockToQueueUsingPolicy(LockRequest* lr,
                                                  LockRequest* queue,
-                                                 LockRequest*& position) {
+                                                 LockRequest* position) {
 
         if (position == NULL) {
             _push_back(lr);
@@ -575,23 +699,21 @@ namespace mongo {
 
         // use lock request's transaction's priority if specified
         int txPriority = lr->requestor->getPriority();
-        if (txPriority > 0) {
-            for (; position; position=position->nextOnResource) {
-                if (txPriority > position->requestor->getPriority()) {
-                    // add in front of request with lower priority that is either
-                    // compatible, or blocked
-                    //
-                    position->insert(lr);
-                    return;
-                }
+        bool anyPrioritiesSet = (txPriority != 0);
+        for (; position; position=position->nextOnResource) {
+            int nextRequestorPriority = lr->requestor->getPriority();
+            if (!anyPrioritiesSet) anyPrioritiesSet = (nextRequestorPriority != 0);
+            if (txPriority > nextRequestorPriority) {
+                // add in front of request with lower priority that is either
+                // compatible, or blocked
+                //
+                position->insert(lr);
+                return;
             }
+        }
+        if (anyPrioritiesSet) {
             _push_back(lr);
             return;
-        }
-        else if (txPriority < 0) {
-            // for now, just push to end
-            // TODO: honor position of low priority requests
-            _push_back(lr);
         }
 
         // use LockManager's default policy
@@ -671,138 +793,32 @@ namespace mongo {
         }
     }
 
-    LockManager::ResourceStatus LockManager::_conflictExists(Transaction* requestor,
-                                                             const LockMode& mode,
-                                                             const ResourceId& resId,
-                                                             unsigned slice,
-                                                             LockRequest*& nextLock) {
+    LockRequest* LockManager::_findCompatibleParentLock(const Transaction* holder,
+                                                        const LockMode& contentMode,
+                                                        const ResourceId& resId,
+                                                        unsigned slice) const {
+        // get iterator for resId's locks
+        map<ResourceId,LockRequest*>::const_iterator resLocks = _resourceLocks[slice].find(resId);
+        if (resLocks == _resourceLocks[slice].end()) { return NULL; }
 
-        // handle READERS/kPolicyWritersOnly policy conflicts
-        if ((kPolicyReadersOnly == _policy && conflictsWithReadersOnlyPolicy(mode)) ||
-            (kPolicyWritersOnly == _policy && conflictsWithWritersOnlyPolicy(mode))) {
-
-            if (NULL == nextLock) { return kResourcePolicyConflict; }
-
-            // position past the last active lock request on the queue
-            LockRequest* lastActivePosition = NULL;
-            for (; nextLock; nextLock = nextLock->nextOnResource) {
-                if (requestor == nextLock->requestor && mode == nextLock->mode) {
-                    return kResourceAcquired; // already have the lock
-                }
-                if (! nextLock->isBlocked()) {
-                    lastActivePosition = nextLock;
-                }
-            }
-            if (lastActivePosition) {
-                nextLock = lastActivePosition;
-            }
-            return kResourcePolicyConflict;
-        }
-
-        // loop over the lock requests in the queue, looking for the 1st conflict
-        // normally, we'll leave the nextLock positioned at the 1st conflict
-        // if there is one, or the position (often the end) where we know that
-        // there is no conflict.
-        //
-        // upgrades complicate this picture. we want to position the upgrade request
-        // after the last active incompatible lock, not at the 1st incompatible lock.
-        // but we dont know if we have an upgrade until we look at the initial locks.
-        //
-        // so we remember the position of the 1st conflict, but continue advancing
-        // until we've seen all active incompatible locks.  If none of those have
-        // the same Transaction as the request, we restore the position to 1st conflict
-
-        LockRequest* firstConflict = NULL;
-        set<Transaction*> activeOwners; // initial active owners. if has requestor, it's an upgrade
-        bool alreadyHadLock = false;  // true if we see a lock with the same Txid
-
-        for (; nextLock && nextLock->isActive(); nextLock=nextLock->nextOnResource) {
-
-            if (requestor == nextLock->requestor) {
-
-                if (nextLock->matches(requestor, mode, resId)) {
-                    // we've already locked the resource in the requested mode
-                    return kResourceAcquired;
-                }
-
-                if (isDowngrade(nextLock->mode, mode)) {
-                    _stats[slice].incDowngrades();
-                    nextLock = nextLock->nextOnResource;
-                    return kResourceAvailable;
-                }
-
-                if (isUpgrade(nextLock->mode, mode)) {
-                    if (!alreadyHadLock) {
-                        alreadyHadLock = true;
-                        _stats[slice].incUpgrades();
-                    }
-                }
-
-                // there are new lock acquisitions that are neither downgrades, nor
-                // upgrades.  For example, holding kShared and requesting kIntentExclusive
-                // But we never conflict with ourselves.
-
-                continue;
-            }
-
-            // next lock owner != requestor
-
-            activeOwners.insert(nextLock->requestor);
-
-            if (NULL == firstConflict && !isCompatible(nextLock->mode, mode)) {
-                // if we're not an upgrade request, restore this position later
-                firstConflict = nextLock;
+        // look for an existing lock request from holder in mode
+        for (LockRequest* nextLock = resLocks->second;
+             nextLock; nextLock=nextLock->nextOnResource) {
+            if (nextLock->requestor == holder &&
+                isChildCompatible(nextLock->mode, contentMode)) {
+                return nextLock;
             }
         }
-
-        if (alreadyHadLock) {
-            // upgrading
-
-            if (nextLock && activeOwners.find(nextLock->requestor) != activeOwners.end()) {
-                // nextLock is also an upgrade
-                _stats[slice].incDeadlocks();
-                requestor->abort();
-            }
-
-            if (NULL == firstConflict)
-                return kResourceAvailable;
-
-            return kResourceUpgradeConflict;
-        }
-        else if (firstConflict) {
-            // restore first conflict position
-            nextLock = firstConflict;
-        }
-
-        if (nextLock) {
-
-            // no conflict if nextLock is blocked and we come before
-            if (nextLock->isBlocked() &&
-                _comesBeforeUsingPolicy(requestor, mode, nextLock)) {
-                return kResourceAvailable;
-            }
-
-            // there's a conflict, check for deadlock
-            if (requestor->hasWaiter(nextLock->requestor)) {
-                // the transaction that would block requestor is already blocked by requestor
-                // if requestor waited for nextLockRequest, there would be a deadlock
-                //
-                _stats[slice].incDeadlocks();
-                requestor->abort();
-            }
-            return kResourceConflict;
-        }
-
-        return kResourceAvailable;
+        return NULL;
     }
 
     LockManager::LockStatus LockManager::_findLock(const Transaction* holder,
                                                    const LockMode& mode,
                                                    const ResourceId& resId,
                                                    unsigned slice,
-                                                   LockRequest*& outLock) const {
+                                                   LockRequest** outLock) const {
 
-        outLock = NULL; // set invalid;
+        *outLock = NULL; // set invalid;
 
         // get iterator for resId's locks
         map<ResourceId,LockRequest*>::const_iterator resLocks = _resourceLocks[slice].find(resId);
@@ -814,7 +830,7 @@ namespace mongo {
              nextLock; nextLock=nextLock->nextOnResource) {
             if (nextLock->requestor == holder) {
                 if (nextLock->mode == mode) {
-                    outLock = nextLock;
+                    *outLock = nextLock;
                     return kLockFound;
                 }
                 else {
@@ -889,10 +905,14 @@ namespace mongo {
     }
 
     void LockManager::_throwIfShuttingDown(const Transaction* tx) const {
+        if (!_shuttingDown) return;
 
-        if (_shuttingDown && (_timer.millis() >= _millisToQuiesce)) {
-            throw Transaction::AbortException(); // XXX should this be something else? ShutdownException?
+        if (_timer.millis() < _millisToQuiesce) {
+            if (_activeTransactions.find(tx) != _activeTransactions.end())
+                return;
         }
+
+        throw AbortException(); // XXX should this be something else? ShutdownException?
     }
 
 } // namespace mongo

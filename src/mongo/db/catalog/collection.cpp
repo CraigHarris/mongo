@@ -408,15 +408,15 @@ namespace mongo {
 
     Status Collection::updateDocumentWithDamages( OperationContext* txn,
                                                   const DiskLoc& loc,
-                                                  const char* damangeSource,
+                                                  const char* damageSource,
                                                   const mutablebson::DamageVector& damages ) {
 
         // Broadcast the mutation so that query results stay correct.
         _cursorCache.invalidateDocument(loc, INVALIDATION_MUTATION);
 
         // XXX should eventually replace DiskLoc with RecordId, and eliminate the cast below
-        ExclusiveResourceLock lk(txn, *reinterpret_cast<const uint64_t*>(&loc));
-        return _recordStore->updateWithDamages( txn, loc, damangeSource, damages );
+        ExclusiveResourceLock lk(txn, ResourceId(*reinterpret_cast<const uint64_t*>(&loc), ns().ns()));
+        return _recordStore->updateWithDamages( txn, loc, damageSource, damages );
     }
 
     bool Collection::_enforceQuota( bool userEnforeQuota ) const {

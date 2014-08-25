@@ -50,7 +50,7 @@
  * Resources can be databases, collections, oplogs, records, btree-nodes, key-value pairs,
  * forward/backward pointers, or anything at all that can be unambiguously identified.
  *
- * Resources are acquired by Transactions for some use described by a LockMode.
+ * Resources are acquired by Transactions for some use described by a LoldckMode.
  * A table defines which lock modes are compatible or conflict with other modes. If an
  * acquisition request conflicts with a pre-existing use of a resource, the requesting
  * transaction will block until the original conflicting requests and any new conflicting
@@ -71,6 +71,14 @@ namespace mongo {
 
     class LockManager {
     public:
+
+        /**
+         * thrown when Transaction::abort is called, often to avoid deadlock.
+         */
+        class AbortException : public std::exception {
+        public:
+            const char* what() const throw ();
+        };
 
         /**
          * Used to decide which blocked requests to honor first when resource becomes available
@@ -299,6 +307,9 @@ namespace mongo {
         static unsigned partitionResource(const ResourceId& resId);
         static unsigned partitionTransaction(unsigned txId);
 
+        void registerTransaction(const Transaction* tx);
+        void unregisterTransaction(const Transaction* tx);
+
 
 
         // --- for testing and logging
@@ -334,7 +345,7 @@ namespace mongo {
          */
         void _addLockToQueueUsingPolicy(LockRequest* lr,
                                         LockRequest* queue,
-                                        LockRequest*& position /* in/out */);
+                                        LockRequest* position);
 
         /**
          * when inserting a new lock request into the middle of a queue,
@@ -355,15 +366,13 @@ namespace mongo {
                                      const LockRequest* oldReq) const;
 
         /**
-         * determine whether a resource request would conflict with an existing lock
-         * set the position to the first possible insertion point, which is usually
-         * the position of the first conflict, or the end of the queue, or to an existing lock
+         * returns LockRequest on containerId, acquired by requestor, if its mode
+         * is compatible with contentMode, or NULL otherwise
          */
-        ResourceStatus _conflictExists(Transaction* requestor,
-                                       const Locking::LockMode& mode,
-                                       const ResourceId& resId,
-                                       unsigned slice,
-                                       LockRequest*& position /* in/out */);
+        LockRequest* _findCompatibleParentLock(const Transaction* requestor,
+                                               const Locking::LockMode& contentMode,
+                                               const ResourceId& containerId,
+                                               unsigned slice) const;
 
         /**
          * looks for an existing LockRequest that matches the four input params
@@ -374,7 +383,7 @@ namespace mongo {
                              const Locking::LockMode& mode,
                              const ResourceId& resId,
                              unsigned slice,
-                             LockRequest*& outLock /* output */) const;
+                             LockRequest** outLock /* output */) const;
 
         /**
          * find the first lock on resId or NULL if no locks
@@ -383,7 +392,7 @@ namespace mongo {
 
 	/**
 	 * @return status of requested resource id
-	 * set conflictPosition on output if conflict
+	 * set conflictPosition on output if conflict exists
 	 * update several status variables
 	 */
 	ResourceStatus _getConflictInfo(Transaction* requestor,
@@ -391,7 +400,7 @@ namespace mongo {
                                         const ResourceId& resId,
 					unsigned slice,
 					LockRequest* queue,
-                                        LockRequest*& conflictPosition /*in/out*/);
+                                        LockRequest** conflictPosition /*out*/);
 
         /**
          * maintain the resourceLocks queue
@@ -475,9 +484,7 @@ namespace mongo {
         //
         std::map<ResourceId, LockRequest*> _resourceLocks[kNumResourcePartitions];
 
-#ifdef REGISTER_TRANSACTIONS
-        std::set<Transaction*> _activeTransactions[kNumTransactionPartitions];
-#endif
+        std::set<const Transaction*> _activeTransactions;
 
         // used to track conflicts due to kPolicyReadersOnly or WritersOnly
         Transaction* _systemTransaction;

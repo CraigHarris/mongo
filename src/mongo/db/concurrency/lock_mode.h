@@ -133,6 +133,7 @@ namespace mongo {
          */
         bool isUpgrade(const LockMode& acquired, const LockMode& requested);
         bool isDowngrade(const LockMode& acquired, const LockMode& requested);
+        bool isChildCompatible(const LockMode& parent, const LockMode& child);
         bool isCompatible(const LockMode& acquired, const LockMode& requested);
     };
 } // namespace mongo

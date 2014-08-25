@@ -53,72 +53,55 @@ using std::stringstream;
 
 namespace mongo {
 
-    const char* Transaction::AbortException::what() const throw() { return "AbortException"; }
-
-    Transaction::Transaction(unsigned txId, int priority)
-        : _txId(txId)
+    Transaction::Transaction(LockManager& lm, unsigned txId, int priority)
+        : _lm(lm)
+        , _txId(txId)
         , _scopeLevel(0)
         , _priority(priority)
-        , _locks(NULL) { }
-
-    Transaction::~Transaction() {
-        invariant(NULL == _locks);
+        , _locks(NULL) {
+        _lm.registerTransaction(this);
     }
 
-    Transaction* Transaction::setTxIdOnce(unsigned txId) {
-        if (0 == _txId) {
-            _txId = txId;
-        }
-
-        return this;
+    Transaction::~Transaction() {
+        _lm.unregisterTransaction(this);
+        invariant(NULL == _locks);
     }
 
     void Transaction::enterScope() {
         ++_scopeLevel;
     }
 
-    void Transaction::exitScope(LockManager* lm) {
+    void Transaction::exitScope() {
         invariant(_scopeLevel);
         if (--_scopeLevel > 0) return;
 
         // relinquish locks acquiredInScope that have been released; and
         // complain about locks acquiredInScope that have not been released
-
-        if (NULL == lm) {
-            lm = &LockManager::getSingleton();
-        }
-        lm->relinquishScopedTxLocks(_locks);
+        _lm.relinquishScopedTxLocks(_locks);
     }
 
-    void Transaction::releaseLocks(LockManager* lm) {
+    void Transaction::releaseLocks() {
         for (LockRequest* nextLock = _locks; nextLock;) {
             LockRequest* newNextLock = nextLock->nextOfTransaction;
             LockManager::LockStatus status;
             do {
-                status = lm->releaseLock(nextLock);
+                status = _lm.releaseLock(nextLock);
             } while (LockManager::kLockCountDecremented == status);
             nextLock = newNextLock;
         }
         removeAllWaiters();
     }
 
-    void Transaction::abort() {
-        removeAllWaiters();
-        throw AbortException();
-    }
-
     bool Transaction::operator<(const Transaction& other) const {
         return _txId < other._txId;
     }
 
-    int Transaction::getPriority() const {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
-        return _priority;
+    void Transaction::setPriority(int newPriority) {
+        _priority.store(newPriority);
     }
 
-    void Transaction::setPriority(int newPriority) {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
-        _priority = newPriority;
+    int Transaction::getPriority() const {
+        return _priority.load();
     }
 
     void Transaction::addLock(LockRequest* lr) {
@@ -139,7 +122,6 @@ namespace mongo {
             lr->prevOfTransaction->nextOfTransaction = lr->nextOfTransaction;
         }
         else {
-            boost::recursive_mutex::scoped_lock lk(_txMutex);
             _locks = lr->nextOfTransaction;
         }
 
@@ -149,32 +131,32 @@ namespace mongo {
     }
 
     void Transaction::addWaiter(Transaction* waiter) {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        boost::mutex::scoped_lock lk(_txMutex);
         _waiters.insert(waiter);
         _waiters.insert(waiter->_waiters.begin(), waiter->_waiters.end());
     }
 
     bool Transaction::hasWaiter(const Transaction* other) const {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        boost::mutex::scoped_lock lk(_txMutex);
         return _waiters.find(other) != _waiters.end();
     }
 
     size_t Transaction::numWaiters() const {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        boost::mutex::scoped_lock lk(_txMutex);
         return _waiters.size();
     }
 
     void Transaction::removeAllWaiters() {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        boost::mutex::scoped_lock lk(_txMutex);
         _waiters.clear();
     }
 
     void Transaction::removeWaiterAndItsWaiters(const Transaction* other) {
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        boost::mutex::scoped_lock lk(_txMutex);
         multiset<const Transaction*>::iterator otherWaiter = _waiters.find(other);
         if (otherWaiter == _waiters.end()) return;
         _waiters.erase(_waiters.find(other));
-        boost::recursive_mutex::scoped_lock other_lk(other->_txMutex);
+        boost::mutex::scoped_lock other_lk(other->_txMutex);
         multiset<const Transaction*>::iterator nextOtherWaiters = other->_waiters.begin();
         for(; nextOtherWaiters != other->_waiters.end(); ++nextOtherWaiters) {
             _waiters.erase(*nextOtherWaiters);
@@ -183,14 +165,14 @@ namespace mongo {
 
     string Transaction::toString() const {
         stringstream result;
-        result << "<xid:" << _txId
+        result << "<txid:" << _txId
                << ",scopeLevel:" << _scopeLevel
-               << ",priority:" << _priority;
+               << ",priority:" << _priority.load();
 
 
         result << ",locks: {";
         bool firstLock=true;
-        boost::recursive_mutex::scoped_lock lk(_txMutex);
+        boost::mutex::scoped_lock lk(_txMutex);
         for (LockRequest* nextLock = _locks; nextLock; nextLock=nextLock->nextOfTransaction) {
             if (firstLock) firstLock=false;
             else result << ",";

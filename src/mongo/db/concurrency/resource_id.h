@@ -44,7 +44,7 @@ namespace mongo {
          * top-level resources (global locks), or when collisions (same resource id
          * allocated by multiple RecordStores) are unlikely.
          */
-        ResourceId(uint64_t rid) : _rid(rid) { }
+        explicit ResourceId(uint64_t rid) : _rid(rid) { }
         explicit ResourceId(const void* loc) : _rid(reinterpret_cast<uint64_t>(loc)) { }
 
         /**

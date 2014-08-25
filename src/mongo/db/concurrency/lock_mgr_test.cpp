@@ -59,7 +59,6 @@ using namespace mongo::Locking;
 namespace mongo {
 
     enum TxCmd {
-        ABORT,
         ACQUIRE,
         ENTER_SCOPE,
         EXIT_SCOPE,
@@ -138,7 +137,7 @@ public:
     void post(const TxCmd& cmd,
               const unsigned& xid = 0,
               const LockMode& mode = kShared,
-              const ResourceId& resId = 0,
+              const ResourceId& resId = ResourceId(static_cast<uint64_t>(0)),
               const LockManager::Policy& policy = LockManager::kPolicyFirstCome) {
         boost::unique_lock<boost::mutex> guard(_guard);
         while (_count == 10)
@@ -182,7 +181,7 @@ public:
     
     ClientTransaction(LockManager* lm, const unsigned& xid)
         : _lm(lm)
-        , _tx(xid)
+        , _tx(*lm, xid)
         , _thr(&ClientTransaction::processCmd, this) { }
 
     virtual ~ClientTransaction() { _thr.join(); }
@@ -207,19 +206,13 @@ public:
         ASSERT(RELEASED == rsp->rspCode);
     }
 
-    void abort() {
-        _cmd.post(ABORT, _tx.getTxId());
-        TxResponse* rsp = _rsp.consume();
-        ASSERT(ABORTED == rsp->rspCode);
-    }
-
     void wakened() {
         TxResponse* rsp = _rsp.consume();
         ASSERT(ACQUIRED == rsp->rspCode);
     }
 
     void setPolicy(const LockManager::Policy& policy, const TxRsp& rspCode) {
-        _cmd.post(POLICY, _tx.getTxId(), kShared, 0, policy);
+        _cmd.post(POLICY, _tx.getTxId(), kShared, ResourceId(static_cast<uint64_t>(0)), policy);
         TxResponse* rsp = _rsp.consume();
         ASSERT(rspCode == rsp->rspCode);
     }
@@ -234,20 +227,12 @@ public:
         while (more) {
             TxRequest* req = _cmd.consume();
             switch (req->cmd) {
-            case ABORT:
-                try {
-                    _tx.abort();
-                } catch (const Transaction::AbortException& err) {
-                    _tx.releaseLocks(_lm);
-                    _rsp.post(ABORTED);
-                }
-                break;
             case ACQUIRE:
                 try {
                     _lm->acquire(&_tx, req->mode, req->resId, this);
                     _rsp.post(ACQUIRED);
-                } catch (const Transaction::AbortException& err) {
-                    _tx.releaseLocks(_lm);
+                } catch (const LockManager::AbortException& err) {
+                    _tx.releaseLocks();
                     _rsp.post(ABORTED);
                     return;
                 }
@@ -256,13 +241,13 @@ public:
                 _tx.enterScope();
                 break;
             case EXIT_SCOPE:
-                _tx.exitScope(_lm);
+                _tx.exitScope();
                 break;
             case POLICY:
                 try {
                     _lm->setPolicy(&_tx, req->policy, this);
                     _rsp.post(ACQUIRED);
-                } catch( const Transaction::AbortException& err) {
+                } catch( const LockManager::AbortException& err) {
                     _rsp.post(ABORTED);
                 }
                 break;
@@ -300,7 +285,7 @@ TEST(LockManagerTest, TxError) {
     useExperimentalDocLocking = true;
     LockManager lm;
     LockManager::LockStatus status;
-    Transaction tx(1);
+    Transaction tx(lm, 1);
     ResourceId r1(static_cast<int>(1));
     ResourceId r2(static_cast<int>(2));
 
@@ -321,7 +306,7 @@ TEST(LockManagerTest, TxError) {
 
 TEST(LockManagerTest, SingleTx) {
     LockManager lm;
-    Transaction t1(1);
+    Transaction t1(lm, 1);
     ResourceId r1(static_cast<int>(1));
     LockManager::LockStatus status;
 

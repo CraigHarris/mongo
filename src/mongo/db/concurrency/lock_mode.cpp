@@ -127,6 +127,31 @@ namespace mongo {
             invariant(false); // unreachable
         }
 
+        bool isChildCompatible(const LockMode& parentMode, const LockMode& childMode) {
+            if (parentMode == childMode) return true;
+
+            // childMode not 
+            switch (parentMode) {
+
+            case kIntentShared:
+                return kShared == childMode; // otherwise, upgrade lock on parent
+
+            case kIntentExclusive:
+            case kSharedIntentExclusive: 
+                return true;
+
+            case kUpdate: // some ancestor of parentMode must have been kIX to get here
+                return (kShared == childMode) || (kExclusive == childMode);
+
+            case kBlockExclusive:
+                return (kIntentShared == childMode) || (kShared == childMode);
+
+            case kShared:
+            case kExclusive:
+                return false;
+            }
+        }
+
         /**
          * return false if requested conflicts with acquired, true otherwise
          */
