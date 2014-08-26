@@ -15,3 +15,18 @@ env.Library(
         ],
     LIBDEPS=[]
     )
+
+env.CppUnitTest(
+    target = 'record_store_test',
+    source = [
+        'record_store_test.cpp',
+    ],
+    LIBDEPS = [
+        '$BUILD_DIR/mongo/coredb',
+        '$BUILD_DIR/mongo/coreserver',
+        '$BUILD_DIR/mongo/mongocommon',
+        '$BUILD_DIR/mongo/serveronly',
+        '$BUILD_DIR/mongo/db/concurrency/lock_mgr',
+    ],
+    NO_CRUTCH = True
+)
