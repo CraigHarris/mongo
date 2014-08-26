@@ -41,7 +41,7 @@
 #include "mongo/db/curop.h"
 #include "mongo/db/catalog/collection_catalog_entry.h"
 #include "mongo/db/catalog/database.h"
-#include "mongo/db/concurrency/lock_mgr.h"
+#include "mongo/db/concurrency/lock.h"
 #include "mongo/db/catalog/index_create.h"
 #include "mongo/db/index/index_access_method.h"
 #include "mongo/db/operation_context.h"
@@ -408,14 +408,15 @@ namespace mongo {
 
     Status Collection::updateDocumentWithDamages( OperationContext* txn,
                                                   const DiskLoc& loc,
-                                                  const char* damangeSource,
+                                                  const char* damageSource,
                                                   const mutablebson::DamageVector& damages ) {
 
         // Broadcast the mutation so that query results stay correct.
         _cursorCache.invalidateDocument(loc, INVALIDATION_MUTATION);
 
-        ExclusiveResourceLock lk(txn->getTransaction(), *(size_t*)&loc);
-        return _recordStore->updateWithDamages( txn, loc, damangeSource, damages );
+        // XXX should eventually replace DiskLoc with RecordId, and eliminate the cast below
+        ExclusiveResourceLock lk(txn, ResourceId(*reinterpret_cast<const uint64_t*>(&loc), ns().ns()));
+        return _recordStore->updateWithDamages( txn, loc, damageSource, damages );
     }
 
     bool Collection::_enforceQuota( bool userEnforeQuota ) const {
