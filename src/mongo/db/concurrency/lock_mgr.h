@@ -95,7 +95,7 @@ namespace mongo {
          * returned by ::conflictExists, called from acquire
          */
         enum ResourceStatus {
-            kResourceAcquired,       // requested resource was already acquired, increment count
+            kResourceAlreadyAcquired,// requested resource was already acquired, increment count
             kResourceAvailable,      // requested resource is available. no waiting
             kResourceConflict,       // requested resource is in use by another transaction
             kResourcePolicyConflict, // requested mode blocked by READER/kPolicyWritersOnly policy
@@ -105,8 +105,8 @@ namespace mongo {
         };
 
         /**
-         * returned by find_lock(), and release() and, mostly for testing
-         * explains why a lock wasn't found or released
+         * returned by _findLock(), and release() to indicate
+         * whether a lock was found/released or why it wasn't.
          */
         enum LockStatus {
             kLockFound,             // found a matching lock request
@@ -340,12 +340,14 @@ namespace mongo {
                               boost::unique_lock<boost::mutex>& guard);
 
         /**
-         * adds a conflicting lock request to the list of requests for a resource
-         * using the Policy.  Called by acquireInternal
+         * adds a lock request @lr after the @position of the first conflict.
+         * While @lr will always be added after @position, its exact location
+         * may depend on the priority of @lr's requesting transaction and the
+         * lock manager's current policy.
+         *
+         * Called by acquireInternal, only when lr conflicts with an existing lock.
          */
-        void _addLockToQueueUsingPolicy(LockRequest* lr,
-                                        LockRequest* queue,
-                                        LockRequest* position);
+        void _addLockToQueueUsingPolicy(LockRequest* lr, LockRequest* position);
 
         /**
          * when inserting a new lock request into the middle of a queue,
@@ -357,6 +359,15 @@ namespace mongo {
                          LockRequest* lastLock);
 
         /**
+         * in the cycle of transactions containing @requestor and @end,
+         * @return the one to abort.  Avoid aborting transactions that
+         * have only read and not written.  Use priority and policy to
+         * pick a loser among the writers.
+         */
+        Transaction* _chooseTxToAbortUsingPolicy(Transaction* requestor,
+                                                 Transaction* end);
+
+        /**
          * returns true if a newRequest should be honored before an oldRequest according
          * to the lockManager's policy.  Used by acquire to decide whether a new share request
          * conflicts with a previous upgrade-to-exclusive request that is blocked.
@@ -366,8 +377,8 @@ namespace mongo {
                                      const LockRequest* oldReq) const;
 
         /**
-         * returns LockRequest on containerId, acquired by requestor, if its mode
-         * is compatible with contentMode, or NULL otherwise
+         * @return the first LockRequest on @containerId, acquired by @requestor,
+         * whose mode is compatible with @contentMode, or NULL otherwise
          */
         LockRequest* _findCompatibleParentLock(const Transaction* requestor,
                                                const Locking::LockMode& contentMode,
@@ -375,9 +386,11 @@ namespace mongo {
                                                unsigned slice) const;
 
         /**
-         * looks for an existing LockRequest that matches the four input params
-         * if not found, sets outLid to zero and returns a reason, otherwise
-         * sets outLock to the LockRequest that matches and returns kLockFound
+         * look for an existing LockRequest that matches the four input params.
+         * if successful, @return kLockFound and set @outLock to the lock request.
+         * otherwise, @return kLockResourceNotFound if @resId is not locked
+         * by @requestor, or kLockModeNotFound if @resId is locked by @requestor
+         * but not in @mode.
          */
         LockStatus _findLock(const Transaction* requestor,
                              const Locking::LockMode& mode,
@@ -391,15 +404,15 @@ namespace mongo {
         LockRequest* _findQueue(unsigned slice, const ResourceId& resId) const;
 
 	/**
-	 * @return status of requested resource id
-	 * set conflictPosition on output if conflict exists
-	 * update several status variables
+	 * @return lock conflict status of the requested resource (@resId)
+	 * set @conflictPosition to the first lock that conflicts if any
+	 * update status variables
 	 */
 	ResourceStatus _getConflictInfo(Transaction* requestor,
                                         const Locking::LockMode& mode,
                                         const ResourceId& resId,
-					unsigned slice,
-					LockRequest* queue,
+                                        unsigned slice,
+                                        LockRequest* queue,
                                         LockRequest** conflictPosition /*out*/);
 
         /**

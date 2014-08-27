@@ -68,6 +68,8 @@ namespace mongo {
 
         void releaseLocks();
 
+        bool isReader() const { return _readerOnly; }
+
         /**
          * override default LockManager's default Policy for a transaction.
          *
@@ -93,15 +95,39 @@ namespace mongo {
          */
         void addWaiter(Transaction* waiter);
         size_t numWaiters() const;
-        bool hasWaiter(const Transaction* other) const;
-        void removeWaiterAndItsWaiters(const Transaction* other);
+        bool hasWaiter(Transaction* other) const;
+        void removeWaiterAndItsWaiters(Transaction* other);
         void removeAllWaiters();
+
+        /**
+         * if @end is a member of this transaction's waiters,
+         * @return the subset of this transaction's waiters that also
+         * contain @end in their set of waiters.  The result is the
+         * set of Transactions that would form a cycle
+         *
+         * used by LockManager to choose a transaction to abort.
+         */
+        std::set<Transaction*> getCycleMembers(Transaction* end);
 
         /**
          * for sleeping and waking
          */
         void wait(boost::unique_lock<boost::mutex>& guard);
         void wake();
+
+
+        /**
+         * when LockManager decides to abort a transaction that is blocked
+         * it calls rememberToAbort and then notifies/wakes the blocked Tx.
+         */
+        void rememberToAbort() { _shouldAbort = true; }
+        bool shouldAbort() {
+            if (_shouldAbort) {
+                _shouldAbort = false;
+                return true;
+            }
+            return false;
+        }
 
         /**
          * should be age of the transaction.  currently using txId as a proxy.
@@ -124,6 +150,16 @@ namespace mongo {
 
         // 0 ==> outside unit of work.  Used to control relinquishing locks
         size_t _scopeLevel;
+
+        // When the LockManager chooses to abort a transaction that is blocked
+        // it sets _shouldAbort and notifies/wakes the transaction, which
+        // examines this flag before proceeding
+        bool _shouldAbort;
+
+        // when deciding which transaction in a dependency cycle to abort
+        // favor readers, and choose among those who have reqeuested something
+        // other than IntentShared and Shared locks
+        bool _readerOnly;
 
         // transaction priorities:
         //     0 => neutral, use LockManager's default _policy
@@ -155,6 +191,6 @@ namespace mongo {
         // consulted/updated when there's a lock conflict.  When there are many more documents
         // than transactions, the set will usually be empty.
         //
-        std::multiset<const Transaction*> _waiters;
+        std::multiset<Transaction*> _waiters;
     };
 } // namespace mongo

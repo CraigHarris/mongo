@@ -130,7 +130,7 @@ namespace mongo {
             // Awaken requests that were blocked on the old policy.
             // iterate over TxIds blocked on kReservedTxId (these are blocked on policy)
 
-            for (multiset<const Transaction*>::iterator nextWaiter = _systemTransaction->_waiters.begin();
+            for (multiset<Transaction*>::iterator nextWaiter = _systemTransaction->_waiters.begin();
                  nextWaiter != _systemTransaction->_waiters.end(); ++nextWaiter) {
 
                 // iterate over the locks acquired by the blocked transactions
@@ -175,9 +175,10 @@ namespace mongo {
 
         LockRequest* queue = _findQueue(lr->slice, lr->resId);
         LockRequest* conflictPosition;
-        ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId, lr->slice,
-                                                 queue, &conflictPosition);
-        if (kResourceAcquired == status) { return; }
+        ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId,
+                                                 lr->slice, queue, &conflictPosition);
+
+        if (kResourceAlreadyAcquired == status) { return; }
 
         // add lock request to requesting transaction's list
         lr->requestor->addLock(lr);
@@ -209,9 +210,10 @@ namespace mongo {
 
         LockRequest* queue = _findQueue(lr->slice, lr->resId);
         LockRequest* conflictPosition;
-        ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId, lr->slice,
-                                                 queue, &conflictPosition);
-        if (kResourceAcquired == status) { return; }
+        ResourceStatus status = _getConflictInfo(lr->requestor, lr->mode, lr->resId,
+                                                 lr->slice, queue, &conflictPosition);
+
+        if (kResourceAlreadyAcquired == status) { return; }
 
         // add lock request to requesting transaction's list
         lr->requestor->addLock(lr);
@@ -235,7 +237,8 @@ namespace mongo {
         LockRequest* conflictPosition;
         ResourceStatus status = _getConflictInfo(requestor, mode, resId, slice,
                                                  queue, &conflictPosition);
-        if (kResourceAcquired == status) { return; }
+
+        if (kResourceAlreadyAcquired == status) { return; }
 
         LockRequest* lr = new LockRequest(resId, mode, requestor, true);
 
@@ -272,7 +275,8 @@ namespace mongo {
         LockRequest* conflictPosition;
         ResourceStatus status = _getConflictInfo(requestor, mode, resId, slice,
                                                  queue, &conflictPosition);
-        if (kResourceAcquired == status) { return; }
+
+        if (kResourceAlreadyAcquired == status) { return; }
 
         LockRequest* lr = new LockRequest(resId, mode, requestor, true);
 
@@ -490,7 +494,7 @@ namespace mongo {
                     ++nextLock->count;
                     _stats[slice].incSame();
                     *conflictPosition = nextLock;
-                    return kResourceAcquired; // already have the lock
+                    return kResourceAlreadyAcquired; // already have the lock
                 }
                 if (! nextLock->isBlocked()) {
                     lastActivePosition = nextLock;
@@ -518,8 +522,7 @@ namespace mongo {
 
         LockRequest* firstConflict = NULL;
         set<Transaction*> activeOwners; // initial active owners. if has requestor, it's an upgrade
-        bool alreadyHadLock = false;  // true if we see a lock with the same Txid
-
+        bool foundUpgrade = false;  
         for (; nextLock && nextLock->isActive(); nextLock=nextLock->nextOnResource) {
 
             if (requestor == nextLock->requestor) {
@@ -529,7 +532,7 @@ namespace mongo {
                     ++nextLock->count;
                     _stats[slice].incSame();
                     *conflictPosition = nextLock;
-                    return kResourceAcquired;
+                    return kResourceAlreadyAcquired;
                 }
 
                 if (isDowngrade(nextLock->mode, mode)) {
@@ -538,11 +541,9 @@ namespace mongo {
                     return kResourceAvailable;
                 }
 
-                if (isUpgrade(nextLock->mode, mode)) {
-                    if (!alreadyHadLock) {
-                        alreadyHadLock = true;
-                        _stats[slice].incUpgrades();
-                    }
+                if (!foundUpgrade && isUpgrade(nextLock->mode, mode)) {
+                    foundUpgrade = true;
+                    _stats[slice].incUpgrades();
                 }
 
                 // there are new lock acquisitions that are neither downgrades, nor
@@ -560,24 +561,21 @@ namespace mongo {
                 // if we're not an upgrade request, restore this position later
                 firstConflict = nextLock;
             }
+            if (firstConflict && foundUpgrade) {
+                *conflictPosition = nextLock;
+            }
         }
 
-        if (alreadyHadLock) {
-            // upgrading
-
+        if (foundUpgrade) {
             if (nextLock && activeOwners.find(nextLock->requestor) != activeOwners.end()) {
                 // nextLock is also an upgrade
                 _stats[slice].incDeadlocks();
                 throw AbortException();
             }
-            *conflictPosition = nextLock;
-
-            if (NULL == firstConflict)
-                return kResourceAvailable;
-
-            return kResourceUpgradeConflict;
+            return firstConflict ? kResourceUpgradeConflict : kResourceAvailable;
         }
-        else if (firstConflict) {
+
+        if (firstConflict) {
             // restore first conflict position
             nextLock = firstConflict;
         }
@@ -592,12 +590,24 @@ namespace mongo {
             }
 
             // there's a conflict, check for deadlock
+
+            // XXX what if there are several conflicts, the first has no cycle, but the second does?
+
             if (requestor->hasWaiter(nextLock->requestor)) {
                 // the transaction that would block requestor is already blocked by requestor
                 // if requestor waited for nextLockRequest, there would be a deadlock
                 //
                 _stats[slice].incDeadlocks();
-                throw AbortException();
+                Transaction* sacrifice = _chooseTxToAbortUsingPolicy(requestor, nextLock->requestor);
+                if (sacrifice == requestor)
+                    throw AbortException();
+
+                sacrifice->rememberToAbort();
+                sacrifice->wake();
+
+                // Since sacrifice has awakened, it's safe to continue processing a resource conflict.
+                // Sacrifice will eventually release its locks, breaking any cycles
+
             }
             return kResourceConflict;
         }
@@ -628,12 +638,12 @@ namespace mongo {
             return;
         }
 
-        // some type of conflict, insert after confictPosition
+        // some type of conflict
+        verify(conflictPosition || kResourcePolicyConflict == resourceStatus);
 
-        verify(conflictPosition ||
-               kResourcePolicyConflict == resourceStatus ||
-               kResourceUpgradeConflict == resourceStatus);
+        ++lr->sleepCount;
 
+        // insert lr into the queue somewhere after conflictPosition
         if (conflictPosition) {
             conflictPosition = conflictPosition->nextOnResource;
         }
@@ -645,11 +655,17 @@ namespace mongo {
                 _push_back(lr);
         }
         else {
-            _addLockToQueueUsingPolicy(lr, queue, conflictPosition);
+            _addLockToQueueUsingPolicy(lr, conflictPosition);
+            for (LockRequest* nextBlocker = conflictPosition; nextBlocker;
+                 nextBlocker = nextBlocker->nextOnResource) {
+                nextBlocker->requestor->addWaiter(lr->requestor);
+                ++lr->sleepCount;
+            }
+            
         }
 
         // set remaining incompatible requests as lr's waiters
-        _addWaiters(lr, conflictPosition, NULL);
+        _addWaiters(lr, lr->nextOnResource, NULL);
 
 
         // call the sleep notification function once
@@ -682,15 +698,17 @@ namespace mongo {
             lr->requestor->wait(guard);
             _stats[lr->slice].incTimeBlocked(timer.millis());
         }
+
+        if (lr->requestor->shouldAbort()) throw AbortException();
     }
 
     /*
-     * called only when there are conflicting LockRequests
-     * positions a lock request (lr) in a queue at or after position
+     * adds a lock request @lr after the @position of the first conflict.
+     * While @lr will always be added after @position, its exact location
+     * may depend on the priority of @lr's requesting transaction and the
+     * lock manager's current policy.
      */
-    void LockManager::_addLockToQueueUsingPolicy(LockRequest* lr,
-                                                 LockRequest* queue,
-                                                 LockRequest* position) {
+    void LockManager::_addLockToQueueUsingPolicy(LockRequest* lr, LockRequest* position) {
 
         if (position == NULL) {
             _push_back(lr);
@@ -763,6 +781,42 @@ namespace mongo {
                 }
             }
         }
+    }
+
+    Transaction* LockManager::_chooseTxToAbortUsingPolicy(Transaction* requestor,
+                                                          Transaction* end) {
+        Transaction* goner = NULL;
+        set<Transaction*> cycleMembers = requestor->getCycleMembers(end);
+        for (set<Transaction*>::iterator it = cycleMembers.begin();
+             it != cycleMembers.end(); ++it) {
+            Transaction* nextCycleMember = *it;
+            if (nextCycleMember->isReader()) continue;
+            if (goner == NULL) {
+                goner = nextCycleMember;
+                continue;
+            }
+            if (nextCycleMember->getPriority() < goner->getPriority()) {
+                goner = nextCycleMember;
+                continue;
+            }
+            if (nextCycleMember->getPriority() > goner->getPriority()) {
+                continue;
+            }
+            switch (_policy) {
+            case kPolicyOldestTxFirst:
+                if (nextCycleMember->getTxId() > goner->getTxId())
+                    goner = nextCycleMember;
+                break;
+            case kPolicyBlockersFirst:
+                if (nextCycleMember->numWaiters() > goner->numWaiters())
+                    goner = nextCycleMember;
+                break;
+            default:
+                return goner;
+            }
+                
+        }
+        return goner;
     }
 
     bool LockManager::_comesBeforeUsingPolicy(const Transaction* requestor,
@@ -898,6 +952,12 @@ namespace mongo {
             // wake up sleepy heads
             if (nextLock->shouldAwake()) {
                 nextLock->requestor->wake();
+                if (nextLock->prevOnResource && nextLock->prevOnResource->isBlocked()) {
+                    // reposition nextLock to active section of the queue
+                    _removeFromResourceQueue(nextLock);
+                    nextLock->nextOnResource = _resourceLocks[nextLock->slice][nextLock->resId];
+                    _resourceLocks[nextLock->slice][nextLock->resId] = nextLock;
+                }
             }
         }
 

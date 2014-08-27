@@ -53,10 +53,13 @@ using std::stringstream;
 
 namespace mongo {
 
+    using namespace Locking;
+
     Transaction::Transaction(LockManager& lm, unsigned txId, int priority)
         : _lm(lm)
         , _txId(txId)
         , _scopeLevel(0)
+        , _readerOnly(true)
         , _priority(priority)
         , _locks(NULL) {
         _lm.registerTransaction(this);
@@ -74,6 +77,8 @@ namespace mongo {
     void Transaction::exitScope() {
         invariant(_scopeLevel);
         if (--_scopeLevel > 0) return;
+
+        _readerOnly = true;
 
         // relinquish locks acquiredInScope that have been released; and
         // complain about locks acquiredInScope that have not been released
@@ -111,6 +116,9 @@ namespace mongo {
             _locks->prevOfTransaction = lr;
         }
         _locks = lr;
+
+        if (_readerOnly && _scopeLevel>0 && kExclusive == lr->mode)
+            _readerOnly = false;
     }
 
     void Transaction::removeLock(LockRequest* lr) {
@@ -136,7 +144,7 @@ namespace mongo {
         _waiters.insert(waiter->_waiters.begin(), waiter->_waiters.end());
     }
 
-    bool Transaction::hasWaiter(const Transaction* other) const {
+    bool Transaction::hasWaiter(Transaction* other) const {
         boost::mutex::scoped_lock lk(_txMutex);
         return _waiters.find(other) != _waiters.end();
     }
@@ -151,16 +159,30 @@ namespace mongo {
         _waiters.clear();
     }
 
-    void Transaction::removeWaiterAndItsWaiters(const Transaction* other) {
+    void Transaction::removeWaiterAndItsWaiters(Transaction* other) {
         boost::mutex::scoped_lock lk(_txMutex);
-        multiset<const Transaction*>::iterator otherWaiter = _waiters.find(other);
+        multiset<Transaction*>::iterator otherWaiter = _waiters.find(other);
         if (otherWaiter == _waiters.end()) return;
         _waiters.erase(_waiters.find(other));
         boost::mutex::scoped_lock other_lk(other->_txMutex);
-        multiset<const Transaction*>::iterator nextOtherWaiters = other->_waiters.begin();
+        multiset<Transaction*>::iterator nextOtherWaiters = other->_waiters.begin();
         for(; nextOtherWaiters != other->_waiters.end(); ++nextOtherWaiters) {
             _waiters.erase(*nextOtherWaiters);
         }
+    }
+
+    set<Transaction*> Transaction::getCycleMembers(Transaction* end) {
+        set<Transaction*> result;
+        result.insert(this);
+        result.insert(end);
+        for (multiset<Transaction*>::iterator it = _waiters.begin();
+             it != _waiters.end(); ++it) {
+            Transaction* nextWaiter = *it;
+            if (nextWaiter->hasWaiter(end)) {
+                result.insert(nextWaiter);
+            }
+        }
+        return result;
     }
 
     string Transaction::toString() const {
@@ -182,7 +204,7 @@ namespace mongo {
 
         result << ">,waiters: {";
         bool firstWaiter=true;
-        for (multiset<const Transaction*>::const_iterator nextWaiter = _waiters.begin();
+        for (multiset<Transaction*>::const_iterator nextWaiter = _waiters.begin();
              nextWaiter != _waiters.end(); ++nextWaiter) {
             if (firstWaiter) firstWaiter=false;
             else result << ",";
