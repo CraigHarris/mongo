@@ -333,9 +333,6 @@ namespace mongo {
          * throws AbortException on deadlock
          */
         void _acquireInternal(LockRequest* lr,
-                              LockRequest* queue,
-                              LockRequest* conflictPosition,
-                              ResourceStatus resourceStatus,
                               Notifier* notifier,
                               boost::unique_lock<boost::mutex>& guard);
 
@@ -352,11 +349,16 @@ namespace mongo {
         /**
          * when inserting a new lock request into the middle of a queue,
          * add any remaining incompatible requests in the queue to the
-         * new lock request's set of waiters... for future deadlock detection
+         * new lock request's set of waiters... checking for deadlock
          */
-        void _addWaiters(LockRequest* blocker,
-                         LockRequest* nextLock,
-                         LockRequest* lastLock);
+        void _addWaiters(LockRequest* blocker);
+
+        /**
+         * choose a member of a dependency cycle to abort, using policy
+         * if that's requestor, throw.  Otherwise, wake the sacrifice.
+         */
+        void _avoidDeadlock(Transaction* requestor, Transaction* blocker,
+                            unsigned slice /* for stats */);
 
         /**
          * in the cycle of transactions containing @requestor and @end,
@@ -405,15 +407,17 @@ namespace mongo {
 
 	/**
 	 * @return lock conflict status of the requested resource (@resId)
-	 * set @conflictPosition to the first lock that conflicts if any
-	 * update status variables
+	 * set @firstConflict to the first lock that conflicts if any
+         * set @lastActive to the last active lock if any
+	 * update stats
 	 */
 	ResourceStatus _getConflictInfo(Transaction* requestor,
                                         const Locking::LockMode& mode,
                                         const ResourceId& resId,
                                         unsigned slice,
                                         LockRequest* queue,
-                                        LockRequest** conflictPosition /*out*/);
+                                        LockRequest** firstConflict /*out*/,
+                                        LockRequest** lastActive /* out */);
 
         /**
          * maintain the resourceLocks queue

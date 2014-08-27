@@ -138,15 +138,15 @@ namespace mongo {
         if (lr->heapAllocated) delete lr;
     }
 
-    void Transaction::addWaiter(Transaction* waiter) {
-        boost::mutex::scoped_lock lk(_txMutex);
-        _waiters.insert(waiter);
-        _waiters.insert(waiter->_waiters.begin(), waiter->_waiters.end());
-    }
-
-    bool Transaction::hasWaiter(Transaction* other) const {
-        boost::mutex::scoped_lock lk(_txMutex);
-        return _waiters.find(other) != _waiters.end();
+    bool Transaction::addWaiter(Transaction* waiter) {
+        boost::mutex::scoped_lock myLock(_txMutex);
+        boost::mutex::scoped_lock waiterLock(waiter->_txMutex);
+        if (waiter->_waiters.find(this) != waiter->_waiters.end()) {
+            return true; // deadlock case
+        }
+        this->_waiters.insert(waiter);
+        this->_waiters.insert(waiter->_waiters.begin(), waiter->_waiters.end());
+        return false;
     }
 
     size_t Transaction::numWaiters() const {
@@ -178,7 +178,7 @@ namespace mongo {
         for (multiset<Transaction*>::iterator it = _waiters.begin();
              it != _waiters.end(); ++it) {
             Transaction* nextWaiter = *it;
-            if (nextWaiter->hasWaiter(end)) {
+            if (nextWaiter->_waiters.find(end) != nextWaiter->_waiters.end()) {
                 result.insert(nextWaiter);
             }
         }

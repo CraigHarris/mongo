@@ -98,6 +98,11 @@ namespace mongo {
         // allocate LockRequests on the stack.
         bool heapAllocated;
 
+        // LockManager::acquire may allocate a LockRequest before
+        // checking to see if the lock is already acquired. It is
+        // marked isTentative and deleted if already acquired.
+        bool isTentative;
+
         // lock requests are chained by their resource
         LockRequest* nextOnResource;
         LockRequest* prevOnResource;

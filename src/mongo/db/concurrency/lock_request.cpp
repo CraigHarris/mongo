@@ -61,6 +61,7 @@ namespace mongo {
         , count(1)
         , sleepCount(0)
         , heapAllocated(heapAllocated)
+        , isTentative(false)
         , nextOnResource(NULL)
         , prevOnResource(NULL)
         , nextOfTransaction(NULL)

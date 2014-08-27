@@ -91,11 +91,11 @@ namespace mongo {
 	void addLock(LockRequest* lr);
 
         /**
-         * waiter functions
+         * @return true if adding waiter would deadlock
+         * otherwise add waiter and its waiters to this transaction
          */
-        void addWaiter(Transaction* waiter);
+        bool addWaiter(Transaction* waiter);
         size_t numWaiters() const;
-        bool hasWaiter(Transaction* other) const;
         void removeWaiterAndItsWaiters(Transaction* other);
         void removeAllWaiters();
 

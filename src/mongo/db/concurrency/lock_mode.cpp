@@ -150,6 +150,8 @@ namespace mongo {
             case kExclusive:
                 return false;
             }
+
+            invariant(false); // unreachable
         }
 
         /**
