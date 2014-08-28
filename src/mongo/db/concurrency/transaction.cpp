@@ -140,8 +140,15 @@ namespace mongo {
     }
 
     bool Transaction::addWaiter(Transaction* waiter) {
-        boost::mutex::scoped_lock myLock(_txMutex);
-        boost::mutex::scoped_lock waiterLock(waiter->_txMutex);
+
+        // need locks on both this Tx and waiter
+
+        Transaction* firstToLock = (*this < *waiter) ? this : waiter;
+        boost::mutex::scoped_lock firstLock(firstToLock->_txMutex);
+
+        Transaction* nextToLock = (firstToLock == this) ? waiter : this;
+        boost::mutex::scoped_lock nextLock(nextToLock->_txMutex);
+
         if (waiter->_waiters.find(this) != waiter->_waiters.end()) {
             return true; // deadlock case
         }
@@ -161,11 +168,18 @@ namespace mongo {
     }
 
     void Transaction::removeWaiterAndItsWaiters(Transaction* other) {
-        boost::mutex::scoped_lock lk(_txMutex);
+
+        // need locks on both this Tx and other
+
+        Transaction* firstToLock = (*this < *other) ? this : other;
+        boost::mutex::scoped_lock firstLock(firstToLock->_txMutex);
+
+        Transaction* nextToLock = (firstToLock == this) ? other : this;
+        boost::mutex::scoped_lock nextLock(nextToLock->_txMutex);
+
         multiset<Transaction*>::iterator otherWaiter = _waiters.find(other);
         if (otherWaiter == _waiters.end()) return;
         _waiters.erase(_waiters.find(other));
-        boost::mutex::scoped_lock other_lk(other->_txMutex);
         multiset<Transaction*>::iterator nextOtherWaiters = other->_waiters.begin();
         for(; nextOtherWaiters != other->_waiters.end(); ++nextOtherWaiters) {
             _waiters.erase(*nextOtherWaiters);
@@ -173,6 +187,7 @@ namespace mongo {
     }
 
     set<Transaction*> Transaction::getCycleMembers(Transaction* end) {
+        boost::mutex::scoped_lock lk(_txMutex);
         set<Transaction*> result;
         result.insert(this);
         result.insert(end);
