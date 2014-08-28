@@ -211,6 +211,11 @@ public:
         ASSERT(ACQUIRED == rsp->rspCode);
     }
 
+    void aborted() {
+        TxResponse* rsp = _rsp.consume();
+        ASSERT(ABORTED == rsp->rspCode);
+    }
+
     void setPolicy(const LockManager::Policy& policy, const TxRsp& rspCode) {
         _cmd.post(POLICY, _tx.getTxId(), kShared, ResourceId(static_cast<uint64_t>(0)), policy);
         TxResponse* rsp = _rsp.consume();
@@ -787,13 +792,16 @@ TEST(LockManagerTest, TxSimpleDeadlocks) {
     //
 
     // simple deadlock test 4: reader deadlocks
-    a4.acquire(kShared, r2, ACQUIRED);
-    t1.acquire(kExclusive, r1, ACQUIRED);
-    t1.acquire(kExclusive, r2, BLOCKED);
-    a4.acquire(kShared, r1, ABORTED);
+    t1.enterScope();
+    t1.exitScope(); // clear t1._readerOnly
+    t1.acquire(kShared, r2, ACQUIRED);
+    a4.acquire(kExclusive, r1, ACQUIRED);
+    a4.acquire(kExclusive, r2, BLOCKED);
+    t1.acquire(kShared, r1, BLOCKED); // forms a cycle, but we don't abort readers
+    a4.aborted();
     t1.wakened();
-    t1.release(kExclusive, r2);
-    t1.release(kExclusive, r1);
+    t1.release(kShared, r2);
+    t1.release(kShared, r1);
 
     // simple deadlock test 5: writer deadlocks
     a5.acquire(kExclusive, r2, ACQUIRED);

@@ -460,20 +460,24 @@ namespace mongo {
 
         if (firstConflict) {
             // we know lr conflicts with this
+            bool wouldDeadlock = firstConflict->requestor->addWaiter(lr->requestor);
+            if (wouldDeadlock) {
+                // choose some transaction to abort, not necessarily this one
+                _avoidDeadlock(lr->requestor, firstConflict->requestor, lr->slice);
+            }
             ++lr->sleepCount;
-            firstConflict->requestor->addWaiter(lr->requestor);
         }
 
         // 
         for (LockRequest* nextLock = firstConflict->nextOnResource; nextLock != lr;
              nextLock = nextLock->nextOnResource) {
             if (!isCompatible(nextLock->mode, lr->mode)) {
-                ++lr->sleepCount;
                 bool wouldDeadlock = nextLock->requestor->addWaiter(lr->requestor);
                 if (wouldDeadlock) {
                     // choose some transaction to abort, not necessarily this one
                     _avoidDeadlock(lr->requestor, nextLock->requestor, lr->slice);
                 }
+                ++lr->sleepCount;
             }
         }
 
@@ -499,9 +503,10 @@ namespace mongo {
             Timer timer;
             lr->requestor->wait(guard);
             _stats[lr->slice].incTimeBlocked(timer.millis());
+            if (lr->requestor->shouldAbort()) {
+                throw AbortException();
+            }
         }
-
-        if (lr->requestor->shouldAbort()) throw AbortException();
     }
 
     /*
@@ -586,12 +591,12 @@ namespace mongo {
              nextLock=nextLock->nextOnResource) {
             invariant(nextLock->isBlocked());
             if (! isCompatible(blocker->mode, nextLock->mode)) {
-                ++nextLock->sleepCount;
                 bool wouldDeadlock = blocker->requestor->addWaiter(nextLock->requestor);
                 if (wouldDeadlock) {
                     // choose some transaction to abort, not necessarily this one
                     _avoidDeadlock(blocker->requestor, nextLock->requestor, blocker->slice);
                 }
+                ++nextLock->sleepCount;
             }
         }
     }
@@ -637,10 +642,13 @@ namespace mongo {
                 if (nextCycleMember->numWaiters() > goner->numWaiters())
                     goner = nextCycleMember;
                 break;
+            case kPolicyFirstCome:
+                if (requestor == nextCycleMember)
+                    return nextCycleMember;
+                break;
             default:
                 return goner;
             }
-                
         }
         return goner;
     }
@@ -733,9 +741,9 @@ namespace mongo {
                                                               unsigned slice,
                                                               LockRequest* nextLock,
                                                               LockRequest** firstConflict,
-                                                              LockRequest** firstBlocked) {
+                                                              LockRequest** lastActive) {
         *firstConflict = NULL;
-        *firstBlocked = NULL;
+        *lastActive = NULL;
 
         _stats[slice].incRequests();
 
@@ -751,6 +759,7 @@ namespace mongo {
 
                 // since we're active, nextLock must also be active
                 invariant(nextLock->isActive());
+                *lastActive = nextLock;
 
                 if (nextLock->matches(requestor, mode, resId)) {
                     // we've already locked the resource in the requested mode
@@ -778,8 +787,8 @@ namespace mongo {
 
             // next lock owner != requestor
 
-            if (NULL == *firstBlocked) {
-                *firstBlocked = nextLock;
+            if (nextLock->isActive()) {
+                *lastActive = nextLock;
             }
 
             if (NULL == *firstConflict && !isCompatible(nextLock->mode, mode)) {
@@ -799,7 +808,13 @@ namespace mongo {
             return *firstConflict ? kResourceUpgradeConflict : kResourceAvailable;
         }
 
-        return (*firstConflict) ? kResourceConflict : kResourceAvailable;
+        if (*firstConflict) {
+            if ((*firstConflict)->isActive() ) return kResourceConflict;
+            if (_comesBeforeUsingPolicy(requestor, mode, *firstConflict)) return kResourceAvailable;
+            return kResourceConflict;
+        }
+
+        return kResourceAvailable;
     }
 
     /**

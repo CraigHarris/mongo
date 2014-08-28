@@ -59,6 +59,7 @@ namespace mongo {
         : _lm(lm)
         , _txId(txId)
         , _scopeLevel(0)
+        , _shouldAbort(false)
         , _readerOnly(true)
         , _priority(priority)
         , _locks(NULL) {
@@ -117,7 +118,7 @@ namespace mongo {
         }
         _locks = lr;
 
-        if (_readerOnly && _scopeLevel>0 && kExclusive == lr->mode)
+        if (_readerOnly && kExclusive == lr->mode)
             _readerOnly = false;
     }
 
