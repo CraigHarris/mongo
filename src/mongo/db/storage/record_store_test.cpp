@@ -527,6 +527,86 @@ private:
     boost::thread _thr;
 };
 
+/*
+// generator: produce set of sequences of operations
+//    rules: iterator functions calls must be preceded by getIterator call
+//           kIteratorGetNext must follow test for kIteratorEof?
+//           kBegin then kCommit then kEnd
+
+hand crafted input:
+    before first insert, numRecords==0;
+    after insert
+        numRecords incremented
+        dataFor matches inserted record
+        iterator yields inserted record
+    after delete
+        numRecords decremented
+        iterator doesn't find record
+    after update
+        numRecords unchanged
+        iterator finds new record and not old
+    no changes if commit not called
+
+// random_shuffle: takes set of sequences of operations, produces randomized sequence
+// power_shuffle: takes set of sequences of operations, produces power-set of all sequences
+// executor: takes sequence, executes
+// driver: 
+//    take set<sequence<op>>, 
+//    execute each sequence sequentially on one thread, recording results
+//    if cardinality low enough, call call power_shuffle and compare results to sequential results
+//    else call random_shuffle and compare results to sequential results
+*/
+
+class Operation {
+private:
+    unsigned txn;
+    TxRequest req;
+    TxResponse rsp;
+};
+
+class WorkLoadDescription {
+private:
+    unsigned numWorkers;
+    unsigned initialNumDocs;
+};
+
+set<vector<Operation> > generate(const WorkLoadDescription& desc) {
+}
+
+vector<Operation> random_shuffle(const set<vector<Operation> >& sequences) {
+}
+
+vector<Operation> power_shuffle(const set<vector<Operation> >& sequences) {
+}
+
+void execute(const WorkLoadDescription& wld, const vector<Operation>& schedule) {
+    vector<ClientTransaction*> workers;
+    for(unsigned ix=0; ix < wld.getNumWorkers(); ++ix) {
+        workers.push_back(new ClientTransaction(wld.getRecordStore()));
+    }
+    for(vector<Operation>::iterator it = schedule.begin(); it != schedule.end(); ++it) {
+        try {
+            Operation& op = *it;
+            workers[op.getTxn()].?invoke?(op.req);
+        } catch (const LockManager::AbortException& err) {
+            workers[(*it).getTxn()]->abort();
+        }
+    }
+    for (unsigned ix=0; ix < wld.getNumWorkers(); ++ix) {
+        ClientTransaction* nextWorker = workers[op.getTxn()];
+        if (nextWorker->isAlive()) {
+            nextWorker->quit();
+        }
+        delete nextWorker;
+    }
+}
+
+void driver(const WorkLoadDescription& wld) {
+    set<vector<Operation> > workload = generate(wld);
+    vector<Operation> schedule = random_shuffle(workload);
+    execute(wld, schedule);
+}
+
 TEST(RecordStoreTest, RSBasic) {
 }
 
