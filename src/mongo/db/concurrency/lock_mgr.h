@@ -99,9 +99,6 @@ namespace mongo {
             kResourceAvailable,      // requested resource is available. no waiting
             kResourceConflict,       // requested resource is in use by another transaction
             kResourcePolicyConflict, // requested mode blocked by READER/kPolicyWritersOnly policy
-            kResourceUpgradeConflict // requested resource was previously acquired for shared use
-                                     // now requested for exclusive use, but there are other shared
-                                     // users, so this request must wait.
         };
 
         /**
@@ -300,13 +297,14 @@ namespace mongo {
         LockStats getStats() const;
 
         /**
-         * slices the space of ResourceIds and TransactionIds into
-         * multiple partitions that can be separately guarded to
-         * spread the cost of mutex locking.
+         * slices the space of ResourceIds into multiple partitions that
+         * can be separately guarded to spread the cost of mutex locking.
          */
         static unsigned partitionResource(const ResourceId& resId);
-        static unsigned partitionTransaction(unsigned txId);
 
+        /**
+         * track transactions, for shutdown and possibly flush
+         */
         void registerTransaction(const Transaction* tx);
         void unregisterTransaction(const Transaction* tx);
 

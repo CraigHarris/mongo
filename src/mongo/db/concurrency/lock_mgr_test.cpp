@@ -991,21 +991,19 @@ TEST(LockManagerTest, TxUpgrade) {
     t1.wakened();
     t1.release(kShared, r1);
     t1.release(kExclusive, r1);
-#if 0
+
     // failure to upgrade
     a3.acquire(kShared, r1, ACQUIRED);
     t2.acquire(kShared, r1, ACQUIRED);
-    a3.acquire(kExclusive, r1, BLOCKED);
-    t1.acquire(kShared, r1, ACQUIRED);
+    a3.acquire(kExclusive, r1, BLOCKED); // a3 blocked on t2
+    t1.acquire(kShared, r1, ACQUIRED); // a3 also blocked on t1
     t2.release(kShared, r1); // a3 still blocked on t1
     t1.acquire(kExclusive, r1, BLOCKED); // cycle
     a3.aborted(); // because it's newer
     t1.wakened();
     t1.release(kExclusive, r1);
     t1.release(kShared, r1);
-#else
-    a3.quit();
-#endif
+
     t1.quit();
     t2.quit();
     t3.quit();

@@ -397,12 +397,6 @@ namespace mongo {
         _activeTransactions.erase(tx);
     }
 
-#ifdef REGISTER_TRANSACTIONS
-    unsigned LockManager::partitionTransaction(unsigned xid) {
-        return xid % kNumTransactionPartitions;
-    }
-#endif
-
     void LockManager::_push_back(LockRequest* lr) {
         LockRequest* nextLock = _findQueue(lr->slice, lr->resId);
         if (NULL == nextLock) {
@@ -470,6 +464,7 @@ namespace mongo {
 
             for (LockRequest* nextLock = firstConflict->nextOnResource; nextLock != lr;
                  nextLock = nextLock->nextOnResource) {
+                if (nextLock->requestor == lr->requestor) continue; // Tx can't conflict with itself
                 if (!isCompatible(nextLock->mode, lr->mode)) {
                     bool wouldDeadlock = nextLock->requestor->addWaiter(lr->requestor);
                     if (wouldDeadlock) {
@@ -589,6 +584,10 @@ namespace mongo {
     void LockManager::_addWaiters(LockRequest* blocker) {
         for (LockRequest* nextLock=blocker->nextOnResource; nextLock;
              nextLock=nextLock->nextOnResource) {
+
+            // Tx can't conflict with itself
+            if (blocker->requestor == nextLock->requestor) continue;
+
             invariant(nextLock->isBlocked());
             if (! isCompatible(blocker->mode, nextLock->mode)) {
                 bool wouldDeadlock = blocker->requestor->addWaiter(nextLock->requestor);
@@ -805,7 +804,6 @@ namespace mongo {
 
         if (foundUpgrade) {
             _stats[slice].incUpgrades();
-            return *firstConflict ? kResourceUpgradeConflict : kResourceAvailable;
         }
 
         if (*firstConflict) {
