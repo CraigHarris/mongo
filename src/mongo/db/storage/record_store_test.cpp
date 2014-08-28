@@ -557,6 +557,29 @@ hand crafted input:
 //    else call random_shuffle and compare results to sequential results
 */
 
+/*
+    idea 1: Let records be array of ints, with different workers updating different indices
+    idea 2: update op has probability of modifying Nth field
+            if obj has < N fields, add new fields until Nth is reached
+            if updating int field, operation should be non-commutative
+                suppose each worker has incrementing id>0
+                F(oldValue,id) = (oldValue+id)^2
+                F(F(1,1),2) = 36
+                F(F(1,2),1) = 100
+
+    insert: generate random #fields < 10 and values < 10;
+    update: limit to 24 workers
+
+    if new size of record > original dataSize, record will move
+*/
+
+class Context {
+private:
+    map<DiskLoc,int> locMap;
+    vector<DiskLoc> locVec;
+    vector<RecordData> data;
+};        
+
 class Operation {
 private:
     unsigned txn;
@@ -569,6 +592,8 @@ private:
     unsigned numWorkers;
     unsigned initialNumDocs;
 };
+
+    
 
 set<vector<Operation> > generate(const WorkLoadDescription& desc) {
 }
