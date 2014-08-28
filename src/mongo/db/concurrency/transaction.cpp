@@ -186,18 +186,38 @@ namespace mongo {
         }
     }
 
+    /* called when this contains end as a member of its _waiters
+     * any of this Tx's waiters that contain end, are candidates
+     * for aborting to break the cycle (along with this and end)
+     */
     set<Transaction*> Transaction::getCycleMembers(Transaction* end) {
-        boost::mutex::scoped_lock lk(_txMutex);
+
+        // start with a (set) copy of _waiters (multiset)
         set<Transaction*> result;
-        result.insert(this);
-        result.insert(end);
-        for (multiset<Transaction*>::iterator it = _waiters.begin();
-             it != _waiters.end(); ++it) {
-            Transaction* nextWaiter = *it;
-            if (nextWaiter->_waiters.find(end) != nextWaiter->_waiters.end()) {
-                result.insert(nextWaiter);
+        {
+            boost::mutex::scoped_lock lk(_txMutex);
+            for (multiset<Transaction*>::iterator it = _waiters.begin();
+                 it != _waiters.end(); ++it) {
+                result.insert(*it);
             }
         }
+
+        // keep end and those waiters whose waiters include end
+        set<Transaction*>::iterator it = result.begin();
+        while (it != result.end()) {
+            Transaction* nextWaiter = *it;
+            if (nextWaiter == end) {
+                it++;
+                continue;
+            }
+            boost::mutex::scoped_lock lk(nextWaiter->_txMutex);
+            if (nextWaiter->_waiters.find(end) == nextWaiter->_waiters.end()) {
+                result.erase(it++);
+            } else {
+                it++;
+            }
+        }
+        result.insert(this);
         return result;
     }
 
