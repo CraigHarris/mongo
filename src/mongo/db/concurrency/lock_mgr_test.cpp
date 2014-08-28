@@ -942,12 +942,12 @@ TEST(LockManagerTest, TxDowngrade) {
 
 TEST(LockManagerTest, TxUpgrade) {
     LockManager lm(LockManager::kPolicyOldestTxFirst);
-    ClientTransaction t1(&lm, 3);
-    ClientTransaction t2(&lm, 4);
-    ClientTransaction t3(&lm, 5);
+    ClientTransaction t1(&lm, 1);
+    ClientTransaction t2(&lm, 2);
+    ClientTransaction t3(&lm, 3);
 
-    ClientTransaction a2(&lm, 1);
-    ClientTransaction a3(&lm, 2);
+    ClientTransaction a2(&lm, 4);
+    ClientTransaction a3(&lm, 5);
 
     ResourceId r1(static_cast<int>(1));
 
@@ -991,18 +991,21 @@ TEST(LockManagerTest, TxUpgrade) {
     t1.wakened();
     t1.release(kShared, r1);
     t1.release(kExclusive, r1);
-
+#if 0
     // failure to upgrade
-    t1.acquire(kShared, r1, ACQUIRED);
-    t2.acquire(kShared, r1, ACQUIRED);
-    t1.acquire(kExclusive, r1, BLOCKED);
     a3.acquire(kShared, r1, ACQUIRED);
-    t2.release(kShared, r1); // t1 still blocked on a3
-    a3.acquire(kExclusive, r1, ABORTED);
+    t2.acquire(kShared, r1, ACQUIRED);
+    a3.acquire(kExclusive, r1, BLOCKED);
+    t1.acquire(kShared, r1, ACQUIRED);
+    t2.release(kShared, r1); // a3 still blocked on t1
+    t1.acquire(kExclusive, r1, BLOCKED); // cycle
+    a3.aborted(); // because it's newer
     t1.wakened();
     t1.release(kExclusive, r1);
     t1.release(kShared, r1);
-
+#else
+    a3.quit();
+#endif
     t1.quit();
     t2.quit();
     t3.quit();
@@ -1210,26 +1213,26 @@ TEST(LockManagerTest, TxOnlyPolicies) {
 TEST(LockManagerTest, TxShutdown) {
     LockManager lm;
     ClientTransaction t1(&lm, 1);
-    ClientTransaction t2(&lm, 2);
     ResourceId r1(static_cast<int>(1));
     ResourceId r2(static_cast<int>(2));
     ResourceId r3(static_cast<int>(3));
     ResourceId r4(static_cast<int>(4));
 
     t1.acquire(kShared, r1, ACQUIRED);
-    lm.shutdown(3000);
+    lm.shutdown(2000);
 
     // t1 can still do work while quiescing
     t1.release(kShared, r1);
     t1.acquire(kShared, r2, ACQUIRED);
-#ifdef TRANSACTION_REGISTRATION
-    // t2 is new and should be refused
+
+    {
+    ClientTransaction t2(&lm, 2);
+    // t2 is new after the shutdown, its requests should be ignored
     t2.acquire(kShared, r3, ABORTED);
-#else
-    t2.quit();
-#endif
+    }
+
     // after the quiescing period, t1's request should be refused
-    sleepsecs(3);
+    sleepsecs(2);
     t1.acquire(kShared, r4, ABORTED);
 }
 }

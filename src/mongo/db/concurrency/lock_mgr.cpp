@@ -106,14 +106,14 @@ namespace mongo {
 
     LockManager::Policy LockManager::getPolicy() const {
         boost::unique_lock<boost::mutex> lk(_mutex);
-        _throwIfShuttingDown();
+        _throwIfShuttingDown(_systemTransaction);
         return _policy;
     }
 
     void LockManager::setPolicy(Transaction* tx, const Policy& policy, Notifier* notifier) {
         if (!useExperimentalDocLocking) return;
 
-        _throwIfShuttingDown();
+        _throwIfShuttingDown(_systemTransaction);
 
         boost::unique_lock<boost::mutex> lk(_mutex);
         
@@ -167,7 +167,7 @@ namespace mongo {
     void LockManager::acquireLock(LockRequest* lr, Notifier* notifier) {
         if (!useExperimentalDocLocking) return;
 
-        _throwIfShuttingDown();
+        _throwIfShuttingDown(lr->requestor);
 
         invariant(lr);
 
@@ -182,7 +182,7 @@ namespace mongo {
                                              Notifier* notifier) {
         if (!useExperimentalDocLocking) return;
 
-        _throwIfShuttingDown();
+        _throwIfShuttingDown(lr->requestor);
 
         invariant(lr);
 
@@ -208,7 +208,7 @@ namespace mongo {
                               Notifier* notifier) {
         if (!useExperimentalDocLocking) return;
 
-        _throwIfShuttingDown();
+        _throwIfShuttingDown(requestor);
 
         unsigned slice = partitionResource(resId);
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
@@ -227,7 +227,7 @@ namespace mongo {
                                          Notifier* notifier) {
         if (!useExperimentalDocLocking) return;
 
-        _throwIfShuttingDown();
+        _throwIfShuttingDown(requestor);
 
         {
             // check that parentId is locked, and return if in same mode as child
@@ -301,7 +301,7 @@ namespace mongo {
 
     LockManager::LockStats LockManager::getStats() const {
         boost::unique_lock<boost::mutex> lk(_mutex);
-        _throwIfShuttingDown();
+        _throwIfShuttingDown(_systemTransaction);
 
         LockStats result;
         for (unsigned ix=0; ix < kNumResourcePartitions; ix++) {
@@ -389,6 +389,7 @@ namespace mongo {
     }
 
     void LockManager::registerTransaction(const Transaction* tx) {
+        if (_shuttingDown) return;
         _activeTransactions.insert(tx);
     }
 
@@ -466,18 +467,17 @@ namespace mongo {
                 _avoidDeadlock(lr->requestor, firstConflict->requestor, lr->slice);
             }
             ++lr->sleepCount;
-        }
 
-        // 
-        for (LockRequest* nextLock = firstConflict->nextOnResource; nextLock != lr;
-             nextLock = nextLock->nextOnResource) {
-            if (!isCompatible(nextLock->mode, lr->mode)) {
-                bool wouldDeadlock = nextLock->requestor->addWaiter(lr->requestor);
-                if (wouldDeadlock) {
-                    // choose some transaction to abort, not necessarily this one
-                    _avoidDeadlock(lr->requestor, nextLock->requestor, lr->slice);
+            for (LockRequest* nextLock = firstConflict->nextOnResource; nextLock != lr;
+                 nextLock = nextLock->nextOnResource) {
+                if (!isCompatible(nextLock->mode, lr->mode)) {
+                    bool wouldDeadlock = nextLock->requestor->addWaiter(lr->requestor);
+                    if (wouldDeadlock) {
+                        // choose some transaction to abort, not necessarily this one
+                        _avoidDeadlock(lr->requestor, nextLock->requestor, lr->slice);
+                    }
+                    ++lr->sleepCount;
                 }
-                ++lr->sleepCount;
             }
         }
 
@@ -901,8 +901,10 @@ namespace mongo {
         if (!_shuttingDown) return;
 
         if (_timer.millis() < _millisToQuiesce) {
-            if (_activeTransactions.find(tx) != _activeTransactions.end())
+            if (_activeTransactions.find(tx) != _activeTransactions.end()) {
+                // honor requests from old transactions during quiescing period
                 return;
+            }
         }
 
         throw AbortException(); // XXX should this be something else? ShutdownException?
