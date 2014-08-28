@@ -40,7 +40,8 @@
 
 namespace mongo {
 
-    OperationContextImpl::OperationContextImpl() : _tx(LockManager::getSingleton(), getCurOp()->opNum()) {
+    OperationContextImpl::OperationContextImpl()
+        : _tx(LockManager::getSingleton(), getCurOp()->opNum()) {
         StorageEngine* storageEngine = getGlobalEnvironment()->getGlobalStorageEngine();
         invariant(storageEngine);
         _recovery.reset(storageEngine->newRecoveryUnit(this));

@@ -50,7 +50,7 @@
  * Resources can be databases, collections, oplogs, records, btree-nodes, key-value pairs,
  * forward/backward pointers, or anything at all that can be unambiguously identified.
  *
- * Resources are acquired by Transactions for some use described by a LoldckMode.
+ * Resources are acquired by Transactions for some use described by a LockMode.
  * A table defines which lock modes are compatible or conflict with other modes. If an
  * acquisition request conflicts with a pre-existing use of a resource, the requesting
  * transaction will block until the original conflicting requests and any new conflicting

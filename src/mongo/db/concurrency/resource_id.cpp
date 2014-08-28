@@ -53,7 +53,6 @@ namespace mongo {
 
     ResourceId::ResourceId(uint64_t resourceId, const void* resourceIdAllocator) {
         size_t result = 0;
-//        uint64_t allocatorId = reinterpret_cast<uint64_t>(resourceIdAllocator);
         boost::hash_combine(result, resourceIdAllocator);
         boost::hash_combine(result, resourceId);
         _rid = result;
