@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <boost/scoped_ptr.hpp>
 #include <boost/thread/condition_variable.hpp>
 #include <boost/thread/mutex.hpp>
 #include <iterator>
@@ -85,6 +86,7 @@ namespace mongo {
          */
         enum Policy {
             kPolicyFirstCome,     // wake the first blocked request in arrival order
+            kPolicyGreedy,        // wake the requestor as soon as possible
             kPolicyOldestTxFirst, // wake the blocked request with the lowest TxId
             kPolicyBlockersFirst, // wake the blocked request which is itself the most blocking
             kPolicyReadersOnly,   // block write requests (used during fsync)
@@ -328,6 +330,9 @@ namespace mongo {
          * main workhorse for acquiring locks on resources, blocking
          * or aborting on conflict
          *
+         * guard is a lock on _resourceMutexes[lr->slice], locked in the caller,
+         * remaining locked upon return.
+         *
          * throws AbortException on deadlock
          */
         void _acquireInternal(LockRequest* lr,
@@ -335,9 +340,9 @@ namespace mongo {
                               boost::unique_lock<boost::mutex>& guard);
 
         /**
-         * adds a lock request @lr after the @position of the first conflict.
-         * While @lr will always be added after @position, its exact location
-         * may depend on the priority of @lr's requesting transaction and the
+         * adds a lock request lr after the position of the first conflict.
+         * While lr will always be added after position, its exact location
+         * may depend on the priority of lr's requesting transaction and the
          * lock manager's current policy.
          *
          * Called by acquireInternal, only when lr conflicts with an existing lock.
@@ -352,15 +357,15 @@ namespace mongo {
         void _addWaiters(LockRequest* blocker);
 
         /**
-         * choose a member of a dependency cycle to abort, using policy
+         * choose a member of a dependency cycle to abort, using policy.
          * if that's requestor, throw.  Otherwise, wake the sacrifice.
          */
         void _avoidDeadlock(Transaction* requestor, Transaction* blocker,
                             unsigned slice /* for stats */);
 
         /**
-         * in the cycle of transactions containing @requestor and @end,
-         * @return the one to abort.  Avoid aborting transactions that
+         * in the cycle of transactions containing requestor and end,
+         * return the one to abort.  Avoid aborting transactions that
          * have only read and not written.  Use priority and policy to
          * pick a loser among the writers.
          */
@@ -369,16 +374,15 @@ namespace mongo {
 
         /**
          * returns true if a newRequest should be honored before an oldRequest according
-         * to the lockManager's policy.  Used by acquire to decide whether a new share request
-         * conflicts with a previous upgrade-to-exclusive request that is blocked.
+         * to the lockManager's policy.
          */
         bool _comesBeforeUsingPolicy(const Transaction* newReqTx,
                                      const Locking::LockMode& newReqMode,
                                      const LockRequest* oldReq) const;
 
         /**
-         * @return the first LockRequest on @containerId, acquired by @requestor,
-         * whose mode is compatible with @contentMode, or NULL otherwise
+         * return the first LockRequest on containerId, acquired by requestor,
+         * whose mode is compatible with contentMode, or NULL otherwise
          */
         LockRequest* _findCompatibleParentLock(const Transaction* requestor,
                                                const Locking::LockMode& contentMode,
@@ -387,10 +391,10 @@ namespace mongo {
 
         /**
          * look for an existing LockRequest that matches the four input params.
-         * if successful, @return kLockFound and set @outLock to the lock request.
-         * otherwise, @return kLockResourceNotFound if @resId is not locked
-         * by @requestor, or kLockModeNotFound if @resId is locked by @requestor
-         * but not in @mode.
+         * if successful, return kLockFound and set outLock to the lock request.
+         * otherwise, return kLockResourceNotFound if resId is not locked
+         * by requestor, or kLockModeNotFound if resId is locked by requestor
+         * but not in mode.
          */
         LockStatus _findLock(const Transaction* requestor,
                              const Locking::LockMode& mode,
@@ -404,11 +408,11 @@ namespace mongo {
         LockRequest* _findQueue(unsigned slice, const ResourceId& resId) const;
 
 	/**
-	 * @return lock conflict status of the requested resource (@resId)
-	 * set @firstConflict to the first lock that conflicts if any
-         * set @lastActive to the last active lock if any
-	 * update stats
-	 */
+         * return lock conflict status of the requested resource (resId)
+         * set firstConflict to the first lock that conflicts if any
+         * set lastActive to the last active lock if any
+         * update stats
+         */
 	ResourceStatus _getConflictInfo(Transaction* requestor,
                                         const Locking::LockMode& mode,
                                         const ResourceId& resId,
@@ -426,7 +430,7 @@ namespace mongo {
 
         /**
          * called by public ::release and internally _releaseTxLocks
-         * assumes caller as acquired a mutex.
+         * assumes caller has acquired a mutex.
          */
         LockStatus _releaseInternal(LockRequest* lr);
 
@@ -441,15 +445,15 @@ namespace mongo {
         // support functions for changing policy to/from read/write only
 
         void _incStatsForMode(const Locking::LockMode& mode) {
-            if (Locking::kShared==mode)
+            if (Locking::kShared == mode)
                 _numCurrentActiveReadRequests.fetchAndAdd(1);
-            else if (Locking::kExclusive==mode)
+            else if (Locking::kExclusive == mode)
                 _numCurrentActiveWriteRequests.fetchAndAdd(1);
         }
         void _decStatsForMode(const Locking::LockMode& mode) {
-            if (Locking::kShared==mode)
+            if (Locking::kShared == mode)
                 _numCurrentActiveReadRequests.fetchAndSubtract(1);
-            else if (Locking::kExclusive==mode)
+            else if (Locking::kExclusive == mode)
                 _numCurrentActiveWriteRequests.fetchAndSubtract(1);
         }
 
@@ -461,12 +465,8 @@ namespace mongo {
 
         // The Policy controls which requests should be honored first.  This is
         // used to guide the position of a request in a list of requests waiting for
-        // a resource.
-        //
-        // XXX At some point, we may want this to also guide the decision of which
-        // transaction to abort in case of deadlock.  For now, the transaction whose
-        // request would lead to a deadlock is aborted.  Since deadlocks are rare,
-        // careful choices may not matter much.
+        // a resource.  Policy is also used to decide which transaction to abort
+        // to break a dependency cycle.
         //
         Policy _policy;
 
@@ -502,7 +502,7 @@ namespace mongo {
         std::set<const Transaction*> _activeTransactions;
 
         // used to track conflicts due to kPolicyReadersOnly or WritersOnly
-        Transaction* _systemTransaction;
+        boost::scoped_ptr<Transaction> _systemTransaction;
 
         // stats
         LockStats _stats[kNumResourcePartitions];

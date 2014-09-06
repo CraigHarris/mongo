@@ -50,7 +50,7 @@ namespace mongo {
     class Transaction {
     public:
 
-        Transaction(LockManager& lm, unsigned txId, int priority=0);
+        Transaction(LockManager* lm, unsigned txId, int priority=0);
         ~Transaction();
 
         /**

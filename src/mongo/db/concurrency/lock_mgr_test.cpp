@@ -181,7 +181,7 @@ public:
     
     ClientTransaction(LockManager* lm, const unsigned& xid)
         : _lm(lm)
-        , _tx(*lm, xid)
+        , _tx(lm, xid)
         , _thr(&ClientTransaction::processCmd, this) { }
 
     virtual ~ClientTransaction() { _thr.join(); }
@@ -290,7 +290,7 @@ TEST(LockManagerTest, TxError) {
     useExperimentalDocLocking = true;
     LockManager lm;
     LockManager::LockStatus status;
-    Transaction tx(lm, 1);
+    Transaction tx(&lm, 1);
     ResourceId r1(static_cast<int>(1));
     ResourceId r2(static_cast<int>(2));
 
@@ -311,7 +311,7 @@ TEST(LockManagerTest, TxError) {
 
 TEST(LockManagerTest, SingleTx) {
     LockManager lm;
-    Transaction t1(lm, 1);
+    Transaction t1(&lm, 1);
     ResourceId r1(static_cast<int>(1));
     LockManager::LockStatus status;
 

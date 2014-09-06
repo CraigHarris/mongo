@@ -79,14 +79,12 @@ namespace mongo {
         , _mutex()
         , _shuttingDown(false)
         , _millisToQuiesce(-1)
-        , _systemTransaction(new Transaction(*this, 0))
+        , _systemTransaction(new Transaction(this, 0))
         , _numCurrentActiveReadRequests(0)
         , _numCurrentActiveWriteRequests(0)
     { }
 
-    LockManager::~LockManager() {
-        delete _systemTransaction;
-    }
+    LockManager::~LockManager() { }
 
     void LockManager::shutdown(const unsigned& millisToQuiesce) {
         if (!useExperimentalDocLocking) return;
@@ -99,21 +97,21 @@ namespace mongo {
         }
 #endif
 
-        _shuttingDown = true;
         _millisToQuiesce = millisToQuiesce;
         _timer.millisReset();
+        _shuttingDown = true;
     }
 
     LockManager::Policy LockManager::getPolicy() const {
         boost::unique_lock<boost::mutex> lk(_mutex);
-        _throwIfShuttingDown(_systemTransaction);
+        _throwIfShuttingDown(_systemTransaction.get());
         return _policy;
     }
 
     void LockManager::setPolicy(Transaction* tx, const Policy& policy, Notifier* notifier) {
         if (!useExperimentalDocLocking) return;
 
-        _throwIfShuttingDown(_systemTransaction);
+        _throwIfShuttingDown(_systemTransaction.get());
 
         boost::unique_lock<boost::mutex> lk(_mutex);
         
@@ -155,7 +153,7 @@ namespace mongo {
 
             if ((this->*numBlockers)() > 0) {
                 if (notifier) {
-                    (*notifier)(_systemTransaction);
+                    (*notifier)(_systemTransaction.get());
                 }
                 do {
                     _policyLock.wait(lk);
@@ -187,13 +185,12 @@ namespace mongo {
         invariant(lr);
 
         {
-            // check that parentId is locked, and return if in same mode as child
+            // check that parentId is locked
             unsigned parentSlice = partitionResource(parentId);
             boost::unique_lock<boost::mutex> lk(_resourceMutexes[parentSlice]);
             LockRequest* parentLock =  _findCompatibleParentLock(lr->requestor, lr->mode,
                                                                  parentId, parentSlice);
             invariant (parentLock);
-            if (parentLock->mode == lr->mode) return;
         }
 
         boost::unique_lock<boost::mutex> lk(_resourceMutexes[lr->slice]);
@@ -210,11 +207,12 @@ namespace mongo {
 
         _throwIfShuttingDown(requestor);
 
-        unsigned slice = partitionResource(resId);
-        boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
-
         LockRequest* lr = new LockRequest(resId, mode, requestor, true);
         lr->isTentative = true;
+
+
+        unsigned slice = partitionResource(resId);
+        boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
         _acquireInternal(lr, notifier, lk);
         _incStatsForMode(mode);
@@ -239,11 +237,11 @@ namespace mongo {
             if (parentLock->mode == mode) return;
         }
 
-        unsigned slice = partitionResource(resId);
-        boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
-
         LockRequest* lr = new LockRequest(resId, mode, requestor, true);
         lr->isTentative = true;
+
+        unsigned slice = partitionResource(resId);
+        boost::unique_lock<boost::mutex> lk(_resourceMutexes[slice]);
 
         _acquireInternal(lr, notifier, lk);
         _incStatsForMode(mode);
@@ -275,33 +273,31 @@ namespace mongo {
     }
 
     /*
-     * release all resource acquired by a transaction, returning the count
+     * relinquish all resources acquired and released by a transaction in a scope.
+     * while in a scope, release/releaseLock calls decrement lock counts, but pend.
      */
-    void LockManager::relinquishScopedTxLocks(LockRequest* locks) {
+    void LockManager::relinquishScopedTxLocks(LockRequest* currentLock) {
         if (!useExperimentalDocLocking) return;
 
-        if (NULL == locks) return;
-
-        LockRequest* nextLock = locks;
-        while (nextLock) {
-            if (!nextLock->acquiredInScope) {
-                nextLock = nextLock->nextOfTransaction;
+        while (currentLock) {
+            if (!currentLock->acquiredInScope) {
+                currentLock = currentLock->nextOfTransaction;
                 continue;
             }
 
-            invariant(0 == nextLock->count);
+            invariant(0 == currentLock->count);
 
-            // _releaseInternal may free nextLock
-            LockRequest* newNextLock = nextLock->nextOfTransaction;
-            boost::unique_lock<boost::mutex> lk(_resourceMutexes[nextLock->slice]);
-            _releaseInternal(nextLock);
-            nextLock = newNextLock;
+            // _releaseInternal may free currentLock
+            LockRequest* nextLock = currentLock->nextOfTransaction;
+            boost::unique_lock<boost::mutex> lk(_resourceMutexes[currentLock->slice]);
+            _releaseInternal(currentLock);
+            currentLock = nextLock;
         }
     }
 
     LockManager::LockStats LockManager::getStats() const {
         boost::unique_lock<boost::mutex> lk(_mutex);
-        _throwIfShuttingDown(_systemTransaction);
+        _throwIfShuttingDown(_systemTransaction.get());
 
         LockStats result;
         for (unsigned ix=0; ix < kNumResourcePartitions; ix++) {
@@ -318,6 +314,9 @@ namespace mongo {
         switch(_policy) {
         case kPolicyFirstCome:
             result << "FirstCome";
+            break;
+        case kPolicyGreedy:
+            result << "Greedy";
             break;
         case kPolicyOldestTxFirst:
             result << "OldestFirst";
@@ -380,8 +379,8 @@ namespace mongo {
 
         _throwIfShuttingDown(holder);
 
-        LockRequest* theLock=NULL;
-        return kLockFound == _findLock(holder, mode, resId, partitionResource(resId), &theLock);
+        LockRequest* unused=NULL;
+        return kLockFound == _findLock(holder, mode, resId, partitionResource(resId), &unused);
     }
 
     unsigned LockManager::partitionResource(const ResourceId& resId) {
@@ -390,10 +389,12 @@ namespace mongo {
 
     void LockManager::registerTransaction(const Transaction* tx) {
         if (_shuttingDown) return;
+        boost::unique_lock<boost::mutex> lk(_mutex);
         _activeTransactions.insert(tx);
     }
 
     void LockManager::unregisterTransaction(const Transaction* tx) {
+        boost::unique_lock<boost::mutex> lk(_mutex);
         _activeTransactions.erase(tx);
     }
 
@@ -449,30 +450,20 @@ namespace mongo {
         }
 
         // some type of conflict
-        verify(firstConflict || kResourcePolicyConflict == resourceStatus);
+        invariant(firstConflict || kResourcePolicyConflict == resourceStatus);
 
         _addLockToQueueUsingPolicy(lr, lastActive);
 
-        if (firstConflict) {
-            // we know lr conflicts with this
-            bool wouldDeadlock = firstConflict->requestor->addWaiter(lr->requestor);
-            if (wouldDeadlock) {
-                // choose some transaction to abort, not necessarily this one
-                _avoidDeadlock(lr->requestor, firstConflict->requestor, lr->slice);
-            }
-            ++lr->sleepCount;
-
-            for (LockRequest* nextLock = firstConflict->nextOnResource; nextLock != lr;
-                 nextLock = nextLock->nextOnResource) {
-                if (nextLock->requestor == lr->requestor) continue; // Tx can't conflict with itself
-                if (!isCompatible(nextLock->mode, lr->mode)) {
-                    bool wouldDeadlock = nextLock->requestor->addWaiter(lr->requestor);
-                    if (wouldDeadlock) {
-                        // choose some transaction to abort, not necessarily this one
-                        _avoidDeadlock(lr->requestor, nextLock->requestor, lr->slice);
-                    }
-                    ++lr->sleepCount;
+        for (LockRequest* nextLock = firstConflict; nextLock && (nextLock != lr);
+             nextLock = nextLock->nextOnResource) {
+            if (nextLock->requestor == lr->requestor) continue; // Tx can't conflict with itself
+            if (!isCompatible(nextLock->mode, lr->mode)) {
+                bool wouldDeadlock = nextLock->requestor->addWaiter(lr->requestor);
+                if (wouldDeadlock) {
+                    // choose some transaction to abort, not necessarily this one
+                    _avoidDeadlock(lr->requestor, nextLock->requestor, lr->slice);
                 }
+                ++lr->numBlockers;
             }
         }
 
@@ -490,7 +481,7 @@ namespace mongo {
         if (kResourcePolicyConflict == resourceStatus) {
             // to facilitate waking once the policy reverts, add requestor to system's waiters
             _systemTransaction->addWaiter(lr->requestor);
-            ++lr->sleepCount;
+            ++lr->numBlockers;
         }
 
         // wait for blocker to release
@@ -505,14 +496,14 @@ namespace mongo {
     }
 
     /*
-     * adds a lock request @lr after the @position of the last active lock
-     * While @lr will always be added after @position, its exact location
-     * may depend on the priority of @lr's requesting transaction and the
+     * adds a lock request lr after the position of the last active lock
+     * While lr will always be added after position, its exact location
+     * may depend on the priority of lr's requesting transaction and the
      * lock manager's current policy.
      */
     void LockManager::_addLockToQueueUsingPolicy(LockRequest* lr, LockRequest* position) {
 
-        if (position == NULL) {
+        if (NULL == position) {
             _push_back(lr);
             return;
         }
@@ -526,9 +517,9 @@ namespace mongo {
         position = position->nextOnResource;
         invariant(position->isBlocked());
 
-        // use lock request's transaction's priority if specified
-        // existing requests are already priority ordered
-        // if priorities are equal, break and use LockManager policy
+        // use lock request's transaction's priority if specified.
+        // existing requests are already priority ordered.
+        // if priorities are equal, break and use LockManager policy.
 
         int txPriority = lr->requestor->getPriority();
         for (; position; position=position->nextOnResource) {
@@ -542,43 +533,50 @@ namespace mongo {
                 return;
             }
         }
-        if (txPriority) {
-            _push_back(lr);
-            return;
-        }
 
         // use LockManager's default policy
-        switch (_policy) {
-        case kPolicyFirstCome:
-            _push_back(lr);
-            return;
-        case kPolicyOldestTxFirst:
-            for (; position; position=position->nextOnResource) {
+        LockRequest* prevPosition = position;
+        while (position && (lr->requestor->getPriority() == position->requestor->getPriority())) {
+            switch (_policy) {
+            case kPolicyFirstCome:
+                break;
+            case kPolicyGreedy:
+                if (isCompatible(lr->mode, position->mode) || position->isBlocked()) {
+                    position->insert(lr);
+                    return;
+                }
+                break;
+            case kPolicyOldestTxFirst:
                 if (*lr->requestor < *position->requestor &&
                     (isCompatible(lr->mode, position->mode) || position->isBlocked())) {
                     // smaller xid is older, so queue it before
                     position->insert(lr);
                     return;
                 }
-            }
-            break;
-        case kPolicyBlockersFirst: {
-            size_t lrNumWaiters = lr->requestor->numWaiters();
-            for (; position; position=position->nextOnResource) {
+                break;
+            case kPolicyBlockersFirst: {
+                size_t lrNumWaiters = lr->requestor->numWaiters();
                 size_t nextRequestNumWaiters = position->requestor->numWaiters();
                 if (lrNumWaiters > nextRequestNumWaiters &&
                     (isCompatible(position->mode,lr->mode) || position->isBlocked())) {
                     position->insert(lr);
                     return;
                 }
+                break;
             }
-            break;
-        }
-        default:
-            break;
+            default:
+                break;
+            }
+            prevPosition = position;
+            position= position->nextOnResource;            
         }
 
-        _push_back(lr);
+        if (position)
+            position->append(lr);
+        else if (prevPosition)
+            prevPosition->append(lr);
+        else
+            _push_back(lr);
     }
 
     void LockManager::_addWaiters(LockRequest* blocker) {
@@ -595,7 +593,7 @@ namespace mongo {
                     // choose some transaction to abort, not necessarily this one
                     _avoidDeadlock(blocker->requestor, nextLock->requestor, blocker->slice);
                 }
-                ++nextLock->sleepCount;
+                ++nextLock->numBlockers;
             }
         }
     }
@@ -637,6 +635,10 @@ namespace mongo {
                 if (nextCycleMember->getTxId() > goner->getTxId())
                     goner = nextCycleMember;
                 break;
+            case kPolicyGreedy:
+                if (requestor != nextCycleMember)
+                    return nextCycleMember; 
+                break;
             case kPolicyBlockersFirst:
                 if (nextCycleMember->numWaiters() > goner->numWaiters())
                     goner = nextCycleMember;
@@ -670,6 +672,8 @@ namespace mongo {
         switch (_policy) {
         case kPolicyFirstCome:
             return false;
+        case kPolicyGreedy:
+            return isUpgrade(mode, oldRequest->mode);
         case kPolicyOldestTxFirst:
             return *requestor < *oldRequest->requestor;
         case kPolicyBlockersFirst: {

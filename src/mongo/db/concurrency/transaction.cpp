@@ -55,8 +55,8 @@ namespace mongo {
 
     using namespace Locking;
 
-    Transaction::Transaction(LockManager& lm, unsigned txId, int priority)
-        : _lm(lm)
+    Transaction::Transaction(LockManager* lm, unsigned txId, int priority)
+        : _lm(*lm)
         , _txId(txId)
         , _scopeLevel(0)
         , _shouldAbort(false)

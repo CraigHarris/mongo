@@ -70,7 +70,7 @@ namespace mongo {
         // transaction that made this request (not owned)
         Transaction* requestor;
 
-        // shared or exclusive use
+        // purpose for which the resource is requested
         const Locking::LockMode mode;
 
         // resource requested
@@ -92,7 +92,7 @@ namespace mongo {
 
         // number of existing things blocking this request
         // usually preceding requests on the queue, but also policy
-        size_t sleepCount;
+        size_t numBlockers;
 
         // ResourceLock classes (see below) using the RAII pattern
         // allocate LockRequests on the stack.

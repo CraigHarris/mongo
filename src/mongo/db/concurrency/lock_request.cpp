@@ -59,7 +59,7 @@ namespace mongo {
         , slice(LockManager::partitionResource(resId))
         , acquiredInScope(tx->inScope())
         , count(1)
-        , sleepCount(0)
+        , numBlockers(0)
         , heapAllocated(heapAllocated)
         , isTentative(false)
         , nextOnResource(NULL)
@@ -90,20 +90,20 @@ namespace mongo {
                << ",mode:" << mode
                << ",resId:" << resId.toString()
                << ",count:" << count
-               << ",sleepCount:" << sleepCount
+               << ",numBlockers:" << numBlockers
                << ">";
         return result.str();
     }
 
     bool LockRequest::isBlocked() const {
-        return sleepCount > 0;
+        return numBlockers > 0;
     }
 
     bool LockRequest::shouldAwake() {
         // no evidence of underflow, but protect here
-        if (0 == sleepCount) return true;
+        if (0 == numBlockers) return true;
 
-        return 0 == --sleepCount;
+        return 0 == --numBlockers;
     }
 
     void LockRequest::insert(LockRequest* lr) {
