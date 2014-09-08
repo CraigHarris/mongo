@@ -35,11 +35,6 @@
  * buffers.  The driver thread sends requests to ClientTransaction threads using a
  * TxCommandBuffer, and waits for responses in a TxResponseBuffer. This protocol
  * allows precise control over timing.
- *
- * The producer/consumer buffer is possibly overkill. At present there is only
- * one producer and one consumer using any one buffer.  Also, the current set of
- * tests are 'lock-step', with the driver never issuing more than one command
- * before waiting for a response.
  */
 
 #include <boost/scoped_ptr.hpp>
@@ -437,6 +432,8 @@ public:
     void quit() {
         _cmd.post(kQuit);
     }
+
+    
     
     // these are run within the client threads
     void processCmd() {
@@ -527,11 +524,59 @@ private:
     boost::thread _thr;
 };
 
+// captures ongoing state of a test run
+// can only access disk locs that are in the Context
+class Context {
+private:
+    map<DiskLoc,int> locMap;
+    vector<DiskLoc> locVec;
+    vector<RecordData> data;
+};
+
+/*
+
+  WriteCommand:= kDelete DiskLoc
+               | kUpdateMove DiskLoc ...
+               | kUpdateInPlace DiskLoc ...
+               | kInsert ...;
+
+  ReadCommand:= kDataFor
+              | kNumRecords
+              | kDataSize
+              | Iterator
+
+  Iterator:= kGetIterator IteratorCommand
+
+  IteratorCommand:= kIteratorEof 
+                  | kIteratorEof kIteratorCurr kIteratorGetNext
+                  | kIteratorEof kIteratorCurr kIteratorDataFor kIteratorGetNext
+
+  Command:= WriteCommand | ReadCommand | Iterator
+  CommandList:= Command
+              | Command CommandList
+
+  TransactionEnd:= kEnd | kCommit kEnd
+
+  SimpleTransaction:= kBegin CommandList TransactionEnd
+
+  SimpleTransactionList:= SimpleTransaction
+                        | SimpleTransaction SimpleTransactionList
+
+  NestedTransaction:= kBegin SimpleTransactionList TransactionEnd
+                    | kBegin SimpleTransactionList CommandList TransactionEnd
+                    | kBegin CommandList SimpleTransactionList TransactionEnd
+                    | kBegin CommandList SimpleTransactionList CommandList TransactionEnd
+
+  NestedTransactionList:= NestedTransaction
+                        | NestedTransaction NestedTransactionList
+
+  Transaction:= 
+  Operation:= ReadCommand | Transaction
+
+*/
+
 /*
 // generator: produce set of sequences of operations
-//    rules: iterator functions calls must be preceded by getIterator call
-//           kIteratorGetNext must follow test for kIteratorEof?
-//           kBegin then kCommit then kEnd
 
 hand crafted input:
     before first insert, numRecords==0;
@@ -558,61 +603,120 @@ hand crafted input:
 */
 
 /*
-    idea 1: Let records be array of ints, with different workers updating different indices
-    idea 2: update op has probability of modifying Nth field
-            if obj has < N fields, add new fields until Nth is reached
-            if updating int field, operation should be non-commutative
-                suppose each worker has incrementing id>0
-                F(oldValue,id) = (oldValue+id)^2
-                F(F(1,1),2) = 36
-                F(F(1,2),1) = 100
-
     insert: generate random #fields < 10 and values < 10;
     update: limit to 24 workers
 
     if new size of record > original dataSize, record will move
-*/
-
-class Context {
-private:
-    map<DiskLoc,int> locMap;
-    vector<DiskLoc> locVec;
-    vector<RecordData> data;
-};        
+*/        
 
 class Operation {
+    unsigned getTxn() const { return txn; }
 private:
     unsigned txn;
     TxRequest req;
     TxResponse rsp;
 };
 
+typedef vector<Operation> Schedule;
+typedef vector<Schedule> Workload;
+
 class WorkLoadDescription {
+public:
+    Workload generate() const {
+        Workload result;
+        PseudoRandom rnd(time(0));
+
+        for (int ix=0; ix < numBulkLoaders; ix++) {
+            Schedule nextSchedule;
+            result.push_back(nextSchedule);
+        }
+
+        for (int ix=0; ix < numCollectionScanners; ix++) {
+            Schedule nextSchedule;
+            result.push_back(nextSchedule);
+        }
+
+        for (int ix=0; ix < numPointModifiers; ix++) {
+            Schedule nextSchedule;
+            result.push_back(nextSchedule);
+        }
+
+        for (int ix=0; ix < numCollectionModifiers; ix++) {
+            Schedule nextSchedule;
+            result.push_back(nextSchedule);
+        }
+        return result;
+    }
+    
 private:
-    unsigned numWorkers;
     unsigned initialNumDocs;
+    unsigned numBulkLoaders;
+    unsigned numCollectionScanners;
+    unsigned numPointReaders;
+    unsigned numPointModifiers;
+    unsigned numCollectionModifiers;
 };
 
-    
+class WorkLoadScheduler {
+public:
+    WorkLoadScheduler(const Workload& workload) : _workload(workload) { }
 
-set<vector<Operation> > generate(const WorkLoadDescription& desc) {
-}
+    Schedule scheduleRandomly() {
+        Schedule result;
+        vector<ScheduleState> state;
+        for (int ix = 0; ix < _workload.size(); ++ix) {
+            state.push_back(ScheduleState(_workload[ix].begin(), _workload[ix].end()));
+        }
+        PseudoRandom rnd(time(0));
+        while (!state.empty()) {
+            int64_t nextScheduleIndex = rnd.nextInt64(state.size());
+            ScheduleState ss = state[nextScheduleIndex];
+            if (ss) {
+                result.push_back(*ss++);
+            }
+            else {
+                state.erase(state.at(nextScheduleIndex));
+            }
+        }
+        
+        return result;
+    }
 
-vector<Operation> random_shuffle(const set<vector<Operation> >& sequences) {
-}
+    set<Schedule> scheduleExhaustively() {
+        set<Schedule> result;
+        vector<ScheduleState> state;
+        for (int ix = 0; ix < _workload.size(); ++ix) {
+            state.push_back(ScheduleState(_workload[ix].begin(), _workload[ix].end()));
+        }
+        
+        return result;
+    }
+private:
+    class ScheduleState {
+    public:
+        ScheduleState(Schedule::iterator next, const Schedule::iterator& last)
+            : _next(next), _last(last) { }
+        operator bool() const {return _next != _last;}
+        Operation operator*() const {return *_next;}
+        void operator++() {_next++;}
+            
+    private:
+        Schedule::iterator _next;
+        const Schedule::iterator& _last;
+    };
 
-vector<Operation> power_shuffle(const set<vector<Operation> >& sequences) {
-}
+    const Workload& _workload;
+};
 
 void execute(const WorkLoadDescription& wld, const vector<Operation>& schedule) {
     vector<ClientTransaction*> workers;
     for(unsigned ix=0; ix < wld.getNumWorkers(); ++ix) {
         workers.push_back(new ClientTransaction(wld.getRecordStore()));
     }
-    for(vector<Operation>::iterator it = schedule.begin(); it != schedule.end(); ++it) {
+    for(Schedule::iterator it = schedule.begin(); it != schedule.end(); ++it) {
         try {
             Operation& op = *it;
-            workers[op.getTxn()].?invoke?(op.req);
+            workers[op.getTxn()]->?invoke?(op.req);
         } catch (const LockManager::AbortException& err) {
             workers[(*it).getTxn()]->abort();
         }
@@ -627,9 +731,21 @@ void execute(const WorkLoadDescription& wld, const vector<Operation>& schedule) 
 }
 
 void driver(const WorkLoadDescription& wld) {
-    set<vector<Operation> > workload = generate(wld);
-    vector<Operation> schedule = random_shuffle(workload);
-    execute(wld, schedule);
+    
+    WorkLoadScheduler wls(wld.generate());
+
+    if (true) {
+        for (int ix=0; ix < NUM_RANDOM_TRIES; ++ix) {
+            execute(wld, wls.scheduleRandomly());
+        }
+    }
+    else {
+        set<Schedule> schedules = wls.scheduleExhaustively();
+        for (set<Schedule>::iterator nextSchedule = schedules.begin();
+             nextSchedule != schedules.end(); ++nextSchedule) {
+            execute(wld, *nextSchedule);
+        }
+    }
 }
 
 TEST(RecordStoreTest, RSBasic) {
